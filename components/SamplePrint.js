@@ -80,7 +80,7 @@ const SamplePrint = () => {
             let columnWidths = [8, 20, 20];
             try {
               await BluetoothEscposPrinter.printText('\r\n\r\n\r\n', {});
-              await BluetoothEscposPrinter.printPic(logo, { width: 120, left: 0 });
+              await BluetoothEscposPrinter.printPic(hsdLogo, { width: 520, left: 0 });
               await BluetoothEscposPrinter.printText('\r\n\r\n\r\n', {});
               return
               await BluetoothEscposPrinter.printerAlign(BluetoothEscposPrinter.ALIGN.CENTER);
