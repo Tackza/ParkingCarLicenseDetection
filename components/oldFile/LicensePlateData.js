@@ -13,7 +13,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as MediaLibrary from 'expo-media-library';
-import Base64Image from '../../components/base64Image'
+import Base64Image from '../base64Image'
 
 const LicensePlateScanner = () => {
   const [imageUri, setImageUri] = useState(null);

@@ -47,7 +47,7 @@ const OrderSlip = React.forwardRef(({ orderDetails }, ref) => {
       <View style={styles.totalRow}>
         <Text style={styles.text}>สติกเกอร์: </Text>
         <Text style={styles.text}>{stickerNumber}</Text>
-      </View>
+      </View> 
       <Text style={styles.text}>------------------------------</Text>
       <View style={styles.totalRow}>
         <Text style={styles.text}>เวลาลงทะเบียน: </Text>
