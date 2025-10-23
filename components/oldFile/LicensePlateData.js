@@ -1,19 +1,19 @@
+import * as ImageManipulator from 'expo-image-manipulator';
+import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
 import React, { useState } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  Image,
-  TextInput,
-  StyleSheet,
-  ScrollView,
-  Alert,
   ActivityIndicator,
+  Alert,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
-import * as ImageManipulator from 'expo-image-manipulator';
-import * as MediaLibrary from 'expo-media-library';
-import Base64Image from '../base64Image'
+import Base64Image from '../base64Image';
 
 const LicensePlateScanner = () => {
   const [imageUri, setImageUri] = useState(null);
@@ -345,7 +345,7 @@ const LicensePlateScanner = () => {
         {/* แสดง Loading */}
         {loading && (
           <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#007AFF" />
+            <ActivityIndicator size="large" color="#fff" />
             <Text style={styles.loadingText}>กำลังประมวลผล...</Text>
           </View>
         )}
@@ -437,7 +437,7 @@ const styles = StyleSheet.create({
   },
   button: {
     flex: 1,
-    backgroundColor: '#007AFF',
+    backgroundColor: '#fff',
     padding: 15,
     borderRadius: 10,
     marginHorizontal: 5,

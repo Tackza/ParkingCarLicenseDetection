@@ -1,36 +1,43 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View,
+  ActivityIndicator,
+  Alert,
+  DeviceEventEmitter,
+  FlatList,
+  NativeEventEmitter,
+  Platform,
+  StyleSheet,
   Text,
   TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  FlatList,
-  Alert,
-  Platform,
-  DeviceEventEmitter,
-  NativeEventEmitter,
+  View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { BluetoothManager } from 'react-native-bluetooth-escpos-printer';
-import { PERMISSIONS, requestMultiple, RESULTS } from 'react-native-permissions';
+import { PERMISSIONS, RESULTS, requestMultiple } from 'react-native-permissions';
+// MODIFIED: เพิ่มการ import AsyncStorage
+// import AsyncStorage from '@react-native-async-storage/async-storage';
+import { deleteSetting, getSetting, saveSetting } from '../constants/Database';
+import { useMode } from '../contexts/ModeContext';
+
+const SAVED_PRINTER_KEY = 'saved_printer'; // Key สำหรับเก็บข้อมูลใน AsyncStorage
 
 export default function BluetoothSetupScreen() {
+  // MODIFIED: เพิ่ม isLoading state สำหรับการตรวจสอบข้อมูลตอนเริ่มต้น
+  const [isLoading, setIsLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
   const [pairedDevices, setPairedDevices] = useState([]);
   const [foundDevices, setFoundDevices] = useState([]);
   const [connectedDevice, setConnectedDevice] = useState(null);
   const router = useRouter();
+  const { isModeOne } = useMode();
 
-  // --- ส่วนจัดการ Event Listeners ---
+  // --- ส่วนจัดการ Event Listeners (ไม่เปลี่ยนแปลง) ---
   const deviceAlreadPaired = useCallback(
     (rsp) => {
       let ds = null;
       try {
         ds = typeof rsp.devices === 'object' ? rsp.devices : JSON.parse(rsp.devices);
-      } catch (e) {
-        // ignore error
-      }
+      } catch (e) { /* ignore error */ }
       if (ds && ds.length) {
         setPairedDevices(ds);
       }
@@ -43,12 +50,9 @@ export default function BluetoothSetupScreen() {
       let r = null;
       try {
         r = typeof rsp.device === 'object' ? rsp.device : JSON.parse(rsp.device);
-      } catch (e) {
-        // ignore error
-      }
+      } catch (e) { /* ignore error */ }
       if (r) {
         setFoundDevices((prev) => {
-          // ป้องกันการเพิ่มอุปกรณ์ซ้ำ
           if (prev.some((device) => device.address === r.address)) {
             return prev;
           }
@@ -59,10 +63,8 @@ export default function BluetoothSetupScreen() {
     []
   );
 
-  // --- ตั้งค่า Event Listeners เมื่อ component ถูก mount ---
   useEffect(() => {
     const emitter = Platform.OS === 'ios' ? new NativeEventEmitter(BluetoothManager) : DeviceEventEmitter;
-
     const listeners = [
       emitter.addListener(BluetoothManager.EVENT_DEVICE_ALREADY_PAIRED, deviceAlreadPaired),
       emitter.addListener(BluetoothManager.EVENT_DEVICE_FOUND, deviceFoundEvent),
@@ -71,15 +73,12 @@ export default function BluetoothSetupScreen() {
         Alert.alert('การเชื่อมต่อหลุด', 'การเชื่อมต่อกับเครื่องพิมพ์ถูกตัด');
       }),
     ];
-
-    // Cleanup listeners when component unmounts
     return () => {
       listeners.forEach((listener) => listener.remove());
     };
   }, [deviceAlreadPaired, deviceFoundEvent]);
 
-
-  // --- ส่วนขอสิทธิ์และสแกนอุปกรณ์ ---
+  // --- ส่วนขอสิทธิ์และสแกนอุปกรณ์ (ไม่เปลี่ยนแปลง) ---
   const requestBluetoothPermission = async () => {
     if (Platform.OS === 'android') {
       try {
@@ -99,7 +98,7 @@ export default function BluetoothSetupScreen() {
         return false;
       }
     }
-    return true; // iOS handles permissions differently
+    return true;
   };
 
   const scanDevices = async () => {
@@ -107,44 +106,77 @@ export default function BluetoothSetupScreen() {
     if (!hasPermission) return;
 
     setIsScanning(true);
-    setFoundDevices([]); // ล้างรายการที่เจอครั้งก่อนหน้า
+    setFoundDevices([]);
     try {
       await BluetoothManager.scanDevices();
     } catch (error) {
       console.error('Scan error:', error);
       Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถสแกนหาอุปกรณ์ได้');
     } finally {
-      // หยุด animation loading หลังจากผ่านไประยะหนึ่ง
       setTimeout(() => setIsScanning(false), 5000);
     }
   };
 
-  // --- เริ่มต้นทำงานเมื่อเปิดหน้า ---
+  // --- MODIFIED: ปรับปรุงฟังก์ชันเริ่มต้น ---
   useEffect(() => {
-    const init = async () => {
+    const initializeBluetooth = async () => {
       try {
+        // เปิด Bluetooth ถ้ายังไม่เปิด
         const enabled = await BluetoothManager.isBluetoothEnabled();
         if (!enabled) {
           await BluetoothManager.enableBluetooth();
         }
-        scanDevices(); // เริ่มสแกนเมื่อ Bluetooth พร้อมใช้งาน
+
+        // ตรวจสอบเครื่องพิมพ์ที่บันทึกไว้
+        const savedPrinterJSON = await getSetting(SAVED_PRINTER_KEY);
+        if (savedPrinterJSON) {
+          const savedPrinter = JSON.parse(savedPrinterJSON);
+          // Alert.alert('พบเครื่องพิมพ์ที่บันทึกไว้', `กำลังพยายามเชื่อมต่อกับ ${savedPrinter.name || 'Unknown Device'}...`);
+
+          try {
+            // พยายามเชื่อมต่ออัตโนมัติ
+            await BluetoothManager.connect(savedPrinter.address);
+            setConnectedDevice(savedPrinter);
+            // Alert.alert('สำเร็จ', `เชื่อมต่อกับ ${savedPrinter.name} เรียบร้อยแล้ว`);
+            console.log('เชื่อมต่อกับเครื่องพิมพ์ที่บันทึกไว้สำเร็จ:', savedPrinter);
+            router.push('/main');// ไปหน้าต่อไปทันที
+          } catch (autoConnectError) {
+            // หากเชื่อมต่ออัตโนมัติล้มเหลว
+            Alert.alert('เชื่อมต่ออัตโนมัติล้มเหลว', 'ไม่สามารถเชื่อมต่อกับเครื่องพิมพ์ที่บันทึกไว้ได้ กรุณาเลือกเครื่องพิมพ์ใหม่');
+            await deleteSetting(SAVED_PRINTER_KEY); // ลบข้อมูลที่ไม่ถูกต้องออก
+            setIsLoading(false); // แสดงหน้าให้ผู้ใช้เลือก
+            scanDevices(); // เริ่มสแกนหาเครื่องพิมพ์ใหม่
+          }
+        } else {
+          // ถ้าไม่มีเครื่องพิมพ์ที่บันทึกไว้ ก็เริ่มสแกนตามปกติ
+          setIsLoading(false);
+          scanDevices();
+        }
       } catch (error) {
-        Alert.alert('ข้อผิดพลาด', 'ไม่สามารถเปิด Bluetooth ได้');
+        setIsLoading(false);
+        Alert.alert('ข้อผิดพลาด', 'ไม่สามารถเริ่มต้นการใช้งาน Bluetooth ได้');
       }
     };
-    init();
-  }, []);
 
+    initializeBluetooth();
+  }, [router]);
+
+
+  // --- MODIFIED: ปรับปรุงฟังก์ชันเชื่อมต่อ ให้บันทึกข้อมูลหลังเชื่อมต่อสำเร็จ ---
   const connectDevice = async (device) => {
-    setIsScanning(true); // แสดง loading ขณะเชื่อมต่อ
+    setIsScanning(true);
     try {
       await BluetoothManager.connect(device.address);
+
+      // บันทึกข้อมูลเครื่องพิมพ์ที่เชื่อมต่อสำเร็จ
+      await saveSetting(SAVED_PRINTER_KEY, JSON.stringify(device));
+
       setConnectedDevice(device);
       setIsScanning(false);
       Alert.alert('สำเร็จ', `เชื่อมต่อกับ ${device.name || 'Unknown Device'} สำเร็จ`, [
         {
           text: 'ตกลง',
-          onPress: () => router.replace('/scan'), // ไปยังหน้าถัดไป
+          onPress: () => router.push('/main'),
         },
       ]);
     } catch (error) {
@@ -153,7 +185,6 @@ export default function BluetoothSetupScreen() {
     }
   };
 
-  // --- รวมรายการอุปกรณ์ทั้งหมดเพื่อแสดงผล ---
   const allDevices = useMemo(() => {
     const deviceMap = new Map();
     pairedDevices.forEach((device) => deviceMap.set(device.address, device));
@@ -162,10 +193,7 @@ export default function BluetoothSetupScreen() {
   }, [pairedDevices, foundDevices]);
 
   const renderDevice = ({ item }) => (
-    <TouchableOpacity
-      style={styles.deviceItem}
-      onPress={() => connectDevice(item)}
-    >
+    <TouchableOpacity style={styles.deviceItem} onPress={() => connectDevice(item)}>
       <View style={styles.deviceInfo}>
         <Text style={styles.deviceName}>{item.name || 'Unknown Device'}</Text>
         <Text style={styles.deviceAddress}>{item.address}</Text>
@@ -178,6 +206,16 @@ export default function BluetoothSetupScreen() {
     </TouchableOpacity>
   );
 
+  // --- MODIFIED: เพิ่มหน้าจอ Loading ตอนเริ่มต้น ---
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#3498db" />
+        <Text style={styles.loadingText}>กำลังตรวจสอบการตั้งค่า...</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -186,46 +224,37 @@ export default function BluetoothSetupScreen() {
       </View>
 
       <View style={styles.content}>
-        {(isScanning && allDevices.length === 0) ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#3498db" />
-            <Text style={styles.loadingText}>กำลังค้นหาเครื่องพิมพ์...</Text>
-          </View>
-        ) : (
-          <>
-            <FlatList
-              data={allDevices}
-              renderItem={renderDevice}
-              keyExtractor={(item) => item.address}
-              ListEmptyComponent={
-                <View style={styles.emptyContainer}>
+        <FlatList
+          data={allDevices}
+          renderItem={renderDevice}
+          keyExtractor={(item) => item.address}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              {isScanning ? (
+                <>
+                  <ActivityIndicator size="large" color="#3498db" />
+                  <Text style={styles.loadingText}>กำลังค้นหาเครื่องพิมพ์...</Text>
+                </>
+              ) : (
+                <>
                   <Text style={styles.emptyText}>ไม่พบเครื่องพิมพ์ในบริเวณนี้</Text>
                   <Text style={styles.emptyText}>กรุณาตรวจสอบว่าเครื่องพิมพ์เปิดอยู่</Text>
-                </View>
-              }
-            />
-            <TouchableOpacity
-              style={styles.scanButton}
-              onPress={scanDevices}
-              disabled={isScanning}
-            >
-              {isScanning ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.scanButtonText}>🔍 สแกนหาเครื่องพิมพ์</Text>
+                </>
               )}
-            </TouchableOpacity>
-
-            {connectedDevice && (
-              <TouchableOpacity
-                style={styles.continueButton}
-                onPress={() => router.replace('/scan')}
-              >
-                <Text style={styles.continueButtonText}>ดำเนินการต่อ →</Text>
-              </TouchableOpacity>
-            )}
-          </>
-        )}
+            </View>
+          }
+        />
+        <TouchableOpacity
+          style={styles.scanButton}
+          onPress={scanDevices}
+          disabled={isScanning}
+        >
+          {isScanning ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.scanButtonText}>🔍 สแกนหาเครื่องพิมพ์</Text>
+          )}
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -261,12 +290,13 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    padding: 20,
+    padding: 15,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#f8f9fa',
   },
   loadingText: {
     marginTop: 15,
@@ -278,6 +308,8 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     padding: 20,
     marginBottom: 12,
+    marginTop: 5,
+    marginHorizontal: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',

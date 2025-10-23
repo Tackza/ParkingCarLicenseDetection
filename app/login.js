@@ -1,23 +1,55 @@
-import React, { useState } from 'react';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
 import {
-  View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  Alert,
+  View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { useAuth } from '../contexts/AuthContext';
+// import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getActiveSession, saveSession } from "../constants/Database";
+import { useProject } from '../contexts/ProjectContext';
 
 export default function LoginScreen() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  // เพิ่ม state เพื่อตรวจสอบสถานะการโหลดข้อมูลจาก AsyncStorage
+  const [isCheckingStorage, setIsCheckingStorage] = useState(true);
   const { login, isLoading } = useAuth();
   const router = useRouter();
+  const { syncProjectsWithApi } = useProject();
+
+  // ✨ (เพิ่มส่วนนี้) - ตรวจสอบการล็อกอินอัตโนมัติเมื่อคอมโพเนนต์เริ่มทำงาน
+  useEffect(() => {
+    const checkLoginStatus = async () => {
+      try {
+        console.log('กำลังตรวจสอบ Session ใน SQLite...');
+        const session = await getActiveSession();
+        console.log('session :>> ', session);
+
+        // ถ้ามี token อยู่ ให้ข้ามไปหน้าหลักเลย
+        if (session) {
+          console.log('พบ Token, กำลังเข้าสู่ระบบอัตโนมัติ...');
+          // อาจจะต้องมีการตรวจสอบ token กับ server อีกครั้งใน useAuth
+          // แต่ในที่นี้เราจะข้ามไปเลยเพื่อความง่าย
+          router.replace('/bluetooth-setup');
+        }
+      } catch (e) {
+        console.error('ไม่สามารถอ่านข้อมูลจาก AsyncStorage ได้', e);
+      } finally {
+        // ตรวจสอบเสร็จสิ้น ให้แสดงฟอร์มล็อกอิน
+        setIsCheckingStorage(false);
+      }
+    };
+
+    checkLoginStatus();
+  }, []);
 
   const handleLogin = async () => {
     if (!username || !password) {
@@ -26,13 +58,37 @@ export default function LoginScreen() {
     }
 
     const result = await login(username, password);
+    console.log('result :>> ', result);
 
-    if (result.success) {
-      router.replace('/bluetooth-setup');
+    if (result?.status == 'success') {
+      try {
+        // บันทึก Session และ Token ลง DB ก่อน
+        await saveSession(result.data);
+        console.log('Session saved successfully.');
+
+        // ✅ 3. สั่งให้ Sync ข้อมูลโปรเจกต์ทันทีหลังจาก Login สำเร็จ
+        await syncProjectsWithApi();
+
+        // เมื่อทุกอย่างพร้อม ก็ไปหน้าต่อไป
+        router.replace('/bluetooth-setup');
+
+      } catch (e) {
+        console.error('ไม่สามารถบันทึกข้อมูลลง SQLite ได้', e);
+        Alert.alert('ข้อผิดพลาด', 'ไม่สามารถบันทึกเซสชันการล็อกอินได้');
+      }
     } else {
       Alert.alert('เข้าสู่ระบบไม่สำเร็จ', result.message);
     }
   };
+
+  // ✨ (เพิ่มส่วนนี้) - แสดงหน้าจอ Loading ขณะตรวจสอบข้อมูล
+  if (isCheckingStorage) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#3498db" />
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
@@ -90,6 +146,13 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#f8f9fa',
+  },
+  // ✨ (เพิ่มส่วนนี้) - สไตล์สำหรับหน้าจอ Loading
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: '#f8f9fa',
   },
   content: {

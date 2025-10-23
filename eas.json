@@ -10,6 +10,10 @@
         "gradleCommand": ":app:assembleDebug",
         "buildType": "apk"
       },
+      "env": {
+        "APP_VARIANT": "development",
+        "APP_URL_DETECTION": "https://license-plate-service-833646348122.asia-southeast1.run.app/detect"
+      },
       "ios": {
         "buildConfiguration": "Debug"
       }
@@ -17,7 +21,14 @@
     "preview": {
       "distribution": "internal"
     },
-    "production": {}
+    "production": {
+      "env": {
+        "APP_VARIANT": "production"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    }
   },
   "submit": {
     "production": {}

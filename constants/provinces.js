@@ -75,5 +75,6 @@ export const THAI_PROVINCES = [
   { label: 'อุดรธานี', value: 'อุดรธานี' },
   { label: 'อุตรดิตถ์', value: 'อุตรดิตถ์' },
   { label: 'อุทัยธานี', value: 'อุทัยธานี' },
-  { label: 'อุบลราชธานี', value: 'อุบลราชธานี' }
+  { label: 'อุบลราชธานี', value: 'อุบลราชธานี' },
+  { label: 'เบตง', value: 'เบตง' }
 ]

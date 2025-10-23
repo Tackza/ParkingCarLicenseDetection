@@ -1,7 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
 // import * as ImagePicker from 'expo-image-picker';
-import { useMode } from "@/contexts/ModeContext";
-import axios from 'axios';
 import {
   useLocalSearchParams,
   // useFocusEffect, 
@@ -24,13 +22,11 @@ import {
 import { BluetoothEscposPrinter } from 'react-native-bluetooth-escpos-printer';
 import DropDownPicker from 'react-native-dropdown-picker';
 import ImageZoom from 'react-native-image-pan-zoom';
-import ViewShot, { captureRef } from 'react-native-view-shot';
-import LicensePlateDisplay from '../../components/LicensePlateDisplay';
-import { findRegisterByPlate, getActiveSession, getSetting, insertCheckIn } from '../../constants/Database';
-import { THAI_PROVINCES } from '../../constants/provinces';
-import { useProject } from '../../contexts/ProjectContext';
-
-const IMAGE_PROCESSING_TIMEOUT = 15000;
+import { captureRef } from 'react-native-view-shot';
+import { findRegisterByPlate, getActiveSession, getSetting } from '../constants/Database';
+import { THAI_PROVINCES } from '../constants/provinces';
+import { useProject } from '../contexts/ProjectContext';
+import LicensePlateDisplay from './LicensePlateDisplay';
 
 const vehicleTypes = [
   { label: 'รถตู้', value: 'ตู้' },
@@ -39,7 +35,6 @@ const vehicleTypes = [
   { label: 'รถบัสแอร์ 2 ชั้น', value: 'แอร์ 2 ชั้น' },
   { label: 'อื่น ๆ (โปรดระบุ)', value: 'Other' }, // <-- เพิ่มตัวเลือกนี้
 ];
-
 
 const windowWidth = Dimensions.get('window').width;
 const windowHeight = Dimensions.get('window').height;
@@ -56,11 +51,14 @@ export default function ScanScreen() {
 
   const [provinceOpen, setProvinceOpen] = useState(false);
   const [vehicleTypeOpen, setVehicleTypeOpen] = useState(false);
+  const [cameraLaunched, setCameraLaunched] = useState(false);
+  const [showVehicleTypeInput, setShowVehicleTypeInput] = useState(false);
   const [customVehicleType, setCustomVehicleType] = useState('');
   const [showReceipt, setShowReceipt] = useState(false);
   const receiptRef = React.useRef();
   const router = useRouter();
   const [isVerified, setIsVerified] = useState(false);
+  const [masterVehicles, setMasterVehicles] = useState([]);
 
   const { imageUri: passedImageUri } = useLocalSearchParams();
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
@@ -73,19 +71,13 @@ export default function ScanScreen() {
   const [isManualEdit, setIsManualEdit] = useState(false); // ติดตามว่ามีการแก้ไขด้วยมือหรือไม่
   const [foundRegisterData, setFoundRegisterData] = useState(null);
   const [machineCode, setMachineCode] = useState('');
-  const [sessionData, setSessionData] = useState(null);
-  const { isModeOne } = useMode();
 
-  // --- เพิ่ม useEffect นี้: เพื่อจัดการกับ imageUri ที่ได้รับ และดึง session + machineCode ---
+
+  // --- เพิ่ม useEffect นี้: เพื่อจัดการกับ imageUri ที่ได้รับ ---
   useEffect(() => {
+    // 1. สร้างฟังก์ชัน async ข้างใน useEffect
     const fetchDataAndProcessImage = async () => {
-      console.log('isModeOne :>> ', isModeOne ? 'โหมดทั่วไป' : 'โหมดธุดงค์');
       try {
-        // ดึง session และเก็บเข้า state
-        const session = await getActiveSession();
-        console.log('session :>> ', session);
-        setSessionData(session); // ✅ เก็บ session ไว้ใน state
-
         // ดึงรหัสเครื่อง
         const storedMachineCode = await getSetting('machineCode');
         if (storedMachineCode !== null) {
@@ -107,14 +99,16 @@ export default function ScanScreen() {
     // 2. เรียกใช้ฟังก์ชัน async ที่สร้างขึ้น
     fetchDataAndProcessImage();
 
-  }, [passedImageUri]); // Dependency: passedImageUri (จะทำงานเมื่อมีการส่งรูปเข้ามา)
+  }, [passedImageUri]);
+
+
+
 
   const processImage = async (uri) => {
     setIsProcessing(true);
     setIsVerified(false);
     setFoundRegisterData(null); // เคลียร์ข้อมูล C7 เก่าทุกครั้งที่สแกนใหม่
     setIsManualEdit(false); // รีเซ็ตสถานะการแก้ไข
-
     try {
       const formData = new FormData();
       formData.append('image', {
@@ -123,194 +117,170 @@ export default function ScanScreen() {
         name: `image_${Date.now()}.jpg`,
       });
 
-      // ✅ ใช้ axios.post แทน fetch
-      const response = await axios.post(
+      const response = await fetch(
         "https://license-plate-service-833646348122.asia-southeast1.run.app/detect",
-        formData,
         {
+          method: 'POST',
           headers: {
             'Content-Type': 'multipart/form-data',
-            // 'Content-Type' ไม่จำเป็นต้องเซ็ตเองสำหรับ FormData ใน Axios
           },
-          timeout: IMAGE_PROCESSING_TIMEOUT, // ✅ กำหนด timeout ตรงนี้
+          body: formData,
         }
       );
 
-      // Axios จะโยน error ให้เองถ้า response.status ไม่อยู่ในช่วง 2xx
-      // ไม่ต้องเช็ค if (!response.ok) แล้ว
-      const { data } = response.data; // ✅ ข้อมูลจะอยู่ใน response.data.data
+      if (!response.ok) {
+        throw new Error('ไม่สามารถตรวจจับทะเบียนรถได้');
+      }
 
+      const { data } = await response.json();
+
+      // 1. ตั้งค่า state ตามข้อมูลที่ได้มาเสมอ (แม้จะไม่ครบ)
+      // ใช้ || '' เพื่อป้องกันค่า null หรือ undefined ที่อาจทำให้แอปแครช
       const detectedPlate = data.license_plate || '';
       const detectedProvince = data.province || '';
 
+      // เก็บค่าที่สแกนได้ครั้งแรก (สำคัญมาก!)
       setOriginalDetectedPlate(detectedPlate);
       setOriginalDetectedProvince(detectedProvince);
-      console.log('detectedPlate :>> ', detectedPlate);
-      console.log('detectedProvince :>> ', detectedProvince);
 
       setLicensePlate(detectedPlate);
-      // ตรวจสอบว่ามีจังหวัดในรายการหรือไม่
-      const provinceExists = checkProvinceExists(detectedProvince)
-      setProvince(provinceExists);
+      setProvince(detectedProvince);
 
-      await checkWithRegisterList(detectedPlate, provinceExists);
+      // ✅ ค้นหา C7 ในฐานข้อมูลทันที
+      await checkWithRegisterList(detectedPlate, detectedProvince);
 
-      if (!detectedPlate || !provinceExists) {
-
-        openEditModal(detectedPlate, provinceExists);
+      // 3. ✨ จุดสำคัญ: ตรวจสอบว่าข้อมูลที่จำเป็นครบถ้วนหรือไม่
+      if (!detectedPlate || !detectedProvince) {
+        // ถ้าข้อมูลไม่ครบ ให้เรียก Modal แก้ไขขึ้นมาทันที
+        // ฟังก์ชันนี้จะดึงค่าล่าสุดจาก state (ที่อาจจะไม่ครบ) ไปใส่ในฟอร์มให้เอง
+        console.log('detectedPlate :>> ', detectedPlate);
+        console.log('detectedProvince :>> ', detectedProvince);
+        openEditModal(detectedPlate, detectedProvince);
       }
 
     } catch (error) {
-      // ✅ การจัดการ Error ของ Axios
-      if (axios.isCancel(error)) { // ไม่น่าจะเกิดขึ้นในกรณี timeout, แต่เผื่อไว้
-        console.log('Request cancelled:', error.message);
-        openEditModal(null, null);
-        Alert.alert(
-          'การเชื่อมต่อถูกยกเลิก',
-          'การประมวลผลถูกยกเลิก กรุณาลองใหม่อีกครั้ง'
-        );
-      } else if (error.code === 'ECONNABORTED' && error.message.includes('timeout')) {
-        // ✅ Error สำหรับ Timeout
-        console.log('Image processing request timed out after 15 seconds.');
-        openEditModal(null, null); // เปิด Modal ให้กรอกเอง
-        Alert.alert(
-          'การเชื่อมต่อหมดเวลา',
-          'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ตรวจจับทะเบียนรถได้ภายใน 15 วินาที กรุณาลองใหม่อีกครั้ง หรือกรอกข้อมูลเอง'
-        );
-      } else if (error.response) {
-        // Server ตอบกลับมา แต่เป็นสถานะ Error (เช่น 4xx, 5xx)
-        console.log('Server error response:', error.response.status, error.response.data);
-        openEditModal(null, null);
-        Alert.alert('ข้อผิดพลาดจากเซิร์ฟเวอร์', error.response.data.message || 'ไม่สามารถตรวจจับทะเบียนรถได้');
-      } else if (error.request) {
-        // Request ถูกส่งไปแล้ว แต่ไม่มี response กลับมา (เช่น ไม่มีเน็ต, Server ไม่ตอบ)
-        console.log('No response received:', error.request);
-        // Alert.alert(
-        //   'ไม่มีการเชื่อมต่ออินเทอร์เน็ต',
-        //   'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ตรวจจับทะเบียนรถได้ กรุณาตรวจสอบการเชื่อมต่อ หรือกรอกข้อมูลเอง'
-        // );
-        openEditModal(null, null);
-      } else {
-        // Error อื่นๆ
-        console.log('Axios Error:', error.message);
-        Alert.alert('ข้อผิดพลาด', error.message || 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ');
-        openEditModal(null, null);
-      }
+
+      openEditModal(null, null)
+      Alert.alert('ข้อผิดพลาด', error.message);
     } finally {
       setIsProcessing(false);
+
     }
   };
 
 
-  const convertBusTypeToLabel = (value) => {
-    const found = vehicleTypes.find(item => item.value === value);
-    return found ? found.label : value;
-  }
+  const checkWithRegisterList = async (plate, prov) => {
+    if (!plate || !prov || !activeProject) {
+      setIsVerified(false);
+      return;
+    }
 
+    try {
+      console.log(`Searching for Plate: ${plate}, Province: ${prov}, ProjectID: ${activeProject.project_id}`);
+      const foundRegister = await findRegisterByPlate(activeProject.project_id, plate, prov);
+
+      if (foundRegister) {
+        console.log('✅ C7 Record Found:', foundRegister);
+        setIsVerified(true); // ตั้งสถานะเป็น "ตรวจสอบแล้ว"
+        setFoundRegisterData(foundRegister); // เก็บข้อมูล C7 ทั้งหมดไว้ใน state
+
+        // กรอกข้อมูลจาก C7 ลงในฟอร์มอัตโนมัติ
+        setVehicleType(foundRegister.bus_type);
+      } else {
+        console.log('❌ C7 Record Not Found.');
+        setIsVerified(false);
+        setFoundRegisterData(null); // เคลียร์ข้อมูลเก่า
+      }
+    } catch (error) {
+      console.error('Failed to check with register list', error);
+      setIsVerified(false);
+    }
+  };
 
 
   const handlePrintAndSave = async () => {
     if (isSubmitting || !activeProject) return;
+
     // --- Validation ---
     if (!licensePlate.trim() || !province || !vehicleType) {
-      Alert.alert('ข้อมูลไม่ครบ', 'กรุณากรอกข้อมูลให้ครบถ้วน');
+      Alert.alert('ข้อมูลไม่ครบ', 'กรุณากรอกข้อมูลทะเบียนรถ จังหวัด และประเภทรถให้ครบถ้วน');
       return;
     }
 
-
-    // --- Validation เพิ่มเติมสำหรับประเภทรถ 'อื่นๆ' ---
     if (vehicleType === 'Other' && !customVehicleType.trim()) {
       Alert.alert('ข้อมูลไม่ครบ', 'กรุณาระบุประเภทรถในช่อง "โปรดระบุประเภทรถ"');
       return;
     }
 
-
-    if (!stickerNumber.trim() && !isModeOne) {
-      Alert.alert('ข้อมูลไม่ครบ', 'กรุณากรอกหมายเลขสติกเกอร์');
-      return;
-    }
-
     setIsSubmitting(true);
 
-    try {
-      if (!sessionData || !sessionData.userId) { // ✅ ใช้ sessionData จาก state
-        throw new Error("ไม่พบข้อมูลผู้ใช้งาน, กรุณาเข้าสู่ระบบใหม่");
-      }
-
-      // กำหนดค่าประเภทรถสุดท้าย หากเลือก 'Other'
-      const finalVehicleType = vehicleType === 'Other' ? customVehicleType : convertBusTypeToLabel(vehicleType);
-
-      console.log('activeProject :>> ', activeProject);
-      console.log('foundRegisterData :>> ', foundRegisterData);
-
-
-      // ✅ สร้าง Object newCheckInData ตามโครงสร้างที่ต้องการ
-      let newCheckInData = {
-        project_id: activeProject.project_id,
-        activity_id: activeProject.activity_id,
-        register_id: foundRegisterData?.register_id || null,
-        detect_plate_no: originalDetectedPlate,
-        detect_plate_province: originalDetectedProvince,
-        plate_no: licensePlate,
-        plate_province: province,
-        is_plate_manual: isManualEdit ? 1 : 0,
-        photo_path: imageUri,
-        bus_type: finalVehicleType,
-        passenger: foundRegisterData?.passenger || '0|0|0|0', // ✅ passenger มาจาก foundRegisterData
-        note: '', // ✅ ตรวจสอบว่ามี source สำหรับ note หรือไม่
-        sticker_no: isModeOne ? "" : stickerNumber, // ✅ เพิ่ม sticker_no จาก state
-        comp_id: machineCode, // ✅ comp_id ควรมาจาก machineCode ที่คุณดึงมา
-        seq_no: activeProject?.seq_no || null, // ✅ seq_no มาจาก activeProject
-        printed: isVerified ? 1 : 0, // ✅ `printed` ตอนนี้เปลี่ยนเป็น 1 ถ้า verified, 0 ถ้ายังไม่ verified
-        error_msg: '',
-        created_by: sessionData.userId,
-        // synced และ sync_at ไม่ต้องใส่ตรงนี้ เพราะมี DEFAULT values และจะถูก update ตอน sync
-      };
-      console.log('newCheckInData :>> ', newCheckInData);
-
-
-      // isModeOne ? 'ธรรมดา' : 'ธุดงค์'
-      if (isModeOne) {
-        newCheckInData = {
-          ...newCheckInData,
-          sticker_no: "", // เว้นว่างในโหมด 1
-          foundRegisterData: JSON.stringify(foundRegisterData || null)
-        }
-        // ส่งข้อมูลทั้งหมดไปที่หน้าใหม่
-        router.push({
-          pathname: '/passenger_count',
-          params: newCheckInData,
-        });
-        setIsSubmitting(false);
-        return
-      }
-
-      // ✅ เรียกใช้ฟังก์ชัน insertCheckIn เพื่อบันทึกลง SQLite
-      const newId = await insertCheckIn(newCheckInData);
-      console.log(`✅ Check-in record saved with local ID: ${newId}`);
-
-
-      setShowReceipt(true);
-      // รอให้ Receipt component render ข้อมูลใหม่เสร็จก่อน
-
-
-      if (isVerified) {
-        setTimeout(async () => {
-          await generateAndPrint();
-        }, 500);
-        return;
-      }
-      resetForm();
+    const session = await getActiveSession();
+    if (!session || !session.userId) {
+      throw new Error("ไม่พบข้อมูลผู้ใช้งาน, กรุณาเข้าสู่ระบบใหม่");
     }
 
-    catch (error) {
-      console.error('Failed to save check-in data:', error);
-      Alert.alert('ข้อผิดพลาด', error.message || 'ไม่สามารถบันทึกข้อมูลได้');
-      setIsSubmitting(false);
-    }
+    const finalVehicleType = vehicleType === 'Other' ? customVehicleType : vehicleType;
+
+    // ✅ สร้าง Object newCheckInData ตามโครงสร้างที่ต้องการ
+    const newCheckInData = {
+      project_id: activeProject.project_id,
+      register_id: foundRegisterData?.register_id || null,
+      detect_plate_no: originalDetectedPlate,
+      detect_plate_province: originalDetectedProvince,
+      plate_no: licensePlate,
+      plate_province: province,
+      is_plate_manual: isManualEdit ? 1 : 0,
+      photo_path: imageUri,
+      bus_type: finalVehicleType,
+      passenger: foundRegisterData?.passenger || '0|0|0|0',
+      note: '',
+      comp_id: machineCode,
+      activity_seq_no: activeProject?.activity_id || null,
+      printed: isVerified ? 1 : 0, // 🔄 แก้ไข: is_print -> printed, และใช้ 1 หรือ 0
+      created_by: session.userId,
+      foundRegisterData: JSON.stringify(foundRegisterData || null), // เพิ่มข้อมูล C7 ที่พบ (ถ้ามี)
+    };
+
+    // ส่งข้อมูลทั้งหมดไปที่หน้าใหม่
+    router.push({
+      pathname: '/passenger_count', // เราจะสร้างไฟล์นี้ในขั้นตอนถัดไป
+      params: newCheckInData,
+      // params: {
+      //   licensePlate: licensePlate,
+      //   province: province,
+      //   vehicleType: finalVehicleType,
+      //   stickerNumber: stickerNumber,
+      //   imageUri: imageUri,
+      // },
+    });
+
+    // ตั้งค่า isSubmitting กลับเป็น false เมื่อผู้ใช้กดกลับมาที่หน้านี้
+    // หรือปล่อยให้ state หายไปเองตอน unmount ก็ได้
+    setTimeout(() => setIsSubmitting(false), 1000);
   };
 
+  // const selectVehicleType = async (type) => {
+  //   setVehicleType(type);
+  //   setShowReceipt(true);
 
+  //   // รอให้ Receipt render เสร็จก่อน
+  //   setTimeout(async () => {
+  //     await generateAndPrint();
+  //   }, 500);
+  // };
+
+  // const selectCustomVehicleType = async () => {
+  //   if (!customVehicleType.trim()) {
+  //     Alert.alert('แจ้งเตือน', 'กรุณากรอกประเภทรถ');
+  //     return;
+  //   }
+  //   setVehicleType(customVehicleType);
+  //   setShowReceipt(true);
+
+  //   setTimeout(async () => {
+  //     await generateAndPrint();
+  //   }, 500);
+  // };
 
   const generateAndPrint = async () => {
     try {
@@ -326,14 +296,14 @@ export default function ScanScreen() {
         width: 520,
         left: 0,
       });
-      await BluetoothEscposPrinter.printerAlign(BluetoothEscposPrinter.ALIGN.CENTER);
-      await BluetoothEscposPrinter.printQRCode(
-        'https://hsd.co.id', 120,
-        BluetoothEscposPrinter.ERROR_CORRECTION.L,
-      );
-      await BluetoothEscposPrinter.printText('\r\n\r\n', {});
+      await BluetoothEscposPrinter.printText('\r\n', {});
 
-
+      // Alert.alert('สำเร็จ', 'พิมพ์ใบทะเบียนสำเร็จ', [
+      //   {
+      //     text: 'ตกลง',
+      //     onPress: resetForm,
+      //   },
+      // ]);
       resetForm();
     } catch (error) {
       Alert.alert('ข้อผิดพลาด', 'ไม่สามารถพิมพ์ใบทะเบียนได้');
@@ -342,40 +312,81 @@ export default function ScanScreen() {
     }
   };
 
-  const clearScanState = () => {
+  const resetForm = () => {
     setIsProcessing(false);
     setImageUri(null);
     setLicensePlate('');
     setProvince(null);
-    // setVehicleType(null); // Make sure to reset this too
-    setCustomVehicleType('');
-    // Don't reset stickerNumber here, handle it separately
-    setShowReceipt(false);
+    // setVehicleType(null);
+    setCustomVehicleType(''); // <-- เพิ่มบรรทัดนี้
+    // setStickerNumber('');
+    // setShowReceipt(false);
     setIsVerified(false);
-    setIsManualEdit(false);
-    setFoundRegisterData(null);
-    setOriginalDetectedPlate('');
-    setOriginalDetectedProvince('');
-    setIsSubmitting(false); // Reset submitting state too
-    router.push('/main'); // Navigate back
 
-  };
-
-  const resetForm = () => {
-    clearScanState(); // Call the common reset function
-    // Handle sticker number increment separately
+    // --- Logic ใหม่สำหรับบวกเลขสติกเกอร์ ---
     setStickerNumber(currentSticker => {
+      // แปลงค่าปัจจุบันเป็นตัวเลข
       const number = parseInt(currentSticker, 10);
-      return (!isNaN(number) && number > 0) ? (number + 1).toString() : '';
-    });
-    // No router.push here; let the calling function handle navigation after reset
 
+      // ตรวจสอบว่าแปลงเป็นตัวเลขได้หรือไม่
+      if (!isNaN(number)) {
+        // ถ้าเป็นตัวเลข ให้บวก 1 แล้วแปลงกลับเป็นข้อความ
+        return (number + 1).toString();
+      }
+
+      // ถ้าค่าเดิมไม่ใช่ตัวเลข (เช่น ว่างเปล่า หรือมีตัวอักษร)
+      // ให้กลับไปเป็นค่าว่าง หรือจะกำหนดค่าเริ่มต้นเป็น '1' ก็ได้
+      return '';
+    });
+
+    router.push('/main');
+    setIsSubmitting(false);
   };
 
   const cancelProcess = () => {
-    clearScanState(); // Call the common reset function
-    // Reset sticker number without incrementing
-  };
+    setIsProcessing(false);
+    setImageUri(null);
+    setLicensePlate('');
+    setProvince(null);
+    // setVehicleType(null);
+    setCustomVehicleType(''); // <-- เพิ่มบรรทัดนี้
+    setStickerNumber('');
+    // setShowReceipt(false);
+    setIsVerified(false);
+    router.push('/main');
+    setIsSubmitting(false);
+  }
+
+  // const renderMasterItem = ({ item }) => (
+
+  //   <View style={styles.masterItem}>
+  //     <View style={styles.masterItemHeader}>
+  //       <Text style={styles.masterItemPlate}>{item.plate}</Text>
+  //       <Text style={styles.masterItemDetail}>{item.province}</Text>
+  //     </View>
+  //     {item.vehicleType && <Text style={styles.noMasterDataText}>{item.vehicleType}</Text>}
+  //   </View>
+  // );
+
+  // // สร้าง Component สำหรับ Header ของ FlatList
+  // const renderListHeader = () => (
+  //   <Text style={styles.initialTitle}>C7 ที่ลงทะเบียนแล้ว</Text>
+  // );
+
+  // สร้าง Component สำหรับ Footer ของ FlatList
+  const renderListFooter = () => (
+    <TouchableOpacity
+      style={[styles.scanButton, isProcessing && styles.scanButtonDisabled, { marginTop: 20 }]}
+      onPress={takePhoto}
+      disabled={isProcessing}
+    >
+      {isProcessing ? (
+        <ActivityIndicator color="#fff" />
+      ) : (
+        <Text style={styles.scanButtonText}>📸 ถ่ายภาพเพื่อสแกน</Text>
+      )}
+    </TouchableOpacity>
+  );
 
   const openEditModal = (plateToEdit, provinceToEdit) => {
     // ใช้ค่าที่ส่งเข้ามาโดยตรง ไม่ต้องอ่านจาก state
@@ -384,19 +395,12 @@ export default function ScanScreen() {
     setIsEditModalVisible(true);
   };
 
-  const checkProvinceExists = (provinceName) => {
-    provinceName = provinceName.trim();
-    const foundInList = THAI_PROVINCES.some(item => item.label === provinceName);
-    return foundInList ? provinceName : '';
-  };
-
-  const handleSaveChanges = async () => { // ทำให้เป็น async
+  const handleSaveChanges = async () => {
     // 1. ตั้งค่า state ว่ามีการแก้ไขด้วยมือเกิดขึ้นแล้ว
     setIsManualEdit(true);
 
     // 2. อัปเดตทะเบียนและจังหวัดที่แสดงผลบนหน้าจอหลัก
     setLicensePlate(tempLicensePlate);
-
     setProvince(tempProvince);
 
     // 3. ✅ เรียกใช้ฟังก์ชันค้นหา C7 ใหม่อีกครั้งด้วยข้อมูลที่ผู้ใช้เพิ่งกรอก
@@ -405,114 +409,6 @@ export default function ScanScreen() {
 
     // 4. ปิด Modal แก้ไข
     setIsEditModalVisible(false);
-  };
-
-  const checkWithRegisterList = async (plate, prov) => {
-    if (!plate || !prov || !activeProject) {
-      setIsVerified(false);
-      return;
-    }
-
-    try {
-
-      const provinceNew = prov.replace('กรุงเทพมหานคร', 'กทม.').trim();
-      console.log(`Searching for Plate: ${plate}, Province: ${provinceNew}, ProjectID: ${activeProject.project_id}`);
-      const foundRegister = await findRegisterByPlate(activeProject.project_id, plate, provinceNew);
-
-      if (foundRegister) {
-        console.log('✅ C7 Record Found:', foundRegister);
-
-        const seqNo = activeProject?.seq_no;
-        let duplicateField = null; // ตัวแปรเก็บชื่อ field ที่ซ้ำ
-        let hasDuplicate = false;
-
-        // 1. activeProject?.seq_no ไม่มีค่า (เป็น null, undefined, 0)
-        if (!seqNo || seqNo === 0) {
-          if (foundRegister.checkin_date) { // ตรวจสอบว่า checkin_date 'มีค่า' (ไม่ใช่ null หรือ '')
-            hasDuplicate = true;
-            duplicateField = 'checkin_date';
-          }
-        }
-        // 2. activeProject?.seq_no == 1
-        else if (seqNo == 1) {
-          if (foundRegister.activity1_date) { // ตรวจสอบว่า activity1_date 'มีค่า'
-            hasDuplicate = true;
-            duplicateField = 'activity1_date';
-          }
-        }
-        // 3. activeProject?.seq_no == 2
-        else if (seqNo == 2) {
-          if (foundRegister.activity2_date) { // ตรวจสอบว่า activity2_date 'มีค่า'
-            hasDuplicate = true;
-            duplicateField = 'activity2_date';
-          }
-        }
-        // (คุณสามารถเพิ่ม else if (seqNo == 3) ... ได้ในอนาคต)
-
-        // ถ้าตรวจพบว่ามีข้อมูลซ้ำ
-        if (hasDuplicate) {
-          console.log(`Duplicate check-in detected. Field: ${duplicateField}, Value: ${foundRegister[duplicateField]}`);
-
-          Alert.alert(
-            'ลงทะเบียนแล้ว',
-            `[${plate} ${prov}] ทะเบียนรถคันนี้ ได้ลงทะเบียนในกิจกรรมนี้ไปแล้ว`,
-            [
-              {
-                text: 'ตกลง',
-                // เรียกใช้ cancelProcess() เพื่อล้างค่า state และกลับหน้า main
-                onPress: () => cancelProcess(),
-              },
-            ],
-            { cancelable: false } // บังคับให้ผู้ใช้กดยืนยัน
-          );
-
-          return; // ‼️ สำคัญมาก: หยุดการทำงาน ไม่ต้อง setIsVerified
-        }
-        setIsVerified(true); // ตั้งสถานะเป็น "ตรวจสอบแล้ว"
-        setFoundRegisterData(foundRegister); // เก็บข้อมูล C7 ทั้งหมดไว้ใน state
-
-        // กรอกข้อมูลจาก C7 ลงในฟอร์มอัตโนมัติ
-        setVehicleType(foundRegister.bus_type);
-
-
-      } else {
-        console.log('❌ C7 Record Not Found.');
-        setIsVerified(false);
-        setFoundRegisterData(null); // เคลียร์ข้อมูลเก่า
-      }
-    } catch (error) {
-      console.error('Failed to check with register list', error);
-      setIsVerified(false);
-    }
-  };
-
-  // ฟังก์ชันสำหรับแปลง 'ผู้ใหญ่|เด็ก|พระ|สามเณร' เป็นข้อความที่อ่านง่าย
-  const formatPassengerInfo = (passengerString) => {
-    if (!passengerString || typeof passengerString !== 'string') {
-      return '-- คน'; // ค่า default ถ้าไม่มีข้อมูล
-    }
-    const parts = passengerString.split('|');
-    if (parts.length < 4) {
-      return '-- คน';
-    }
-
-    let textCount = '';
-
-    const people = parseInt(parts[0] || 0) + parseInt(parts[1] || 0); // รวมผู้ใหญ่กับเด็ก
-    const monks = parseInt(parts[2] || 0);
-    const novices = parseInt(parts[3] || 0);
-
-
-    if (people > 0) {
-      textCount += `${people}คน`;
-    }
-    if (monks > 0) {
-      textCount += `/${monks}รูป`;
-    }
-    if (novices > 0) {
-      textCount += `/สณ${novices}รูป`;
-    }
-    return textCount || '-- คน';
   };
 
   return (
@@ -584,29 +480,28 @@ export default function ScanScreen() {
                   />
                 </View>
               )}
-              {isModeOne ? "" : (
-                <View style={styles.inputGroup}>
-                  <Text style={styles.label}>เลขสติกเกอร์</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="เลขสติกเกอร์"
-                    value={stickerNumber}
-                    onChangeText={setStickerNumber}
-                    keyboardType="number-pad"
-                  />
-                </View>
-              )}
+
+              {/* <View style={styles.inputGroup}>
+                <Text style={styles.label}>เลขสติกเกอร์</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="เลขสติกเกอร์"
+                  value={stickerNumber}
+                  onChangeText={setStickerNumber}
+                  keyboardType="number-pad"
+                />
+              </View> */}
+
               <View style={styles.menuFooter} >
 
                 <TouchableOpacity style={styles.cancelButton} onPress={cancelProcess}>
                   <Text style={styles.cancelButtonText}>ยกเลิก</Text>
                 </TouchableOpacity>
-
-                {/* // ✅ ปรับเงื่อนไขการแสดงผลปุ่มตามโหมด */}
-                {/* isModeOne ? 'ธรรมดา' : 'ธุดงค์' */}
-                {isModeOne ? (<TouchableOpacity
+                <TouchableOpacity
+                  // ✅ 1. เพิ่มเงื่อนไข !isVerified เข้าไปในการกำหนด style
                   style={[styles.confirmButton, (isSubmitting || !isVerified) && styles.buttonDisabled]}
                   onPress={handlePrintAndSave}
+                  // ✅ 2. เพิ่มเงื่อนไข !isVerified เข้าไปในการปิดใช้งานปุ่ม
                   disabled={isSubmitting || !isVerified}
                 >
                   {isSubmitting ? (
@@ -614,114 +509,19 @@ export default function ScanScreen() {
                   ) : (
                     <Text style={styles.confirmButtonText}>ต่อไป</Text>
                   )}
-                </TouchableOpacity>)
-                  :
-                  (<TouchableOpacity
-                    style={[styles.confirmButton, isSubmitting && styles.buttonDisabled]}
-                    onPress={handlePrintAndSave}
-                    disabled={isSubmitting}
-                  >
-                    {isSubmitting ? (
-                      <ActivityIndicator color="#fff" />
-                    ) : (
-                      <Text style={styles.confirmButtonText}>
-                        {/* ใช้ Ternary Operator เพื่อเปลี่ยนข้อความตาม isVerified */}
-                        {isVerified ? 'บันทึกและพิมพ์' : 'บันทึก'}
-                      </Text>
-                    )}
-                  </TouchableOpacity>)}
+                </TouchableOpacity>
+
+
+
+
               </View>
             </View>
 
             {/* Hidden Receipt for printing */}
-            {showReceipt && (
-              <View style={{ position: 'absolute', left: -10000 }}>
-                {/* <View style={{ position: 'absolute' }}> */}
-                <ViewShot ref={receiptRef} style={styles.receiptContainer}>
-                  <Text style={styles.textCenter}>! เอกสารสำคัญ ห้ามทำหาย !</Text>
 
-                  <View style={[styles.receiptRow, { marginTop: 1, marginBottom: 1 }]}>
-                    <Text style={styles.receiptMetaSmall}>#{sessionData?.userId || '--'}</Text>
-
-                    <Text style={styles.receiptMetaSmall}>{foundRegisterData?.register_id || '--'}</Text>
-                  </View>
-
-                  <Text style={styles.receiptTitle}>ใบลงทะเบียนรถ</Text>
-                  {/* ✅ ดึงชื่อโปรเจกต์มาแสดง */}
-                  <Text style={styles.receiptSubtitle}>{activeProject?.name || 'ไม่พบชื่อโปรเจกต์'}</Text>
-
-                  <View style={styles.divider} />
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>ทะเบียนรถ:</Text>
-                    <Text style={styles.receiptValue}>{licensePlate}</Text>
-                  </View>
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>จังหวัด:</Text>
-                    <Text style={styles.receiptValue}>{province}</Text>
-                  </View>
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>ประเภทรถ:</Text>
-                    <Text style={styles.receiptValue}>
-                      {vehicleType === 'Other' ? customVehicleType : vehicleType}
-                    </Text>
-                  </View>
-
-                  {/* ✅ ดึงข้อมูลจาก C7 (foundRegisterData) ถ้ามี */}
-                  {foundRegisterData && (
-                    <>
-
-                      <View style={styles.receiptRow}>
-                        <Text style={styles.receiptLabel}>จุดออกรถ:</Text>
-                        <Text style={styles.receiptValue}>{foundRegisterData.station_name || '--'}</Text>
-                      </View>
-                      <View style={styles.receiptRow}>
-                        <Text style={styles.receiptLabel}>จังหวัด:</Text>
-                        <Text style={styles.receiptValue}>{foundRegisterData.station_province || '--'}</Text>
-                      </View>
-                      <View style={styles.receiptRow}>
-                        <Text style={styles.receiptLabel}>ผู้โดยสาร:</Text>
-                        <Text style={styles.receiptValue}>{formatPassengerInfo(foundRegisterData.passenger)}</Text>
-                      </View>
-                    </>
-                  )}
-
-                  {/* <View style={styles.divider} />
-
-                
-                  {stickerNumber && (
-                    <View style={styles.receiptRow}>
-                      <Text style={styles.receiptLabel}>สติกเกอร์:</Text>
-                      <Text style={styles.receiptValue}>{stickerNumber}</Text>
-                    </View>
-                  )} */}
-
-                  <View style={styles.divider} />
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>เวลาลงทะเบียน:</Text>
-                    <Text style={styles.receiptValue}>
-                      {new Date().toLocaleDateString('th-TH-u-ca-buddhist', {
-                        year: '2-digit', month: '2-digit', day: '2-digit',
-                        hour: '2-digit', minute: '2-digit',
-                      })}
-                    </Text>
-                  </View>
-
-                  {/* <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>รหัสยืนยัน:</Text>
-                    <Text style={styles.receiptValue}>{foundRegisterData?.register_id || '--'}</Text>
-                  </View> */}
-
-                  {/* <View style={styles.divider} /> */}
-                </ViewShot>
-              </View>
-            )}
           </ScrollView>)
         }
-      </View >
+      </View>
 
       {/* Modal สำหรับแสดงรูปภาพเต็มจอ */}
       <Modal
@@ -734,17 +534,17 @@ export default function ScanScreen() {
             cropWidth={windowWidth}
             cropHeight={windowHeight}
             imageWidth={windowWidth}
-            imageHeight={640}
+            imageHeight={windowHeight}
             minScale={0.8} // อาจจะเพิ่ม minScale เพื่อให้ซูมออกได้
             maxScale={2.5}
           >
-            <Image source={{ uri: imageUri }} style={styles.fullscreenImage} resizeMode="contain" />
+            <Image source={{ uri: imageUri }} style={styles.fullscreenImage} />
           </ImageZoom>
           <TouchableOpacity style={styles.closeButton} onPress={() => setIsImageModalVisible(false)}>
             <Text style={styles.closeButtonText}>X</Text>
           </TouchableOpacity>
         </View>
-      </Modal >
+      </Modal>
 
       {/* เพิ่ม Modal นี้เข้าไปในส่วนท้ายของ return */}
       <Modal
@@ -798,7 +598,7 @@ export default function ScanScreen() {
             </View>
           </View>
         </View>
-      </Modal >
+      </Modal>
     </View >
   );
 }
@@ -1012,14 +812,14 @@ const styles = StyleSheet.create({
   },
   receiptLabel: {
     fontSize: 18,
+    fontWeight: 'bold',
     fontFamily: 'Sarabun-Regular',
     marginVertical: 0,
   },
   receiptValue: {
     fontSize: 18,
-    fontWeight: 'bold',
     fontFamily: 'Sarabun-Regular',
-    marginTop: 5,
+    marginVertical: 0,
   },
   formContainer: {
     backgroundColor: '#fff',
@@ -1037,7 +837,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 180,
     borderRadius: 15,
-    marginBottom: 5,
+    marginBottom: 20,
     backgroundColor: '#e9ecef',
   },
   inputGroup: {
@@ -1061,12 +861,30 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8f9fa',
     borderColor: '#e9ecef',
   },
-  receiptMetaSmall: {
-    fontSize: 20,
-    color: '#555',
-    fontFamily: 'Sarabun-Regular',
-    fontWeight: 'bold',
-  },
+  // confirmButton: {
+  //   backgroundColor: '#2ecc71',
+  //   borderRadius: 12,
+  //   padding: 16,
+  //   alignItems: 'center',
+  //   marginTop: 20,
+  // },
+  // confirmButtonText: {
+  //   color: '#fff',
+  //   fontSize: 16,
+  //   fontWeight: '600',
+  // },
+  // cancelButton: {
+  //   backgroundColor: '#e74c3c',
+  //   borderRadius: 12,
+  //   padding: 16,
+  //   marginTop: 10,
+  //   alignItems: 'center',
+  // },
+  // cancelButtonText: {
+  //   color: '#fff',
+  //   fontSize: 16,
+  //   fontWeight: '600',
+  // },
 
   // --- Modal Styles ---
   modalContainer: {
@@ -1092,7 +910,7 @@ const styles = StyleSheet.create({
   },
   closeButtonText: {
     color: '#fff',
-    fontSize: 25,
+    fontSize: 20,
     fontWeight: 'bold',
   },
   initialContainer: {
@@ -1242,10 +1060,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#e74c3c', // สีแดงสำหรับ Error
     borderRadius: 10,
-    paddingVertical: 6,
+    paddingVertical: 12,
     paddingHorizontal: 16,
-    marginTop: 4, // ระยะห่างจากด้านบน
-    marginBottom: 4, // ระยะห่างจากฟอร์มด้านล่าง
+    marginTop: 8, // ระยะห่างจากด้านบน
+    marginBottom: 16, // ระยะห่างจากฟอร์มด้านล่าง
   },
   errorBannerText: {
     color: '#fff',

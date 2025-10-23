@@ -1,4 +1,5 @@
 import React, { createContext, useState, useContext } from 'react';
+import axios from 'axios';
 
 const AuthContext = createContext();
 
@@ -8,24 +9,52 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (username, password) => {
     setIsLoading(true);
-    try {
-      // TODO: เชื่อมต่อกับ API จริง
-      await new Promise(resolve => setTimeout(resolve, 1000));
+    console.log('username, password :>> ', JSON.stringify({ username, password }));
 
-      if (username && password) {
-        const userData = {
-          id: '1',
-          username: username,
-          token: 'mock-token-' + Date.now(),
-        };
-        setUser(userData);
-        return { success: true, user: userData };
+    try {
+      const response = await fetch("https://mbus-test.dhammakaya.network/api/lpr/login", {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ username, password }),
+      });
+
+      // เช็คว่า response สำเร็จหรือไม่ (status code 200-299)
+      if (!response.ok) {
+        // ถ้า server ตอบกลับมาด้วย status error เช่น 404, 500
+        // console.error('Server responded with an error:', response.status);
+        const errorData = await response.json(); // ลองดูว่ามีข้อมูล error อะไรส่งมาไหม
+        // console.error('Error details:', errorData);
+        return { status: 'error', message: errorData.message || 'Server Error' };
       }
 
-      return { success: false, message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' };
+      const { result, status } = await response.json();
+      console.log('result , status :>> ', result, status);
+
+      if (status === 'success') {
+        const userData = {
+          id: result.user.id,
+          username: result.user.username,
+          first_name: result.user.first_name,
+          last_name: result.user.last_name,
+          note: result.user.note,
+          lpr_token: result.lpr_token,
+        };
+        console.log('userData :>> ', userData);
+        setUser(userData);
+        return { status, data: userData };
+      }
+
+
     } catch (error) {
+      // นี่คือส่วนที่จะทำงานเมื่อเกิด Network Error!
+      console.error('Fetch failed with a Network Error:', error);
       return { success: false, message: error.message };
-    } finally {
+      // ให้ดูข้อมูลใน console ว่า error บอกอะไรเพิ่มเติมบ้าง
+    }
+
+    finally {
       setIsLoading(false);
     }
   };

@@ -2,7 +2,9 @@ import React from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-const SyncStatus = ({ isSyncing, lastSyncTime, onPressSync }) => {
+const SyncStatus = ({ isSyncing, lastSyncTime,
+  // onPressSync
+}) => {
   const formatTime = (time) => {
     if (!time) return 'กดเพื่อซิงค์';
     return `ล่าสุด: ${new Date(time).toLocaleTimeString('th-TH')}`;
@@ -11,7 +13,7 @@ const SyncStatus = ({ isSyncing, lastSyncTime, onPressSync }) => {
   return (
     <TouchableOpacity
       style={styles.container}
-      onPress={onPressSync}
+      // onPress={onPressSync}
       disabled={isSyncing}
     >
       {isSyncing ? (
@@ -37,7 +39,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 6,
     borderRadius: 20,
-   marginRight: 10,
+    marginRight: 10,
     backgroundColor: '#f0f0f0',
   },
   syncingText: {
