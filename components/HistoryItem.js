@@ -74,7 +74,7 @@ const HistoryItem = ({ item, index, numberPlate, openImageModal }) => {
   return (
     <View style={styles.card}>
       <View style={styles.cornerNumber}>
-        <Text style={styles.cornerNumberText}>{numberPlate(index)}</Text>
+        <Text style={styles.cornerNumberText}>{item.id}</Text>
       </View>
 
       {/* ส่วนรูปภาพ Thumbnail */}
@@ -135,7 +135,7 @@ const HistoryItem = ({ item, index, numberPlate, openImageModal }) => {
           {/* ✅ ใช้ displayTime ที่ถูกประมวลผลอย่างปลอดภัยแล้ว */}
           <Text style={styles.metaText}>{displayTime}</Text>
           <Ionicons
-            name={item.synced == 1 ? "cloud-done" : item.synced == 0 ? "cloud-upload" : "warning-outline"}
+            name={item.synced == 1 ? "checkmark-done" : item.synced == 0 ? "cloud-upload" : "warning-outline"}
             size={16}
             color={item.synced == 1 ? '#27ae60' : item.synced == 0 ? '#f39c12' : '#e74c3c'}
           />

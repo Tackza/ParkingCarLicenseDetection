@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons'; // Import ไอคอน
 import { useRouter } from 'expo-router';
 import { clearSession, deleteSetting, getActiveSession, getSetting, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useMode } from '../../contexts/ModeContext';
+import { useEnvironment } from '../../contexts/EnvironmentContext';
 
 
 const sections = [
@@ -14,6 +15,7 @@ const sections = [
       { id: 'refresh', title: 'โหลดข้อมูลใหม่', icon: 'refresh' },
       { id: 'machineCode', title: 'รหัสเครื่อง', icon: 'code' },
       { id: 'mode', title: 'โหมด', icon: 'invert-mode' },
+      { id: 'environment', title: 'Environment', icon: 'server' },
     ],
   },
   // {
@@ -43,11 +45,15 @@ export default function SettingsScreen() {
   const [lprToken, setLprToken] = useState('');
   const [first_name, setFirst_name] = useState('');
   const [last_name, setLast_name] = useState('');
+  const [isEnvModalVisible, setEnvModalVisible] = useState(false);
+  const [envMasterCodeInput, setEnvMasterCodeInput] = useState('');
+  const { environment, updateEnvironment, isLoading: isEnvLoading } = useEnvironment();
 
   // useEffect จะทำงานแค่ครั้งเดียวตอนหน้านี้ถูกโหลดขึ้นมา
   useEffect(() => {
     const fetchDataFromDB = async () => {
       try {
+
         // ดึงข้อมูล session ผู้ใช้
         const session = await getActiveSession();
         console.log('session :>> ', session);
@@ -75,6 +81,10 @@ export default function SettingsScreen() {
     fetchDataFromDB();
   }, []); // [] หมายถึงให้ทำงานแค่ครั้งเดียว
 
+  const API_BASE_URL = environment === 'prod'
+    ? 'https://mbus.dhammakaya.network/api' // <-- ❗️ URL ของ Prod (ผมเดา)
+    : 'https://mbus-test.dhammakaya.network/api'; // <-- URL ของ Test
+
   const handleLogout = async () => {
     Alert.alert(
       "ยืนยันการออกจากระบบ", // Title ของ Alert
@@ -100,18 +110,19 @@ export default function SettingsScreen() {
               router.replace('/login'); // ย้ายไปหน้า Login ทันที
 
               // ดักจับ error จาก fetch API call
-              const result = await fetch("https://mbus-test.dhammakaya.network/api/lpr/logout", {
+              const result = await fetch(`${API_BASE_URL}/lpr/logout`, {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
                   'Authorization': `Bearer ${lprToken}`,
                 },
               });
+              const data = await result.json();
 
-              if (!result.ok) {
+              if (!data.result) {
                 console.error('Server responded with an error during logout:', result.status);
                 const errorData = await result.json();
-                console.error('Error details during logout:', errorData);
+                console.log('❌ Error details during logout:', errorData);
                 // แสดง Alert เฉพาะถ้า API มีปัญหา แต่ผู้ใช้ได้ออกจากระบบ local แล้ว
                 Alert.alert('ข้อผิดพลาด', 'ออกจากระบบในเครื่องแล้ว แต่มีปัญหาในการเชื่อมต่อเซิร์ฟเวอร์');
               } else {
@@ -132,7 +143,7 @@ export default function SettingsScreen() {
     );
   };
 
-  if (loading) {
+  if (loading || isEnvLoading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#0000ff" />
@@ -156,7 +167,7 @@ export default function SettingsScreen() {
 
   const getProject = async () => {
     setLoading(true);
-    const result = await fetch("https://mbus-test.dhammakaya.network/api/lpr/projects", {
+    const result = await fetch(`${API_BASE_URL}/lpr/projects`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -195,10 +206,14 @@ export default function SettingsScreen() {
           // เมื่อกดที่เมนูโหมด ให้เปิด Modal เพื่อกรอกรหัส
           setModeMasterCodeInput(''); // เคลียร์รหัสเก่าทุกครั้งที่เปิด
           setModeModalVisible(true);
+        } else if (item.id === 'environment') {
+          setEnvMasterCodeInput(''); // เคลียร์รหัส
+          setEnvModalVisible(true); // เปิด Modal ใหม่
         } else if (item.id === 'refresh') {
           getProject()
         }
         else {
+          <Ionicons name={item.icon} size={20} color="#555" style={styles.itemIcon} />
           Alert.alert('Navigate', `Go to ${item.title} screen`);
         }
       }}
@@ -214,7 +229,12 @@ export default function SettingsScreen() {
       )}
       {item.id == 'mode' && (
         <Text style={styles.itemValueText}>
-          {isModeOne ? 'งานบุญ' : 'ธุดงค์'}
+          {isModeOne ? 'งานบุญ' : 'ธรรมยาตรา'}
+        </Text>
+      )}
+      {item.id == 'environment' && (
+        <Text style={[styles.itemValueText, environment === 'prod' ? styles.prodText : styles.testText]}>
+          {environment === 'prod' ? 'Prod' : 'Test'}
         </Text>
       )}
 
@@ -226,7 +246,29 @@ export default function SettingsScreen() {
     <Text style={styles.sectionHeader}>{title.toUpperCase()}</Text>
   );
 
- 
+  const handleConfirmEnvChange = async () => {
+    if (envMasterCodeInput !== '8989') {
+      Alert.alert("ผิดพลาด", "รหัสอนุมัติไม่ถูกต้อง.");
+      return;
+    }
+
+    try {
+      // สลับค่า 'prod' -> 'test' หรือ 'test' -> 'prod'
+      const newEnv = environment === 'prod' ? 'test' : 'prod';
+      await updateEnvironment(newEnv);
+
+      Alert.alert("สำเร็จ", `เปลี่ยน Environment เป็น ${newEnv.toUpperCase()} เรียบร้อยแล้ว!`);
+
+      // ปิด Modal และเคลียร์ค่า
+      setEnvModalVisible(false);
+      setEnvMasterCodeInput('');
+    } catch (e) {
+      console.error("Failed to save environment setting:", e);
+      Alert.alert("ผิดพลาด", "ไม่สามารถบันทึก Environment ได้.");
+    }
+  };
+
+
 
   // --- ฟังก์ชันสำหรับจัดการการบันทึกรหัสจาก Modal ---
   const handleSaveCode = async () => {
@@ -335,19 +377,64 @@ export default function SettingsScreen() {
     </Modal>
   );
 
+  const renderEnvironmentModal = () => (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={isEnvModalVisible}
+      onRequestClose={() => setEnvModalVisible(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContainer}>
+          <Text style={styles.modalTitle}>ยืนยันการเปลี่ยน Environment</Text>
+          <Text style={styles.modalSubTitle}>
+            {/* แสดงสถานะปัจจุบัน */}
+            Current: {environment === 'prod' ? 'Prod' : 'Test'}
+          </Text>
+          <TextInput
+            style={styles.modalInput}
+            placeholder="กรอกรหัสอนุมัติ"
+            value={envMasterCodeInput}
+            onChangeText={setEnvMasterCodeInput}
+            secureTextEntry={true}
+            keyboardType="number-pad"
+          />
+          <View style={styles.modalButtonContainer}>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.cancelButton]}
+              onPress={() => setEnvModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>ยกเลิก</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.saveButton]}
+              onPress={handleConfirmEnvChange} // เรียกใช้ฟังก์ชันที่สร้างใหม่
+            >
+              <Text style={styles.modalButtonText}>ยืนยัน</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
   return (
     <View style={styles.container}>
       <View style={styles.tabMobile}>
       </View>
       {renderMachineCodeModal()}
       {renderModeChangeModal()}
+      {renderEnvironmentModal()}
       <View style={styles.profileHeader}>
         {/* Avatar จาก 2 ตัวอักษรแรก */}
         <View style={[styles.avatarTextContainer, { backgroundColor: '#007AFF' }]}>
           <Text style={styles.avatarText}>{machineCode}</Text>
         </View>
         <Text style={styles.username}>{first_name} {last_name}</Text>
-      
+        <Text style={[styles.envHeaderText, environment === 'prod' ? styles.prodText : styles.testText]}>
+          Env: {environment === 'prod' ? 'Prod' : 'Test'}
+        </Text>
+
       </View>
 
       {/* --- ส่วน List การตั้งค่า --- */}
@@ -533,5 +620,22 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: 'bold',
     fontSize: 16,
+  },
+  envHeaderText: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  testText: {
+    color: '#F57C00', // สีส้ม
+  },
+  testText: {
+    color: '#F57C00', // สีส้ม
+  },
+  modalSubTitle: {
+    fontSize: 16,
+    color: '#555',
+    marginBottom: 20,
+    textAlign: 'center'
   },
 });

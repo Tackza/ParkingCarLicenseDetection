@@ -1,5 +1,5 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Dimensions,
@@ -9,7 +9,8 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
+  TextInput,
 } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,9 +28,11 @@ export default function HistoryScreen() {
   const [history, setHistory] = useState([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
   const router = useRouter();
-  const { isOnline, setIsOnline } = useSync();
+  const { isOnline } = useSync();
   const { activeProject, refreshCurrentProject } = useProject();
+  const debounceTimer = useRef(null);
 
 
   // ✅ 3. ใช้ useFocusEffect เพื่อจัดการทุกอย่างเมื่อหน้าจอถูกเปิด
@@ -46,31 +49,77 @@ export default function HistoryScreen() {
       // แต่ปกติ useSync() จะดึงค่าล่าสุดให้เองเมื่อ context มีการเปลี่ยนแปลง
     }, [refreshCurrentProject]) // Dependency: refreshCurrentProject เท่านั้น
   );
+
+
   useEffect(() => {
-    // เมื่อ activeProject เปลี่ยน (หลังจาก refreshCurrentProject) ให้โหลด history
-    loadHistory();
-  }, [activeProject, loadHistory]);
+    if (activeProject) {
+      console.log("Project changed, loading full history...");
+      loadHistory(''); // 👈 โหลดทั้งหมด (ล้าง searchQuery)
+      setSearchQuery(''); // 👈 เคลียร์ช่องค้นหาด้วย
+    }
+  }, [activeProject]);
 
 
   // ✅ 2. สร้างฟังก์ชัน loadHistory ที่ขึ้นอยู่กับ activeProject
-  const loadHistory = useCallback(async () => {
-    // ถ้ายังไม่มีโปรเจกต์ หรือโปรเจกต์กำลังโหลด ให้เคลียร์ history
+  // const loadHistory = useCallback(async () => {
+  //   if (!activeProject) {
+  //     setHistory([]);
+  //     return;
+  //   }
+  //   try {
+  //     // 🔷 MODIFY: ส่ง searchQuery เข้าไปด้วย
+  //     console.log(`Loading history for project ID: ${activeProject.project_id}, Query: "${searchQuery}"`);
+  //     const data = await getScanHistory(activeProject.project_id, searchQuery);
+  //     setHistory(data);
+  //   } catch (error) {
+  //     console.error('Error loading history:', error);
+  //     Alert.alert('ข้อผิดพลาด', 'ไม่สามารถโหลดประวัติได้');
+  //   }
+  // }, [activeProject, searchQuery]);
+
+  const loadHistory = async (query) => {
+    // (ย้าย Guard Clause มาไว้ที่นี่)
     if (!activeProject) {
       setHistory([]);
       return;
     }
     try {
-      console.log(`Loading history for project ID: ${activeProject.project_id}`);
-      // ✅ ตรวจสอบว่า getScanHistory ถูกปรับให้ใช้ `check_ins` table แล้ว
-      const data = await getScanHistory(activeProject.project_id);
+      console.log(`Loading history for project ID: ${activeProject.project_id}, Query: "${query}"`);
+      const data = await getScanHistory(activeProject.project_id, query);
       setHistory(data);
-      // เรียงลำดับจากใหม่ไปเก่า (ตาม created_at)
-      // setHistory(data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
     } catch (error) {
       console.error('Error loading history:', error);
       Alert.alert('ข้อผิดพลาด', 'ไม่สามารถโหลดประวัติได้');
     }
-  }, [activeProject]);
+  };
+
+  useEffect(() => {
+    // (ถ้า project ยังไม่โหลด ก็ไม่ต้องทำอะไร)
+    if (!activeProject) {
+      return;
+    }
+
+    // เมื่อผู้ใช้พิมพ์, ให้เคลียร์ timer เก่า
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+    }
+
+    // ตั้ง timer ใหม่ (300ms)
+    console.log("User typing... setting 300ms debounce");
+    debounceTimer.current = setTimeout(() => {
+      // เมื่อครบ 300ms (ผู้ใช้หยุดพิมพ์)
+      // ให้เรียก loadHistory ด้วย searchQuery "ล่าสุด"
+      console.log("Debounce timer fired! Searching for:", searchQuery);
+      loadHistory(searchQuery);
+    }, 300); // 300 มิลลิวินาที
+
+    // Cleanup: เคลียร์ timer ถ้า component ถูก unmount
+    return () => {
+      if (debounceTimer.current) {
+        clearTimeout(debounceTimer.current);
+      }
+    };
+  }, [searchQuery, activeProject]);
 
 
 
@@ -81,6 +130,7 @@ export default function HistoryScreen() {
   };
 
   const numberPlate = (index) => {
+    console.log('index :>> ', index);
     return (history.length - index)
   }
 
@@ -101,28 +151,49 @@ export default function HistoryScreen() {
 
       </View>
       <CheckInSyncManager />
+
+      {/* ✅ ADD: เพิ่ม Search Bar UI */}
+     <View style={styles.searchContainer}>
+        <Ionicons name="search" size={20} color="#888" style={styles.searchIcon} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="ค้นหาทะเบียนรถ (เช่น 1234)..."
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholderTextColor="#888"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery('')}>
+            <Ionicons name="close-circle" size={20} color="#aaa" />
+          </TouchableOpacity>
+        )}
+      </View>
+      
+
       <View style={styles.content}>
         {history.length === 0 ? (
-          <View style={styles.emptyContainer}><Text>
-            ไม่มีข้อมูล</Text></View>
-        ) :
-          (
-
-            <FlatList
-              data={history} // สมมติว่าข้อมูลของคุณชื่อ history
-              keyExtractor={(item) => item.id ? item.id.toString() : Math.random().toString()} // ใช้ค่าที่ไม่ซ้ำกันจริงๆ ดีกว่า index
-              // 3. แก้ไข renderItem ให้เรียกใช้ HistoryItem
-              renderItem={({ item, index }) => (
-                <HistoryItem
-                  item={item}
-                  index={index}
-                  numberPlate={numberPlate} // ส่งฟังก์ชันเข้าไปเป็น prop
-                  openImageModal={openImageModal} // ส่งฟังก์ชันเข้าไปเป็น prop
-                />
-              )}
-            />
-          )
-        }
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>
+              {searchQuery.length > 0 ? 'ไม่พบข้อมูลที่ตรงกัน' : 'ไม่มีข้อมูล'}
+            </Text>
+          </View>
+        ) : (
+          <FlatList
+            data={history}
+            keyExtractor={(item) => item.id ? item.id.toString() : Math.random().toString()}
+            renderItem={({ item, index }) => (
+              <HistoryItem
+                item={item}
+                index={index}
+                numberPlate={numberPlate}
+                openImageModal={openImageModal}
+              />
+            )}
+            keyboardShouldPersistTaps="handled"
+          />
+        )}
       </View>
 
       {/* Modal สำหรับแสดงรูปภาพเต็มจอ */}
@@ -268,6 +339,28 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontWeight: '500',
     marginLeft: 6,
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    paddingHorizontal: 15,
+    marginHorizontal: 10,
+    marginTop: 10,
+    marginBottom: 5,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+    elevation: 1,
+  },
+  searchIcon: {
+    marginRight: 10,
+  },
+  searchInput: {
+    flex: 1,
+    height: 45, // เพิ่มความสูงเล็กน้อย
+    fontSize: 16,
+    color: '#333',
   },
 
 });

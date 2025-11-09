@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext } from 'react';
+import React, { createContext, useState, useContext, useMemo } from 'react';
 
 // 1. สร้าง Context object
 const SyncContext = createContext({
@@ -15,14 +15,22 @@ export const SyncProvider = ({ children }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState(null);
 
-  const value = {
+  // const value = {
+  //   isOnline,
+  //   setIsOnline,
+  //   isSyncing,
+  //   setIsSyncing,
+  //   lastSyncTime,
+  //   setLastSyncTime,
+  // };
+  const value = useMemo(() => ({
     isOnline,
     setIsOnline,
     isSyncing,
     setIsSyncing,
     lastSyncTime,
     setLastSyncTime,
-  };
+  }), [isOnline, isSyncing, lastSyncTime]);
 
   return (
     <SyncContext.Provider value={value}>

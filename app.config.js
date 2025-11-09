@@ -11,6 +11,18 @@ export default () => {
       "version": "1.0.0",
       "orientation": "portrait",
       "icon": "./assets/images/c7.png",
+      "backgroundColor": "#ffffff",
+
+      // --- ⬇️ นี่คือ 2 ส่วนที่ต้องเพิ่มเข้ามา ⬇️ ---
+      "runtimeVersion": "1.0.0",
+      "updates": {
+        "enabled": true,
+        "checkAutomatically": "ON_LOAD",
+        "fallbackToCacheTimeout": 0,
+        "url": "https://u.expo.dev/5f174e08-157c-4a3f-8174-209b75158d09"
+      },
+      // --- ⬆️ สิ้นสุดส่วนที่เพิ่ม ⬆️ ---
+
       "scheme": "myapp",
       "userInterfaceStyle": "automatic",
       "splash": {

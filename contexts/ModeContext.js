@@ -53,9 +53,9 @@ export const ModeProvider = ({ children }) => {
   }, [isModeOne]);
 
   // ถ้ายังโหลดค่าไม่เสร็จ อาจจะแสดงหน้า Loading
-  if (isLoading) {
-    return <ActivityIndicator />
-  }
+  // if (isLoading) {
+  //   return <ActivityIndicator />
+  // }
 
   return (
     <ModeContext.Provider value={{ isModeOne, toggleMode, isLoading }}>

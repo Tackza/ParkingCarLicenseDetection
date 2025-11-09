@@ -45,6 +45,7 @@ export default function PassengerCountScreen() {
     const numericValue = text.replace(/[^0-9]/g, '');
     setter(numericValue);
   };
+  console.log('params :>> ', params);
 
   const formatPassengerInfo = (passengerCount, childCount, monkCount, noviceCount) => {
     let textCount = '';
@@ -54,13 +55,13 @@ export default function PassengerCountScreen() {
     const novices = parseInt(noviceCount || 0);
 
     if (people > 0) {
-      textCount += `${people}คน`;
+      textCount += `${people} คน`;
     }
     if (monks > 0) {
-      textCount += `/${monks}รูป`;
+      textCount += `/${monks} รูป`;
     }
     if (novices > 0) {
-      textCount += `/สณ${novices}รูป`;
+      textCount += `/สณ${novices} รูป`;
     }
     return textCount || '-- คน';
 
@@ -89,6 +90,7 @@ export default function PassengerCountScreen() {
     Keyboard.dismiss();
 
     try {
+      const plateProvinceBKK = params.plate_province == 'กรุงเทพมหานคร' ? 'กทม.' : params.plate_province;
       // ✅ 4. สร้าง Object ที่สมบูรณ์เพื่อบันทึกลง check_ins
       const finalCheckInData = {
         project_id: params.project_id,
@@ -96,7 +98,7 @@ export default function PassengerCountScreen() {
         detect_plate_no: params.detect_plate_no,
         detect_plate_province: params.detect_plate_province,
         plate_no: params.plate_no,
-        plate_province: params.plate_province,
+        plate_province: plateProvinceBKK,
         is_plate_manual: params.is_plate_manual,
         photo_path: params.photo_path,
         bus_type: params.bus_type,
@@ -109,11 +111,15 @@ export default function PassengerCountScreen() {
         created_by: params.created_by,
       };
 
-      // ✅ 5. เรียกใช้ insertCheckIn เพื่อบันทึกลง SQLite
-      await insertCheckIn(finalCheckInData);
-      console.log('✅ Check-in record with passenger count saved.');
 
-      // ❌ ไม่ต้องใช้ saveScanToHistory ที่เป็น AsyncStorage อีกต่อไป
+
+      // ✅ รับค่าผลลัพธ์จาก insertCheckIn
+      const result = await insertCheckIn(finalCheckInData);
+
+      // ✅ ตรวจสอบว่าบันทึกสำเร็จหรือไม่
+      if (!result || !result.lastInsertRowId || result.changes === 0) {
+        throw new Error('ไม่สามารถบันทึกข้อมูลลงฐานข้อมูลได้');
+      }
 
       // ✅ 6. พิมพ์ใบเสร็จ
       setTimeout(async () => {
@@ -249,12 +255,13 @@ export default function PassengerCountScreen() {
 
         {/* Hidden Receipt for printing */}
         <View style={{ position: 'absolute', left: -10000 }}>
+          {/* <View > */}
           <ViewShot ref={receiptRef} style={styles.receiptContainer}>
             <Text style={styles.textCenter}>! เอกสารสำคัญ ห้ามทำหาย !</Text>
 
             <View style={[styles.receiptRow, { marginTop: 1, marginBottom: 1 }]}>
-              <Text style={styles.receiptMetaText}>#{params.created_by || '--'}</Text>
-              <Text style={styles.receiptMetaText}>{params.register_id || '--'}</Text>
+              <Text style={styles.receiptMetaText}>#{params.comp_id || '--'}</Text>
+              <Text style={styles.receiptMetaText}>{params.code || '--'}</Text>
             </View>
 
             <Text style={styles.receiptTitle}>ใบลงทะเบียนรถ</Text>
@@ -288,7 +295,7 @@ export default function PassengerCountScreen() {
               <Text style={styles.receiptLabel}>เวลาลงทะเบียน:</Text>
               <Text style={styles.receiptValue}>
                 {new Date().toLocaleDateString('th-TH-u-ca-buddhist', {
-                  year: '2-digit', month: '2-digit', day: '2-digit',
+                  year: 'numeric', month: '2-digit', day: 'numeric',
                   hour: '2-digit', minute: '2-digit',
                 })}
               </Text>
@@ -301,7 +308,7 @@ export default function PassengerCountScreen() {
               <View style={styles.sectionHeaderSide} />
               <Text style={[styles.receiptTitle, styles.sectionHeaderCenter]}>ใบลงทะเบียนส่วนที่ 2</Text>
               <Text style={[styles.sectionHeaderText, styles.sectionHeaderSide, { textAlign: 'right' }]}>
-                {params.register_id || '--'}
+                {params.code || '--'}
               </Text>
             </View>
 
@@ -366,11 +373,11 @@ const styles = StyleSheet.create({
     // borderLeftWidth: 5,
     // borderLeftColor: '#3498db',
   },
-  totalPassengerValue: { // สไตล์สำหรับยอดรวม
-    fontSize: 20, // ใหญ่ขึ้น
-    fontWeight: 'bold', // เน้น
-    color: '#1A1A1A', // สีเข้ม
-  },
+  // totalPassengerValue: { // สไตล์สำหรับยอดรวม
+  //   fontSize: 20, // ใหญ่ขึ้น
+  //   // fontWeight: 'bold', // เน้น
+  //   color: '#1A1A1A', // สีเข้ม
+  // },
   passengerDetailText: { // สไตล์สำหรับรายละเอียด (ถ้าใช้)
     fontSize: 14,
     color: '#555',
@@ -412,7 +419,9 @@ const styles = StyleSheet.create({
   counterInput: {
     borderWidth: 1, borderColor: '#ced4da',
     borderRadius: 15, width: 100, height: 60,
-    fontSize: 28, fontWeight: 'bold', color: '#2c3e50',
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#2c3e50',
     textAlign: 'center',
   },
   buttonContainer: {
@@ -444,8 +453,8 @@ const styles = StyleSheet.create({
     fontFamily: 'Sarabun-Regular',
   },
   receiptTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: 18,
+    // fontWeight: 'bold',
     textAlign: 'center',
     marginBottom: 5,
   },
@@ -462,15 +471,15 @@ const styles = StyleSheet.create({
   },
 
   receiptLabel: {
-    fontSize: 18,
+    fontSize: 16,
     fontFamily: 'Sarabun-Regular',
     marginVertical: 0,
   },
   receiptValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 16,
+    // fontWeight: 'bold',
     fontFamily: 'Sarabun-Regular',
-    marginTop: 5,
+    // marginTop: 5,
   },
   tabMobile: {
     height: 25,
@@ -483,19 +492,20 @@ const styles = StyleSheet.create({
   receiptMetaText: { // สไตล์สำหรับ User ID และ Reg ID
     fontSize: 20,
     color: '#555',
-    fontWeight: 'bold',
+    // fontWeight: 'bold',
     fontFamily: 'Sarabun-Regular',
   },
 
   signatureOverallContainer: { // Container สำหรับจัดวางช่องเซ็นชื่อ
     flexDirection: 'column',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 0,
     marginBottom: 10,
   },
   signatureSingleBox: { // กรอบของแต่ละช่องเซ็นชื่อ
     alignItems: 'start', // จัดเนื้อหาภายในกล่องให้อยู่กึ่งกลาง
-    width: '100%',        // กำหนดความกว้างให้เหมาะสม
+    width: '100%',
+    marginTop: 0       // กำหนดความกว้างให้เหมาะสม
   },
   signatureLabel: { // ข้อความกำกับ (รับอาหารเช้า/กลางวัน)
     fontSize: 14,
@@ -513,8 +523,9 @@ const styles = StyleSheet.create({
     borderBottomColor: '#888', // สีของเส้น
     borderStyle: 'dashed',     // ทำให้เป็นเส้นประ
     marginTop: 40,              // ระยะห่างจาก Label ด้านบน
-    marginBottom: 0,           // ไม่มีระยะห่างด้านล่าง
+    
   },
+
   sectionDivider: { // Style for the new separator
     borderBottomWidth: 2,
     borderBottomColor: '#888',
@@ -523,20 +534,17 @@ const styles = StyleSheet.create({
   },
   sectionHeaderRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between', // Distributes space
-    alignItems: 'center',
-    marginTop: 5,
-    marginBottom: 5, // Reduced margin
+    justifyContent: 'space-around', // Distributes space
+
   },
   sectionHeaderText: {
     fontSize: 16,
-    fontWeight: 'bold',
+    // fontWeight: 'bold',
     fontFamily: 'Sarabun-Regular',
     color: '#333',
   },
   sectionHeaderCenter: {
-    flex: 2, // Allows center text to take more space if needed
-    textAlign: 'center',
+    textAlign: 'left',
   },
   sectionHeaderSide: {
     flex: 1, // Gives left and right equal flexible space

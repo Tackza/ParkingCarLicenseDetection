@@ -12,6 +12,7 @@ import { ModeProvider } from "../contexts/ModeContext";
 import { setupDatabase } from "../constants/Database";
 import { ProjectProvider } from "../contexts/ProjectContext";
 import { SyncProvider } from "@/contexts/SyncContext";
+import { EnvironmentProvider } from "@/contexts/EnvironmentContext";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -39,20 +40,22 @@ export default function RootLayout() {
   }
 
   return (
-    <AuthProvider>
-      <ThemeProvider value={DefaultTheme}>
+    <EnvironmentProvider>
+      <AuthProvider>
         <SyncProvider>
           <ProjectProvider>
             <ModeProvider>
-              <Stack screenOptions={{ headerShown: false }}>
-                <Stack.Screen name="login" />
-                <Stack.Screen name="bluetooth-setup" />
-                <Stack.Screen name="(tabs)" />
-              </Stack>
+              <ThemeProvider value={DefaultTheme}>
+                <Stack screenOptions={{ headerShown: false }}>
+                  <Stack.Screen name="login" />
+                  <Stack.Screen name="bluetooth-setup" />
+                  <Stack.Screen name="(tabs)" />
+                </Stack>
+              </ThemeProvider>
             </ModeProvider>
           </ProjectProvider>
         </SyncProvider>
-      </ThemeProvider>
-    </AuthProvider>
+      </AuthProvider>
+    </EnvironmentProvider>
   );
 }

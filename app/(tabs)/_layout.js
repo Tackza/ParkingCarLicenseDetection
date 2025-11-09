@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Tabs, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons"; // หรือ Icon library อื่นๆ ที่คุณใช้
-import { Alert } from "react-native";
+import { Alert, ActivityIndicator } from "react-native";
 import SyncStatus from "../../components/SyncStatus";
 import * as ImagePicker from "expo-image-picker"; // เพิ่มการนำเข้า ImagePicker
 import { useMode } from "@/contexts/ModeContext";
@@ -12,33 +12,47 @@ import {
   saveRegisters,
   getActiveSession,
 } from "@/constants/Database";
+import { useEnvironment } from "@/contexts/EnvironmentContext";
 
-// ✅ กำหนดเวลา Sync (1 นาที = 60,000 มิลลิวินาที)
-const SYNC_INTERVAL = 60000;
+// ✅ กำหนดเวลา Sync (30 วินาที = 30,000 มิลลิวินาที)
+const SYNC_INTERVAL = 30000;
+
 
 function TabLogic() {
   const router = useRouter();
   const { isModeOne } = useMode();
-  const { activeProject } = useProject();
+  const { activeProject, isLoading: isProjectLoading } = useProject();
   const { isSyncing, setIsSyncing, setIsOnline, lastSyncTime, setLastSyncTime } = useSync();
+  const syncTimeoutIdRef = useRef(null);
+  const isSyncInProgress = useRef(false);
+  const [isOpeningCamera, setIsOpeningCamera] = useState(false);
 
   // ✅ ใช้ useRef เก็บ ID ของ interval
   const intervalIdRef = useRef(null);
   const initialSyncTimeoutRef = useRef(null); // สำหรับ initial timeout
 
+  const { environment } = useEnvironment();
+
+  const API_URL = environment === 'prod' ?
+    "https://mbus.dhammakaya.network/api" :
+    "https://mbus-test.dhammakaya.network/api";
+
   // ✅ 1. แก้ไข useCallback โดยเอา isSyncing ออกจาก dependency array
   const syncRegistersData = useCallback(async () => {
     // หาก isSyncing เป็น true แสดงว่ากำลัง sync อยู่ ไม่ต้องเรียกซ้ำ
-    if (isSyncing) {
-      console.log("Sync skipped: Already syncing.");
-      return;
+
+    if (isSyncInProgress.current) {
+      console.log("Sync skipped: Ref lock is active.");
+      return false; // ข้ามไปเลย
     }
     if (!activeProject) {
       console.log("Sync skipped: No active project.");
       return;
     }
 
+    isSyncInProgress.current = true;
     setIsSyncing(true);
+
     console.log("Starting sync for project:", activeProject?.project_id); // เพิ่ม log
     try {
       const session = await getActiveSession();
@@ -47,12 +61,12 @@ function TabLogic() {
       const syncState = await getLastRegisterSyncState();
       const last_update = syncState?.last_update || "";
       const last_id = syncState?.last_id || 0;
-      const apiUrl = `https://mbus-test.dhammakaya.network/api/lpr/registers?last_update=${last_update}&last_id=${last_id}&project_id=${activeProject.project_id}`;
+      const apiUrl = `${API_URL}/lpr/registers?last_update=${last_update}&last_id=${last_id}&project_id=${activeProject.project_id}`;
 
       const response = await fetch(apiUrl, {
         headers: { Authorization: `Bearer ${session.lpr_token}` },
       });
-      console.log('apiUrl :>> ', apiUrl);
+      // console.log('apiUrl :>> ', apiUrl);
 
       if (!response.ok) {
         throw new Error(`Network response was not ok, status: ${response.status}`);
@@ -60,19 +74,29 @@ function TabLogic() {
       setIsOnline(true);
 
       const data = await response.json();
-      console.log('data C7 :>> ', data);
       if (data.status === "success" && data.result?.length > 0) {
+        console.log('data C7 :>> ', data);
         await saveRegisters(data.result);
         setLastSyncTime(new Date());
         console.log("Sync successful. New records:", data.result.length); // เพิ่ม log
+        return true;
+      } else {
+        return false;
       }
     } catch (error) {
-      console.error("Data sync failed:", error);
+      console.log('Data sync failed :>> ', error);
+      // console.error("Data sync failed:", error);
       setIsOnline(false);
+      return false;
     } finally {
+      isSyncInProgress.current = false;
       setIsSyncing(false);
     }
-  }, [activeProject, setIsOnline, setLastSyncTime, setIsSyncing]); // <-- isSyncing ถูกเอาออกไปแล้ว
+  }, [activeProject, setIsOnline, setLastSyncTime, setIsSyncing, API_URL]); // <-- isSyncing ถูกเอาออกไปแล้ว
+
+
+
+
 
   useEffect(() => {
     // ฟังก์ชันสำหรับตั้งค่า interval
@@ -118,15 +142,24 @@ function TabLogic() {
     // 1. ป้องกันไม่ให้แอปเปลี่ยนไปหน้า scan ตามปกติ
     e.preventDefault();
 
-    // 2. ขออนุญาตใช้กล้อง
-    const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
-    if (cameraPermission.status !== "granted") {
-      Alert.alert("ขออนุญาต", "กรุณาอนุญาตให้เข้าถึงกล้อง");
+    // ✅ ป้องกันการกดซ้ำ: ถ้ากำลังเปิดกล้องอยู่ ให้ return ทันที
+    if (isOpeningCamera) {
       return;
     }
 
-    // 3. เปิดกล้อง
+
+
     try {
+      // ✅ ตั้งสถานะเป็น "กำลังเปิด" เพื่อแสดง loading
+      setIsOpeningCamera(true);
+      // 2. ขออนุญาตใช้กล้อง
+      const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
+      if (cameraPermission.status !== "granted") {
+        Alert.alert("ขออนุญาต", "กรุณาอนุญาตให้เข้าถึงกล้อง");
+        return;
+      }
+
+      // 3. เปิดกล้อง
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
@@ -145,6 +178,12 @@ function TabLogic() {
       // ถ้าผู้ใช้ยกเลิก ก็ไม่ต้องทำอะไร ผู้ใช้จะยังอยู่ที่หน้าเดิม
     } catch (error) {
       Alert.alert("ข้อผิดพลาด", "ไม่สามารถเปิดกล้องได้");
+    } finally {
+      // ✅ คืนสถานะเป็น "ว่าง" เสมอ ไม่ว่าจะสำเร็จ, ล้มเหลว, หรือยกเลิก
+      // เพื่อให้ผู้ใช้สามารถกดได้อีกครั้ง
+      setTimeout(() => {
+        setIsOpeningCamera(false);
+      }, 1000);
     }
   };
 
@@ -201,14 +240,21 @@ function TabLogic() {
           tabBarShowLabel: false,
           headerShown: false, // <-- เปิด Header เพื่อใส่ Status
           headerTitle: "สแกนทะเบียนรถ",
-          headerRight: () => (
-            <SyncStatus
-              isSyncing={isSyncing}
-              lastSyncTime={lastSyncTime}
-            // onPressSync={syncMasterData}
-            />
-          ),
+          // headerRight: () => (
+          //   <SyncStatus
+          //     isSyncing={isSyncing}
+          //     lastSyncTime={lastSyncTime}
+          //   // onPressSync={syncMasterData}
+          //   />
+          // ),
           tabBarIcon: ({ focused, color, size }) => {
+            // ✅ ตรวจสอบสถานะ isOpeningCamera
+            if (isOpeningCamera) {
+              // ถ้ากำลังเปิดกล้อง ให้แสดง ActivityIndicator
+              return <ActivityIndicator size="small" color={isModeOne ? "#3498db" : "#f39c12"} />;
+            }
+
+            // ถ้าไม่ได้เปิดกล้อง ให้แสดงไอคอนตามปกติ
             const iconColor = focused
               ? isModeOne
                 ? "#3498db"

@@ -6,6 +6,10 @@ import {
   getCurrentProject,
   getActiveSession,
 } from '../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { useEnvironment } from './EnvironmentContext';
+import { ActivityIndicator, View, StyleSheet } from 'react-native';
+
+
 
 // 1. สร้าง Context object
 const ProjectContext = createContext({
@@ -15,10 +19,28 @@ const ProjectContext = createContext({
   refreshCurrentProject: async () => { }, // ฟังก์ชันสำหรับเรียกเมื่อเข้าหน้าต่างๆ
 });
 
+
+
 // 2. สร้าง Provider Component (ตัวจัดการและกระจายข้อมูล)
 export const ProjectProvider = ({ children }) => {
   const [activeProject, setActiveProject] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const { environment, isLoading: isEnvLoading } = useEnvironment();
+
+
+  if (isEnvLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+
+  const API_URL = environment === 'prod' ?
+    "https://mbus.dhammakaya.network/api" :
+    "https://mbus-test.dhammakaya.network/api";
+
+
 
   const refreshCurrentProject = useCallback(async () => {
     setIsLoading(true);
@@ -43,7 +65,7 @@ export const ProjectProvider = ({ children }) => {
         throw new Error("No active session found. Cannot sync projects.");
       }
 
-      const response = await fetch("https://mbus-test.dhammakaya.network/api/lpr/projects", {
+      const response = await fetch(`${API_URL}/lpr/projects`, {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.lpr_token}`,
@@ -52,6 +74,7 @@ export const ProjectProvider = ({ children }) => {
       if (!response.ok) throw new Error("Failed to fetch projects from API.");
 
       const data = await response.json();
+      console.log('data syncProjectsWithApi :>> ', data);
 
       if (data.status === 'success' && data.result) {
         await saveProjects(data.result);
@@ -66,7 +89,7 @@ export const ProjectProvider = ({ children }) => {
     } finally {
       setIsLoading(false);
     }
-  }, [refreshCurrentProject]);
+  }, [refreshCurrentProject, API_URL]);
 
 
 
@@ -93,4 +116,12 @@ export const ProjectProvider = ({ children }) => {
 export const useProject = () => {
   return useContext(ProjectContext);
 };
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  }
+});
 

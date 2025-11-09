@@ -121,6 +121,13 @@ export const setupDatabase = async () => {
 
         -- สร้าง Index สำหรับคอลัมน์ synced เพื่อเร่งความเร็วในการค้นหาข้อมูลที่ยังไม่ถูก Sync
         CREATE INDEX IF NOT EXISTS ix_checkins_synced ON check_ins(synced);
+
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY NOT NULL,value TEXT);
+
+        INSERT OR IGNORE INTO settings (key, value) VALUES ('environment', 'prod');
+
+        
      
     `);
     }
@@ -255,9 +262,11 @@ export const saveProjects = async (projectsData) => {
     // ใช้ Transaction เพื่อให้การบันทึกข้อมูลทั้งหมดเกิดขึ้นพร้อมกัน
     // หากมี Error ระหว่างทาง ข้อมูลทั้งหมดจะถูกยกเลิก (rollback)
     await db.withTransactionAsync(async () => {
+      console.log("Deleting all old projects from local DB...");
+      await db.runAsync('DELETE FROM projects;');
       for (const project of projectsData) {
         await db.runAsync(
-          `REPLACE INTO projects 
+          `INSERT INTO projects
             (project_id, activity_id, name, start_time, end_time, seq_no) 
            VALUES 
             (?, ?, ?, ?, ?, ?);`,
@@ -314,7 +323,7 @@ export const saveRegisters = async (registersData) => {
             activity2_printno, updated_at, deleted_at
           ) VALUES (?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
           [
-            req.uid,
+            reg.uid,
             reg.reg_id,          // จาก JSON
             reg.proj_id,         // จาก JSON
             reg.code,            // จาก JSON
@@ -342,7 +351,7 @@ export const saveRegisters = async (registersData) => {
     });
     console.log(`✅ Successfully saved/updated ${registersData.length} register records.`);
   } catch (error) {
-    console.error("❌ Error saving registers:", error);
+    // console.error("❌ Error saving registers:", error);
     throw error; // ส่ง error ออกไปเพื่อให้ส่วนที่เรียกใช้จัดการต่อได้
   }
 };
@@ -369,7 +378,6 @@ export const getLastRegisterSyncState = async () => {
   try {
     // เรียงลำดับจาก update_date ล่าสุด และ register_id ล่าสุดเผื่อมีเวลาซ้ำกัน
     const lastRegister = await db.getFirstAsync(
-      // ✅ แก้ไขตรงนี้: update_date -> updated_at
       'SELECT updated_at, register_id FROM registers ORDER BY updated_at DESC, register_id DESC LIMIT 1;'
     );
 
@@ -387,33 +395,53 @@ export const getLastRegisterSyncState = async () => {
   }
 };
 
-export const getScanHistory = async (projectId) => {
-  // ป้องกันการเรียกใช้โดยไม่มี projectId
+// ใน constants/Database.js
+
+export const getScanHistory = async (projectId, searchQuery = '') => {
   if (!projectId) {
     console.warn("getScanHistory ถูกเรียกใช้โดยไม่มี projectId.");
-    return []; // คืนค่าอาร์เรย์ว่างถ้าไม่มีโปรเจกต์
+    return [];
   }
 
-  const db = await getDb();;
+  const db = await getDb();
   try {
-    // ใช้ getAllAsync เพื่อดึงข้อมูลทั้งหมดที่ตรงเงื่อนไข
-    const history = await db.getAllAsync(
-      // SQL Query: เลือกทั้งหมดจาก check_ins โดยกรองจาก project_id และเรียงตาม created_at DESC
-      'SELECT * FROM check_ins WHERE project_id = ? ORDER BY created_at DESC;',
-      // ส่งค่า projectId เข้าไปใน placeholder (?)
-      [projectId]
-    );
+    // 1. เริ่มต้น SQL query
+    let sql = 'SELECT * FROM check_ins WHERE project_id = ?';
+    const params = [projectId];
+
+    // 2. เก็บค่า searchQuery ที่ .trim() แล้ว
+    const normalizedQuery = searchQuery.trim();
+
+    // 3. ตรวจสอบว่ามีคำค้นหาหรือไม่
+    if (normalizedQuery !== '') {
+      // 🔷 ถ้ามีคำค้นหา: ให้ค้นหาด้วย LIKE
+      sql += ' AND plate_no LIKE ?';
+      params.push(`%${normalizedQuery}%`);
+    }
+
+    // 4. เพิ่มการเรียงลำดับ (ต้องมีเสมอ)
+    sql += ' ORDER BY created_at DESC';
+
+    // 5. 🔷 (นี่คือส่วนที่เพิ่มเข้ามา)
+    // ถ้า "ไม่มี" คำค้นหา: ให้จำกัดผลลัพธ์แค่ 5 รายการล่าสุด
+    if (normalizedQuery === '') {
+      sql += ' LIMIT 5';
+    }
+
+    // 6. รัน query
+    const history = await db.getAllAsync(sql, params);
+
     return history;
+
   } catch (error) {
     console.error("Error getting scan history:", error);
-    return []; // คืนค่าเป็นอาร์เรย์ว่างหากเกิดข้อผิดพลาด
+    return [];
   }
 };
 
 export const insertCheckIn = async (checkInData) => {
   const db = await getDb();
   const newId = ulid();
-
   try {
     // ใช้ runAsync แทน db.transaction สำหรับคำสั่งเดียว
     const result = await db.runAsync(
@@ -446,10 +474,47 @@ export const insertCheckIn = async (checkInData) => {
         checkInData.created_by,
       ]
     );
+
+    console.log('✅ Insert result:', {
+      lastInsertRowId: result.lastInsertRowId,
+      changes: result.changes,
+      newId: newId
+    });
+
+    // ตรวจสอบว่า insert สำเร็จจริงๆ
+    if (!result.changes || result.changes === 0) {
+      throw new Error('ไม่มีการเปลี่ยนแปลงในฐานข้อมูล (changes = 0)');
+    }
     return result; // runAsync จะคืนค่าผลลัพธ์
   } catch (error) {
-    console.error("Error inserting check-in:", error);
-    throw error;
+    console.error("❌ Error inserting check-in:", {
+      errorMessage: error.message,
+      errorName: error.name,
+      errorCode: error.code,
+      sqliteError: error.toString(),
+      stack: error.stack
+    });
+
+    // ✅ สร้าง error message ที่อ่านง่ายขึ้น
+    let friendlyMessage = 'เกิดข้อผิดพลาดในการบันทึกข้อมูล';
+
+    if (error.message.includes('UNIQUE constraint failed')) {
+      friendlyMessage = 'ข้อมูลซ้ำ: มีการบันทึกข้อมูลนี้แล้ว';
+    } else if (error.message.includes('NOT NULL constraint failed')) {
+      const field = error.message.match(/check_ins\.(\w+)/)?.[1] || 'unknown';
+      friendlyMessage = `ข้อมูลไม่ครบ: ต้องระบุ ${field}`;
+    } else if (error.message.includes('no such table')) {
+      friendlyMessage = 'ไม่พบตาราง check_ins ในฐานข้อมูล';
+    } else if (error.message.includes('no such column')) {
+      friendlyMessage = 'โครงสร้างฐานข้อมูลไม่ถูกต้อง';
+    }
+
+    // สร้าง error object ใหม่ที่มีข้อมูลครบถ้วน
+    const detailedError = new Error(friendlyMessage);
+    detailedError.originalError = error.message;
+    detailedError.sqliteCode = error.code;
+
+    throw detailedError;
   }
 };
 
@@ -495,3 +560,7 @@ export const markCheckInAsSyncedError = async (checkInId, errorMsg) => {
     throw error;
   }
 }
+
+// ใน constants/Database.js
+
+

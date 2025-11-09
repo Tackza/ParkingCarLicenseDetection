@@ -29,6 +29,7 @@ import LicensePlateDisplay from '../../components/LicensePlateDisplay';
 import { findRegisterByPlate, getActiveSession, getSetting, insertCheckIn } from '../../constants/Database';
 import { THAI_PROVINCES } from '../../constants/provinces';
 import { useProject } from '../../contexts/ProjectContext';
+import { useEnvironment } from '../../contexts/EnvironmentContext';
 
 const IMAGE_PROCESSING_TIMEOUT = 15000;
 
@@ -43,6 +44,7 @@ const vehicleTypes = [
 
 const windowWidth = Dimensions.get('window').width;
 const windowHeight = Dimensions.get('window').height;
+
 
 
 export default function ScanScreen() {
@@ -75,6 +77,12 @@ export default function ScanScreen() {
   const [machineCode, setMachineCode] = useState('');
   const [sessionData, setSessionData] = useState(null);
   const { isModeOne } = useMode();
+  const { environment } = useEnvironment();
+
+  const API_URL = environment === 'prod' ?
+    "https://mbus.dhammakaya.network/api" :
+    "https://mbus-test.dhammakaya.network/api";
+
 
   // --- เพิ่ม useEffect นี้: เพื่อจัดการกับ imageUri ที่ได้รับ และดึง session + machineCode ---
   useEffect(() => {
@@ -246,6 +254,7 @@ export default function ScanScreen() {
 
       // ✅ สร้าง Object newCheckInData ตามโครงสร้างที่ต้องการ
       let newCheckInData = {
+        uid: foundRegisterData.uid,
         project_id: activeProject.project_id,
         activity_id: activeProject.activity_id,
         register_id: foundRegisterData?.register_id || null,
@@ -254,6 +263,7 @@ export default function ScanScreen() {
         plate_no: licensePlate,
         plate_province: province,
         is_plate_manual: isManualEdit ? 1 : 0,
+        code: foundRegisterData?.short_code || '',
         photo_path: imageUri,
         bus_type: finalVehicleType,
         passenger: foundRegisterData?.passenger || '0|0|0|0', // ✅ passenger มาจาก foundRegisterData
@@ -293,10 +303,14 @@ export default function ScanScreen() {
       setShowReceipt(true);
       // รอให้ Receipt component render ข้อมูลใหม่เสร็จก่อน
 
+      const uid = newCheckInData.uid || 0;
+      const seqNumber = newCheckInData.seq_no;
+      const urlFromResponse = `${API_URL}/lpr?q=${uid}${seqNumber}`;
+      console.log('urlFromResponse :>> ', urlFromResponse);
 
       if (isVerified) {
         setTimeout(async () => {
-          await generateAndPrint();
+          await generateAndPrint(urlFromResponse);
         }, 500);
         return;
       }
@@ -312,7 +326,7 @@ export default function ScanScreen() {
 
 
 
-  const generateAndPrint = async () => {
+  const generateAndPrint = async (urlFromResponse) => {
     try {
       // Capture receipt as image
       const uri = await captureRef(receiptRef, {
@@ -328,7 +342,7 @@ export default function ScanScreen() {
       });
       await BluetoothEscposPrinter.printerAlign(BluetoothEscposPrinter.ALIGN.CENTER);
       await BluetoothEscposPrinter.printQRCode(
-        'https://hsd.co.id', 120,
+        urlFromResponse, 200,
         BluetoothEscposPrinter.ERROR_CORRECTION.L,
       );
       await BluetoothEscposPrinter.printText('\r\n\r\n', {});
@@ -568,8 +582,12 @@ export default function ScanScreen() {
                   setValue={setVehicleType}
                   searchable={true}
                   placeholder="เลือกประเภทรถ"
-                  listMode="MODAL"
+                  // listMode="MODAL"
                   style={styles.dropdown}
+                  listMode="MODAL" // แนะนำให้ใช้โหมดนี้สำหรับรายการยาวๆ
+                  listProps={{
+                    keyboardShouldPersistTaps: "always"
+                  }}
                 />
               </View>
 
@@ -768,7 +786,7 @@ export default function ScanScreen() {
             </View>
 
             <View style={[styles.inputGroup, { zIndex: 5000 }]}>
-              <Text style={styles.label}>จังหวัด</Text>
+              <Text style={styles.label}>ทะเบียนจังหวัด</Text>
               <DropDownPicker
                 open={provinceOpen}
                 value={tempProvince}
@@ -1053,7 +1071,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8f9fa',
     borderRadius: 12,
     padding: 15,
-    fontSize: 16,
+    fontSize: 20,
+    letterSpacing: 2,
     borderWidth: 1,
     borderColor: '#e9ecef',
   },
@@ -1235,7 +1254,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   buttonDisabled: {
-    backgroundColor: '#95a5a6', // สีเทาเมื่อปิดใช้งาน
+    backgroundColor: '#fff', // สีเทาเมื่อปิดใช้งาน
   },
   errorBanner: {
     flexDirection: 'row',

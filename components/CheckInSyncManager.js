@@ -1,7 +1,7 @@
 // `components/CheckInSyncManager.js`
 import React, { useEffect, useCallback, useRef, useState } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+// import { Ionicons } from '@expo/vector-icons';
 import { useProject } from '@/contexts/ProjectContext';
 import { useSync } from '@/contexts/SyncContext'; // ถ้าต้องการอัปเดตสถานะ Sync รวม
 import {
@@ -12,8 +12,10 @@ import {
 } from '@/constants/Database';
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
+import { useEnvironment } from '@/contexts/EnvironmentContext';
 
 const SYNC_INTERVAL = 60000; // 1 นาที
+
 
 const CheckInSyncManager = () => {
   const { activeProject } = useProject();
@@ -30,18 +32,63 @@ const CheckInSyncManager = () => {
 
   const intervalIdRef = useRef(null);
   const initialSyncTimeoutRef = useRef(null);
+  const isSyncInProgress = useRef(false);
+
+  const { environment } = useEnvironment();
+
+  const API_URL = environment === 'prod' ?
+    "https://mbus.dhammakaya.network/api" :
+    "https://mbus-test.dhammakaya.network/api";
+
+  const isDuplicateError = (errorMessage) => {
+    console.log('errorMessage 44 :>> ', errorMessage);
+    if (!errorMessage) return false;
+
+    // ✅ สร้าง string จาก error ทุกแบบ
+    let errorText = '';
+
+    if (typeof errorMessage === 'string') {
+      errorText = errorMessage;
+    } else if (errorMessage instanceof Error) {
+      errorText = errorMessage.message;
+    } else if (errorMessage.message) {
+      errorText = errorMessage.message;
+    } else {
+      errorText = JSON.stringify(errorMessage);
+    }
+
+    // ✅ แปลงเป็นตัวพิมพ์เล็กเพื่อให้ match ง่ายขึ้น
+    errorText = errorText.toLowerCase();
+    console.log('errorText to check :>> ', errorText);
+
+    // ✅ เช็คด้วยทั้ง RegEx และ includes()
+    const hasKeyword =
+      errorText.includes('uid:') ||
+      errorText.includes('ซ้ำ') ||
+      errorText.includes('duplicate') ||
+      errorText.includes('already exists') ||
+      errorText.includes('already registered');
+
+    return hasKeyword;
+  };
 
 
   const syncCheckInsToServer = useCallback(async () => {
-    if (isCheckInSyncing) {
-      console.log("Check-in Sync skipped: Already syncing check-ins.");
+    console.log('syncCheckInsToServer called');
+    if (isSyncInProgress.current) {
+      console.log("Check-in Sync skipped: Ref lock is active.");
       return;
     }
+    // if (isCheckInSyncing) {
+    //   console.log("Check-in Sync skipped: Already syncing check-ins.");
+    //   return;
+    // }
     if (!activeProject) {
       console.log("Check-in Sync skipped: No active project.");
       return;
     }
 
+    isSyncInProgress.current = true;
     setIsCheckInSyncing(true);
     setSyncError(null); // เคลียร์ error เก่า
     setUploadedCount(0); // ✅ รีเซ็ตเคาน์เตอร์
@@ -53,6 +100,7 @@ const CheckInSyncManager = () => {
       if (!session?.lpr_token) throw new Error("No LprToken found.");
 
       const unsyncedCheckIns = await getUnsyncedCheckIns();
+      console.log('unsyncedCheckIns :>> ', unsyncedCheckIns);
       if (unsyncedCheckIns.length === 0) {
         console.log("No unsynced check-ins to upload.");
         setLastCheckInSyncTime(new Date()); // อัปเดตเวลาแม้จะไม่มีข้อมูลให้ Sync
@@ -63,7 +111,7 @@ const CheckInSyncManager = () => {
       setTotalToUpload(unsyncedCheckIns.length); // ✅ ตั้งค่าจำนวนทั้งหมด
       console.log(`Preparing to upload ${unsyncedCheckIns.length} unsynced check-ins to server, one by one.`);
 
-      const apiUrl = "https://mbus-test.dhammakaya.network/api/lpr/registers/checkin"; // <-- ✅ เปลี่ยน API Endpoint สำหรับส่งทีละรายการ
+      const apiUrl = `${API_URL}/lpr/registers/checkin`; // <-- ✅ เปลี่ยน API Endpoint สำหรับส่งทีละรายการ
 
       let successfulUploads = 0;
       for (const checkIn of unsyncedCheckIns) {
@@ -152,7 +200,8 @@ const CheckInSyncManager = () => {
 
           if (!response.ok) {
             const errorText = await response.text();
-            throw new Error(`Server response for uid ${checkIn.uid} not ok, status: ${response.status}, message: ${errorText}`);
+            // throw new Error(`Server response for uid ${checkIn.uid} not ok, status: ${response.status}, message: ${errorText}`);
+            throw new Error(errorText)
           }
           setIsOnline(true);
           const responseData = await response.json();
@@ -166,17 +215,34 @@ const CheckInSyncManager = () => {
             setUploadedCount(successfulUploads); // ✅ อัปเดตเคาน์เตอร์
           } else {
             const errorMessage = responseData.message || "Unknown error from server.";
-            console.log(`Server reported an error for check-in uid ${checkIn.uid}:`, errorMessage);
-            setSyncError(`บางรายการมีปัญหา: ${errorMessage.substring(0, 50)}...`); // แสดง error สั้นๆ
-            // ไม่ต้อง throw error ออกไปทั้งหมด เพื่อให้รายการอื่นยังคง Sync ต่อไปได้
+
+            if (isDuplicateError(errorMessage)) {
+              console.log(`✅ UID ${checkIn.uid} already exists (from response). Marking as synced.`);
+              await markCheckInAsSynced(checkIn.id);
+              successfulUploads++;
+              setUploadedCount(successfulUploads);
+            } else {
+              console.log(`Server reported an error for check-in uid ${checkIn.uid}:`, errorMessage);
+              setSyncError(`บางรายการมีปัญหา: ${errorMessage.substring(0, 50)}...`);
+              await markCheckInAsSyncedError(checkIn.id, errorMessage);
+            }
           }
         } catch (itemError) {
-          console.log(`Failed to upload check-in uid ${checkIn.uid}:`, itemError.message);
-          console.log('itemError message :>> ', itemError.message);
-          setSyncError(`บางรายการมีปัญหา: ${itemError.message.substring(0, 50)}...`);
-          markCheckInAsSyncedError(checkIn.id, itemError.message);
-          setIsOnline(false); // ถ้ามี Error ก็ตั้งเป็น Offline
-          // ไม่ต้อง throw error ออกไปทั้งหมด
+          const errorMsg = itemError.message || itemError.toString();
+          console.log(`Failed to upload check-in uid ${checkIn.uid}:`, errorMsg);
+          console.log('itemError message :>> ', itemError);
+          console.log('isDuplicateError(errorMessage) :>> ', isDuplicateError(errorMsg));
+          // ✅ ตรวจสอบว่าเป็น error ซ้ำหรือไม่
+          if (isDuplicateError(errorMsg)) {
+            console.log(`✅ UID ${checkIn.uid} already exists on server. Marking as synced.`);
+            await markCheckInAsSynced(checkIn.id);
+            successfulUploads++;
+            setUploadedCount(successfulUploads);
+          } else {
+            setSyncError(`บางรายการมีปัญหา: ${errorMsg.substring(0, 50)}...`);
+            await markCheckInAsSyncedError(checkIn.id, errorMsg);
+            setIsOnline(false);
+          }
         }
       } // สิ้นสุด for-loop
 
@@ -194,9 +260,10 @@ const CheckInSyncManager = () => {
       console.error("Check-ins full sync failed:", fullSyncError);
       setIsOnline(false);
     } finally {
+      isSyncInProgress.current = false;
       setIsCheckInSyncing(false);
     }
-  }, [activeProject, isCheckInSyncing, setIsOnline]);
+  }, [activeProject, setIsOnline, API_URL]);
 
 
   useEffect(() => {
@@ -211,7 +278,7 @@ const CheckInSyncManager = () => {
       initialSyncTimeoutRef.current = setTimeout(() => {
         syncCheckInsToServer();
         intervalIdRef.current = setInterval(syncCheckInsToServer, SYNC_INTERVAL);
-      }, 30000);
+      }, 40000);
     };
 
     if (activeProject) {
@@ -230,6 +297,8 @@ const CheckInSyncManager = () => {
       }
     };
   }, [activeProject, syncCheckInsToServer]);
+
+
 
 
   // Component นี้จะแสดงสถานะการ Sync ของ Check-ins

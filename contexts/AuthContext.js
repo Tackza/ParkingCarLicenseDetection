@@ -1,18 +1,36 @@
 import React, { createContext, useState, useContext } from 'react';
-import axios from 'axios';
+import { useEnvironment } from './EnvironmentContext';
+import { ActivityIndicator, View, StyleSheet } from 'react-native';
 
-const AuthContext = createContext();
+const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const { environment, isLoading: isEnvLoading } = useEnvironment();
+
+
+  if (isEnvLoading) {
+    // ถ้ารอ Env อยู่ ให้ AuthProvider แสดงหน้า Loading ของตัวเอง
+    // และ "ห้าม" ทำงานต่อ
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+
+  const API_URL = environment === 'prod' ?
+    "https://mbus.dhammakaya.network/api" :
+    "https://mbus-test.dhammakaya.network/api";
+
 
   const login = async (username, password) => {
     setIsLoading(true);
     console.log('username, password :>> ', JSON.stringify({ username, password }));
 
     try {
-      const response = await fetch("https://mbus-test.dhammakaya.network/api/lpr/login", {
+      const response = await fetch(`${API_URL}/lpr/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -77,3 +95,12 @@ export const useAuth = () => {
   }
   return context;
 };
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff' // หรือสีพื้นหลังของแอปคุณ
+  }
+});
