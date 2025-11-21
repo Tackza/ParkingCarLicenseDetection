@@ -6,5 +6,5 @@
 
 
 # How to update the app
-- Update the code in the repository.
+# Update the code in the repository.
 - eas update --branch production --message "Updated text"    

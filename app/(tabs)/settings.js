@@ -174,6 +174,7 @@ export default function SettingsScreen() {
         'Authorization': `Bearer ${lprToken}`, // ถ้าต้องใช้ token
       },
     });
+    console.log('result :>> ', result.json());
 
     if (!result.ok) {
       console.error('Server responded with an error during getProject:', result.status);

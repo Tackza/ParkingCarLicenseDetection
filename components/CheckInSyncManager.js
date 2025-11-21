@@ -13,8 +13,9 @@ import {
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useEnvironment } from '@/contexts/EnvironmentContext';
+import BackgroundTimer from 'react-native-background-timer';
 
-const SYNC_INTERVAL = 60000; // 1 นาที
+const SYNC_INTERVAL = 10000; // 1 นาที
 
 
 const CheckInSyncManager = () => {
@@ -180,7 +181,7 @@ const CheckInSyncManager = () => {
               name: filename,
               type: fileType,
             });
-            console.warn(`Attached original photo_file (failed to process): ${filename}`);
+            // console.warn(`Attached original photo_file (failed to process): ${filename}`);
           } else {
             console.log(`No photo_file to attach for check-in uid ${checkIn.uid}`);
           }
@@ -268,62 +269,56 @@ const CheckInSyncManager = () => {
 
   useEffect(() => {
     const setupInterval = () => {
+      // ✅ 2. เปลี่ยนมาใช้ BackgroundTimer.clearInterval
       if (intervalIdRef.current) {
-        clearInterval(intervalIdRef.current);
+        BackgroundTimer.clearInterval(intervalIdRef.current);
+        intervalIdRef.current = null; // ✅ เคลียร์ ref ด้วย
       }
+      // ✅ 3. เปลี่ยนมาใช้ BackgroundTimer.clearTimeout
       if (initialSyncTimeoutRef.current) {
-        clearTimeout(initialSyncTimeoutRef.current);
+        BackgroundTimer.clearTimeout(initialSyncTimeoutRef.current);
+        initialSyncTimeoutRef.current = null; // ✅ เคลียร์ ref ด้วย
       }
 
-      initialSyncTimeoutRef.current = setTimeout(() => {
-        syncCheckInsToServer();
-        intervalIdRef.current = setInterval(syncCheckInsToServer, SYNC_INTERVAL);
-      }, 40000);
+      console.log("Setting up background timers...");
+
+      // ✅ 4. เปลี่ยนมาใช้ BackgroundTimer.setTimeout
+      initialSyncTimeoutRef.current = BackgroundTimer.setTimeout(() => {
+        console.log("BackgroundTimer: Initial sync triggered.");
+        syncCheckInsToServer(); // เรียก sync ครั้งแรก
+
+        // ✅ 5. เปลี่ยนมาใช้ BackgroundTimer.setInterval
+        //    (หลังจากที่ timeout ทำงานแล้ว)
+        intervalIdRef.current = BackgroundTimer.setInterval(
+          syncCheckInsToServer,
+          SYNC_INTERVAL
+        );
+      }, 10000); // ดีเลย์ 10 วินาทีเหมือนเดิม
     };
 
     if (activeProject) {
       setupInterval();
     } else {
-      if (intervalIdRef.current) clearInterval(intervalIdRef.current);
-      if (initialSyncTimeoutRef.current) clearTimeout(initialSyncTimeoutRef.current);
+      // ถ้าไม่มี activeProject ก็เคลียร์ timer ทิ้ง
+      if (intervalIdRef.current) BackgroundTimer.clearInterval(intervalIdRef.current);
+      if (initialSyncTimeoutRef.current) BackgroundTimer.clearTimeout(initialSyncTimeoutRef.current);
     }
 
+    // ✅ 6. Cleanup function (สำคัญมาก!)
     return () => {
+      console.log("BackgroundTimer: Cleaning up timers on unmount.");
       if (initialSyncTimeoutRef.current) {
-        clearTimeout(initialSyncTimeoutRef.current);
+        BackgroundTimer.clearTimeout(initialSyncTimeoutRef.current);
       }
       if (intervalIdRef.current) {
-        clearInterval(intervalIdRef.current);
+        BackgroundTimer.clearInterval(intervalIdRef.current);
       }
     };
   }, [activeProject, syncCheckInsToServer]);
 
+  return null; // Component นี้ไม่จำเป็นต้อง render อะไร
 
 
-
-  // Component นี้จะแสดงสถานะการ Sync ของ Check-ins
-  // คุณสามารถปรับปรุง UI ตรงนี้ได้ตามต้องการ
-  return (
-    <></>
-    // <View style={styles.container}>
-    //   {isCheckInSyncing ? (
-    //     <View style={styles.syncStatus}>
-    //       <ActivityIndicator size="small" color="#27ae60" />
-    //       <Text style={styles.syncText}>
-    //         กำลังอัปโหลด Check-ins ({uploadedCount}/{totalToUpload})...
-    //       </Text>
-    //     </View>
-    //   ) : (
-    //     <View style={styles.syncStatus}>
-    //       <Ionicons name={syncError ? "warning" : "cloud-done"} size={16} color={syncError ? "#e74c3c" : "#27ae60"} />
-    //       <Text style={[styles.syncText, syncError && { color: '#e74c3c' }]}>
-    //         {syncError ? `${syncError.substring(0, 30)}...` :
-    //           `Check-in Sync: ${lastCheckInSyncTime ? lastCheckInSyncTime.toLocaleTimeString('th-TH') : 'ไม่เคย Sync'}`}
-    //       </Text>
-    //     </View>
-    //   )}
-    // </View>
-  );
 };
 
 const styles = StyleSheet.create({

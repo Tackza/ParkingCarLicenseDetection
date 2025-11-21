@@ -30,6 +30,8 @@ import { findRegisterByPlate, getActiveSession, getSetting, insertCheckIn } from
 import { THAI_PROVINCES } from '../../constants/provinces';
 import { useProject } from '../../contexts/ProjectContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
+import * as Speech from 'expo-speech';
+import { createSpokenPlate } from '@/utils/speechUtils';
 
 const IMAGE_PROCESSING_TIMEOUT = 15000;
 
@@ -160,6 +162,20 @@ export default function ScanScreen() {
       // ตรวจสอบว่ามีจังหวัดในรายการหรือไม่
       const provinceExists = checkProvinceExists(detectedProvince)
       setProvince(provinceExists);
+
+      // "แปล" ทะเบียนรถ โดยเรียกใช้ฟังก์ชันจาก utils
+      const spokenPlate = createSpokenPlate(detectedPlate); // 👈 ใช้งานได้เลย
+
+      // สร้างประโยคเต็มๆ
+      const finalSpokenText = `ทะเบียน,  
+      ${spokenPlate || 'ไม่พบทะเบียน'}, ${provinceExists || 'ไม่พบจังหวัด'}`;
+
+      // สั่งให้พูด!
+      Speech.stop();
+      Speech.speak(finalSpokenText, {
+        language: 'th-TH',
+        rate: 0.9
+      });
 
       await checkWithRegisterList(detectedPlate, provinceExists);
 

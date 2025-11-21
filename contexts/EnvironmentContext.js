@@ -16,7 +16,7 @@ export const EnvironmentProvider = ({ children }) => {
       try {
         const storedEnv = await getSetting('environment');
         console.log('storedEnv :>> ', storedEnv);
-        setEnvironment(storedEnv || 'test'); // ถ้าไม่มี ให้ใช้ 'test' เป็นค่าเริ่มต้น
+        setEnvironment(storedEnv || 'prod'); // ถ้าไม่มี ให้ใช้ 'prod' เป็นค่าเริ่มต้น
       } catch (e) {
         console.error('Failed to load environment', e);
         setEnvironment('test'); // ถ้าพัง ก็ให้ใช้ 'test' ไปก่อน

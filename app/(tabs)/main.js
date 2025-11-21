@@ -157,7 +157,7 @@ export default function HistoryScreen() {
         <Ionicons name="search" size={20} color="#888" style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
-          placeholder="ค้นหาทะเบียนรถ (เช่น 1234)..."
+          placeholder="ค้นหาทะเบียนรถ"
           value={searchQuery}
           onChangeText={setSearchQuery}
           placeholderTextColor="#888"

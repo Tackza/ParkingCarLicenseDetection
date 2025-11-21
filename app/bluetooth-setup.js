@@ -94,7 +94,7 @@ export default function BluetoothSetupScreen() {
         Alert.alert('ต้องการสิทธิ์', 'กรุณาอนุญาตให้แอปใช้ Bluetooth และ Location เพื่อค้นหาเครื่องพิมพ์');
         return false;
       } catch (err) {
-        console.warn(err);
+        // console.warn(err);
         return false;
       }
     }

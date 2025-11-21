@@ -399,7 +399,7 @@ export const getLastRegisterSyncState = async () => {
 
 export const getScanHistory = async (projectId, searchQuery = '') => {
   if (!projectId) {
-    console.warn("getScanHistory ถูกเรียกใช้โดยไม่มี projectId.");
+    console.log("getScanHistory ถูกเรียกใช้โดยไม่มี projectId.");
     return [];
   }
 

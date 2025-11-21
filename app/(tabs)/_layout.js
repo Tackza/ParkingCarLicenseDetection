@@ -13,6 +13,11 @@ import {
   getActiveSession,
 } from "@/constants/Database";
 import { useEnvironment } from "@/contexts/EnvironmentContext";
+import { LogBox } from 'react-native';
+
+LogBox.ignoreLogs([
+  "`new NativeEventEmitter()` was called with a non-null argument"
+]);
 
 // ✅ กำหนดเวลา Sync (30 วินาที = 30,000 มิลลิวินาที)
 const SYNC_INTERVAL = 30000;
@@ -66,7 +71,6 @@ function TabLogic() {
       const response = await fetch(apiUrl, {
         headers: { Authorization: `Bearer ${session.lpr_token}` },
       });
-      // console.log('apiUrl :>> ', apiUrl);
 
       if (!response.ok) {
         throw new Error(`Network response was not ok, status: ${response.status}`);
@@ -74,6 +78,7 @@ function TabLogic() {
       setIsOnline(true);
 
       const data = await response.json();
+      console.log('data :>> ', data);
       if (data.status === "success" && data.result?.length > 0) {
         console.log('data C7 :>> ', data);
         await saveRegisters(data.result);
