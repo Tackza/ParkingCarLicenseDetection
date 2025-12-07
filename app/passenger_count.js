@@ -1,6 +1,6 @@
 
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -45,7 +45,6 @@ export default function PassengerCountScreen() {
     const numericValue = text.replace(/[^0-9]/g, '');
     setter(numericValue);
   };
-  console.log('params :>> ', params);
 
   const formatPassengerInfo = (passengerCount, childCount, monkCount, noviceCount) => {
     let textCount = '';
@@ -154,87 +153,89 @@ export default function PassengerCountScreen() {
             </View>
           </View>
 
-          {/* Passenger Counter */}
-          <View style={styles.counterSection}>
-            <Text style={styles.labelTypePassager}>ผู้ใหญ่</Text>
-            <View style={styles.counterContainer}>
-              <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setPassengerCount, passengerCount, -1)}>
-                <Text style={styles.counterButtonText}>-</Text>
-              </TouchableOpacity>
-              <TextInput
-                style={styles.counterInput}
-                value={passengerCount}
-                onChangeText={(text) => handleTextChange(text, setPassengerCount)}
-                keyboardType="number-pad"
-                textAlign="center"
-                selectTextOnFocus={true}
-              />
-              <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setPassengerCount, passengerCount, 1)}>
-                <Text style={styles.counterButtonText}>+</Text>
-              </TouchableOpacity>
+          <View style={styles.countersWrapper}>
+            {/* Passenger Counter */}
+            <View style={styles.counterSection}>
+              <Text style={styles.labelTypePassager}>ผู้ใหญ่</Text>
+              <View style={styles.counterContainer}>
+                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setPassengerCount, passengerCount, -1)}>
+                  <Text style={styles.counterButtonText}>-</Text>
+                </TouchableOpacity>
+                <TextInput
+                  style={styles.counterInput}
+                  value={passengerCount}
+                  onChangeText={(text) => handleTextChange(text, setPassengerCount)}
+                  keyboardType="number-pad"
+                  textAlign="center"
+                  selectTextOnFocus={true}
+                />
+                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setPassengerCount, passengerCount, 1)}>
+                  <Text style={styles.counterButtonText}>+</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
 
-          {/* Child Counter */}
-          <View style={styles.counterSection}>
-            <Text style={styles.labelTypePassager}>เด็ก</Text>
-            <View style={styles.counterContainer}>
-              <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setChildCount, childCount, -1)}>
-                <Text style={styles.counterButtonText}>-</Text>
-              </TouchableOpacity>
-              <TextInput
-                style={styles.counterInput}
-                value={childCount}
-                onChangeText={(text) => handleTextChange(text, setChildCount)}
-                keyboardType="number-pad"
-                textAlign="center"
-                selectTextOnFocus={true}
-              />
-              <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setChildCount, childCount, 1)}>
-                <Text style={styles.counterButtonText}>+</Text>
-              </TouchableOpacity>
+            {/* Child Counter */}
+            <View style={styles.counterSection}>
+              <Text style={styles.labelTypePassager}>เด็ก</Text>
+              <View style={styles.counterContainer}>
+                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setChildCount, childCount, -1)}>
+                  <Text style={styles.counterButtonText}>-</Text>
+                </TouchableOpacity>
+                <TextInput
+                  style={styles.counterInput}
+                  value={childCount}
+                  onChangeText={(text) => handleTextChange(text, setChildCount)}
+                  keyboardType="number-pad"
+                  textAlign="center"
+                  selectTextOnFocus={true}
+                />
+                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setChildCount, childCount, 1)}>
+                  <Text style={styles.counterButtonText}>+</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
 
-          {/* Monk Counter */}
-          <View style={styles.counterSection}>
-            <Text style={styles.labelTypePassager}>พระ</Text>
-            <View style={styles.counterContainer}>
-              <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setMonkCount, monkCount, -1)}>
-                <Text style={styles.counterButtonText}>-</Text>
-              </TouchableOpacity>
-              <TextInput
-                style={styles.counterInput}
-                value={monkCount}
-                onChangeText={(text) => handleTextChange(text, setMonkCount)}
-                keyboardType="number-pad"
-                textAlign="center"
-                selectTextOnFocus={true}
-              />
-              <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setMonkCount, monkCount, 1)}>
-                <Text style={styles.counterButtonText}>+</Text>
-              </TouchableOpacity>
+            {/* Monk Counter */}
+            <View style={styles.counterSection}>
+              <Text style={styles.labelTypePassager}>พระ</Text>
+              <View style={styles.counterContainer}>
+                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setMonkCount, monkCount, -1)}>
+                  <Text style={styles.counterButtonText}>-</Text>
+                </TouchableOpacity>
+                <TextInput
+                  style={styles.counterInput}
+                  value={monkCount}
+                  onChangeText={(text) => handleTextChange(text, setMonkCount)}
+                  keyboardType="number-pad"
+                  textAlign="center"
+                  selectTextOnFocus={true}
+                />
+                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setMonkCount, monkCount, 1)}>
+                  <Text style={styles.counterButtonText}>+</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
 
-          {/* Child Monk Counter */}
-          <View style={styles.counterSection}>
-            <Text style={styles.labelTypePassager}>สามเณร</Text>
-            <View style={styles.counterContainer}>
-              <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setNoviceCount, noviceCount, -1)}>
-                <Text style={styles.counterButtonText}>-</Text>
-              </TouchableOpacity>
-              <TextInput
-                style={styles.counterInput}
-                value={noviceCount}
-                onChangeText={(text) => handleTextChange(text, setNoviceCount)}
-                keyboardType="number-pad"
-                textAlign="center"
-                selectTextOnFocus={true}
-              />
-              <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setNoviceCount, noviceCount, 1)}>
-                <Text style={styles.counterButtonText}>+</Text>
-              </TouchableOpacity>
+            {/* Child Monk Counter */}
+            <View style={styles.counterSection}>
+              <Text style={styles.labelTypePassager}>สามเณร</Text>
+              <View style={styles.counterContainer}>
+                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setNoviceCount, noviceCount, -1)}>
+                  <Text style={styles.counterButtonText}>-</Text>
+                </TouchableOpacity>
+                <TextInput
+                  style={styles.counterInput}
+                  value={noviceCount}
+                  onChangeText={(text) => handleTextChange(text, setNoviceCount)}
+                  keyboardType="number-pad"
+                  textAlign="center"
+                  selectTextOnFocus={true}
+                />
+                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setNoviceCount, noviceCount, 1)}>
+                  <Text style={styles.counterButtonText}>+</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
 
@@ -255,7 +256,7 @@ export default function PassengerCountScreen() {
 
         {/* Hidden Receipt for printing */}
         <View style={{ position: 'absolute', left: -10000 }}>
-          {/* <View > */}
+        {/* <View > */}
           <ViewShot ref={receiptRef} style={styles.receiptContainer}>
             <Text style={styles.textCenter}>! เอกสารสำคัญ ห้ามทำหาย !</Text>
 
@@ -302,14 +303,15 @@ export default function PassengerCountScreen() {
             </View>
 
             <View style={styles.sectionDivider} />
-            {/* --- ✅ 2. เพิ่มส่วนที่ 2 สำหรับเบิกอาหาร --- */}
             <View style={styles.sectionHeaderRow}>
-
-              <View style={styles.sectionHeaderSide} />
-              <Text style={[styles.receiptTitle, styles.sectionHeaderCenter]}>ใบลงทะเบียนส่วนที่ 2</Text>
-              <Text style={[styles.sectionHeaderText, styles.sectionHeaderSide, { textAlign: 'right' }]}>
+              <Text style={[styles.receiptMetaText, styles.sectionHeaderSide, { textAlign: 'right' }]}>
                 {params.code || '--'}
               </Text>
+            </View>
+            {/* --- ✅ 2. เพิ่มส่วนที่ 2 สำหรับเบิกอาหาร --- */}
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.receiptTitle, styles.sectionHeaderCenter]}>ใบลงทะเบียนส่วนที่ 2</Text>
+           
             </View>
 
             <Text style={styles.receiptTitle}>สำหรับเบิกอาหารสาธุชน</Text>
@@ -348,12 +350,13 @@ export default function PassengerCountScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8f9fa' },
   contentContainer:
-    { padding: 10, justifyContent: 'center', flexGrow: 1 },
+    { padding: 0, justifyContent: 'center', flexGrow: 1 },
   card: {
+    flex: 1,
     backgroundColor: '#fff',
-    borderRadius: 20,
-    paddingHorizontal: 15,
-    paddingVertical: 10,
+    borderRadius: 0,
+    paddingHorizontal: 20,
+    paddingVertical: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -370,6 +373,7 @@ const styles = StyleSheet.create({
     width: '100%',           // ทำให้ container เต็มความกว้างจอ (หรือ parent)
     alignItems: 'center',    // << สำคัญ: จัดให้ลูกทุกตัวอยู่กึ่งกลางแนวนอน
     paddingVertical: 10,
+    marginTop: 20,
     // borderLeftWidth: 5,
     // borderLeftColor: '#3498db',
   },
@@ -390,9 +394,8 @@ const styles = StyleSheet.create({
     marginBottom: 5,
     fontWeight: '600',
     textAlign: 'left',
-    alignContents: 'center'
   },
-  counterSection: { marginBottom: 10 },
+  counterSection: {},
   label: {
     fontSize: 17,
     fontWeight: '600',
@@ -428,7 +431,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginTop: 10,
     justifyContent: 'space-between',
-    alignContents: 'center',
+    alignItems: 'center',
+    marginBottom: 30,
   },
   confirmButton: {
     backgroundColor: '#2ecc71',
@@ -442,10 +446,12 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
   },
-  buttonTextFooter: { fontSize: 14, color: '#fff' },
+  buttonTextFooter: { fontSize: 20, fontWeight: '600', color: '#fff' },
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
   buttonDisabled: { backgroundColor: '#95a5a6' },
-  receiptContainer: { backgroundColor: '#fff', padding: 0, marginTop: 0, width: 300 },
+  receiptContainer: {
+    backgroundColor: '#fff', padding: 0, marginTop: 0, width: 300
+  },
   textCenter: {
     textAlign: 'center',
     fontSize: 20,
@@ -453,33 +459,35 @@ const styles = StyleSheet.create({
     fontFamily: 'Sarabun-Regular',
   },
   receiptTitle: {
-    fontSize: 18,
+    fontSize: 22,
     // fontWeight: 'bold',
     textAlign: 'center',
     marginBottom: 5,
   },
   receiptSubtitle: {
-    fontSize: 16,
+    fontSize: 19,
     textAlign: 'center',
     marginBottom: 15,
   },
-  divider: { borderBottomWidth: 1, borderBottomColor: '#000', marginVertical: 10 },
+  divider: { borderBottomWidth: 1, borderBottomColor: '#000', marginVertical: 3 },
   receiptRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginVertical: 2
+    marginVertical: -2,
   },
 
   receiptLabel: {
-    fontSize: 16,
+    fontSize: 18,
     fontFamily: 'Sarabun-Regular',
-    marginVertical: 0,
+    paddingTop: 3,
+    flex: 2, // Allow label to take space but shrink if needed
   },
   receiptValue: {
-    fontSize: 16,
-    // fontWeight: 'bold',
+    fontSize: 22,
     fontFamily: 'Sarabun-Regular',
-    // marginTop: 5,
+    flex: 3, // Allow value to take remaining space
+    textAlign: 'right', // Align text to right
+    flexWrap: 'wrap', // Allow wrapping
   },
   tabMobile: {
     height: 25,
@@ -490,7 +498,7 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   receiptMetaText: { // สไตล์สำหรับ User ID และ Reg ID
-    fontSize: 20,
+    fontSize: 18,
     color: '#555',
     // fontWeight: 'bold',
     fontFamily: 'Sarabun-Regular',
@@ -508,7 +516,7 @@ const styles = StyleSheet.create({
     marginTop: 0       // กำหนดความกว้างให้เหมาะสม
   },
   signatureLabel: { // ข้อความกำกับ (รับอาหารเช้า/กลางวัน)
-    fontSize: 14,
+    fontSize: 18,
     color: '#333',
     marginBottom: 5, // ลดระยะห่างลงอีก
     fontFamily: 'Sarabun-Regular',
@@ -523,14 +531,14 @@ const styles = StyleSheet.create({
     borderBottomColor: '#888', // สีของเส้น
     borderStyle: 'dashed',     // ทำให้เป็นเส้นประ
     marginTop: 40,              // ระยะห่างจาก Label ด้านบน
-    
+
   },
 
   sectionDivider: { // Style for the new separator
     borderBottomWidth: 2,
     borderBottomColor: '#888',
     borderStyle: 'dashed', // Make it dashed
-    marginVertical: 15, // Add more vertical space around it
+    marginVertical: 5, // Add more vertical space around it
   },
   sectionHeaderRow: {
     flexDirection: 'row',
@@ -582,6 +590,11 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 14,
     fontWeight: '500',
-  }
+  },
+  countersWrapper: {
+    flex: 1,
+    justifyContent: 'space-around',
+    paddingVertical: 20,
+  },
 });
 

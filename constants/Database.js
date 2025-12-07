@@ -132,6 +132,7 @@ export const setupDatabase = async () => {
     `);
     }
     user_version = 1;
+
     if (user_version < 2) {
       //   console.log("Migrating to version 2: Adding 'plate_url' to check_ins table...");
       //   // ✅ นี่คือคำสั่งสำหรับเพิ่มคอลัมน์ใหม่
@@ -154,7 +155,7 @@ export const setupDatabase = async () => {
  */
 export const saveSession = async (loginData) => {
   console.log('loginData :>> ', loginData);
-  const db = await getDb();;
+  const db = await getDb();
   const { id, username, first_name, last_name, note, lpr_token } = loginData;
 
   try {
@@ -564,3 +565,61 @@ export const markCheckInAsSyncedError = async (checkInId, errorMsg) => {
 // ใน constants/Database.js
 
 
+
+/**
+ * 🚀 ดึงข้อมูลทั้งหมดสำหรับ Export
+ * @param {string|null} startDate - วันที่เริ่มต้น (format: 'YYYY-MM-DD') หรือ null สำหรับดึงข้อมูลทั้งหมด
+ * @param {string|null} endDate - วันที่สิ้นสุด (format: 'YYYY-MM-DD') หรือ null สำหรับดึงข้อมูลทั้งหมด
+ * @returns {Promise<{registers: Array, checkIns: Array}>}
+ */
+export const getAllDataForExport = async (startDate = null, endDate = null) => {
+  const db = await getDb();
+  try {
+    let registersSql = 'SELECT * FROM registers';
+    let checkInsSql = 'SELECT * FROM check_ins';
+    const registersParams = [];
+    const checkInsParams = [];
+
+    // ถ้ามีการระบุช่วงวันที่
+    if (startDate && endDate) {
+      // กรอง registers ตาม updated_at (หรือ checkin_date ถ้าต้องการ)
+      registersSql += ' WHERE DATE(updated_at) BETWEEN ? AND ?';
+      registersParams.push(startDate, endDate);
+
+      // กรอง check_ins ตาม created_at
+      checkInsSql += ' WHERE DATE(created_at) BETWEEN ? AND ?';
+      checkInsParams.push(startDate, endDate);
+    } else if (startDate) {
+      // กรองตั้งแต่วันที่ระบุจนถึงปัจจุบัน
+      registersSql += ' WHERE DATE(updated_at) >= ?';
+      registersParams.push(startDate);
+
+      checkInsSql += ' WHERE DATE(created_at) >= ?';
+      checkInsParams.push(startDate);
+    } else if (endDate) {
+      // กรองตั้งแต่เริ่มต้นจนถึงวันที่ระบุ
+      registersSql += ' WHERE DATE(updated_at) <= ?';
+      registersParams.push(endDate);
+
+      checkInsSql += ' WHERE DATE(created_at) <= ?';
+      checkInsParams.push(endDate);
+    }
+
+    // เพิ่ม ORDER BY
+    registersSql += ' ORDER BY updated_at DESC';
+    checkInsSql += ' ORDER BY created_at DESC';
+
+    const registers = await db.getAllAsync(registersSql, registersParams);
+    const checkIns = await db.getAllAsync(checkInsSql, checkInsParams);
+
+    console.log(`📦 Export: ${registers.length} registers, ${checkIns.length} check-ins`);
+    if (startDate || endDate) {
+      console.log(`📅 Date range: ${startDate || 'beginning'} to ${endDate || 'now'}`);
+    }
+
+    return { registers, checkIns };
+  } catch (error) {
+    console.error("Error getting all data for export:", error);
+    throw error;
+  }
+};

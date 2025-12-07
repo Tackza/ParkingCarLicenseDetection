@@ -1,5 +1,5 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Dimensions,
@@ -8,14 +8,14 @@ import {
   Modal,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
-  TextInput,
 } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import ImageZoom from 'react-native-image-pan-zoom';
-import CheckInSyncManager from '../../components/CheckInSyncManager';
+// import CheckInSyncManager from '../../components/CheckInSyncManager';
 import HistoryItem from '../../components/HistoryItem';
 import { getScanHistory } from '../../constants/Database';
 import { useProject } from '../../contexts/ProjectContext';
@@ -150,10 +150,11 @@ export default function HistoryScreen() {
         />
 
       </View>
-      <CheckInSyncManager />
+
+      {/* <CheckInSyncManager />  <-- Removed, moved to root layout */}
 
       {/* ✅ ADD: เพิ่ม Search Bar UI */}
-     <View style={styles.searchContainer}>
+      <View style={styles.searchContainer}>
         <Ionicons name="search" size={20} color="#888" style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
@@ -170,7 +171,7 @@ export default function HistoryScreen() {
           </TouchableOpacity>
         )}
       </View>
-      
+
 
       <View style={styles.content}>
         {history.length === 0 ? (
@@ -226,7 +227,7 @@ export default function HistoryScreen() {
           </TouchableOpacity>
         </View>
       </Modal>
-    </View>
+    </View >
   );
 }
 

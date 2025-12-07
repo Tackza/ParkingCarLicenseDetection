@@ -76,7 +76,7 @@ export const ProjectProvider = ({ children }) => {
       const data = await response.json();
       console.log('data syncProjectsWithApi :>> ', data);
 
-      if (data.status === 'success' && data.result) {
+      if (data.result) {
         await saveProjects(data.result);
         console.log("✅ [CONTEXT] API Sync successful, projects saved.");
       }

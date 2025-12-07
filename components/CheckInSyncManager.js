@@ -1,18 +1,17 @@
 // `components/CheckInSyncManager.js`
-import React, { useEffect, useCallback, useRef, useState } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { StyleSheet } from 'react-native';
 // import { Ionicons } from '@expo/vector-icons';
-import { useProject } from '@/contexts/ProjectContext';
-import { useSync } from '@/contexts/SyncContext'; // ถ้าต้องการอัปเดตสถานะ Sync รวม
 import {
   getActiveSession,
   getUnsyncedCheckIns,
   markCheckInAsSynced,
   markCheckInAsSyncedError
 } from '@/constants/Database';
+import { useEnvironment } from '@/contexts/EnvironmentContext';
+import { useProject } from '@/contexts/ProjectContext';
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { useEnvironment } from '@/contexts/EnvironmentContext';
 import BackgroundTimer from 'react-native-background-timer';
 
 const SYNC_INTERVAL = 10000; // 1 นาที
@@ -29,11 +28,18 @@ const CheckInSyncManager = () => {
 
   // ✅ ใช้ useSync context สำหรับสถานะรวม (ถ้าคุณต้องการแสดงผลที่ SyncStatus component)
   // ถ้าไม่ต้องการ ให้ลบ setIsOnline ออก
-  const { setIsOnline } = useSync();
+  // const { setIsOnline } = useSync();
 
   const intervalIdRef = useRef(null);
   const initialSyncTimeoutRef = useRef(null);
   const isSyncInProgress = useRef(false);
+
+  // ✅ Use a ref to keep track of activeProject without forcing re-renders or re-creating callbacks
+  const activeProjectRef = useRef(activeProject);
+
+  useEffect(() => {
+    activeProjectRef.current = activeProject;
+  }, [activeProject]);
 
   const { environment } = useEnvironment();
 
@@ -74,18 +80,34 @@ const CheckInSyncManager = () => {
   };
 
 
-  const syncCheckInsToServer = useCallback(async () => {
-    console.log('syncCheckInsToServer called');
-    if (isSyncInProgress.current) {
-      console.log("Check-in Sync skipped: Ref lock is active.");
+  // ✅ Ref for tracking the current unique session of the effect/timer
+  const currentSyncSessionId = useRef(0);
+  const timeoutIdRef = useRef(null); // ✅ Use a single ref for the timeout
+
+  const syncCheckInsToServer = useCallback(async (sessionId) => {
+    // console.log('syncCheckInsToServer called');
+    const currentProject = activeProjectRef.current; // ✅ Access via ref
+
+    // ✅ Verify Session: If the session ID passed to this function doesn't match the current ref,
+    // it means a new effect/timer has started, so we should abort this stale process.
+    console.log('sessionId :>> ', sessionId);
+    console.log('currentSyncSessionId.current :>> ', currentSyncSessionId.current);
+    if (sessionId && sessionId !== currentSyncSessionId.current) {
+      console.log(`Sync aborted: Stale session (Current: ${currentSyncSessionId.current}, This: ${sessionId})`);
       return;
     }
-    // if (isCheckInSyncing) {
-    //   console.log("Check-in Sync skipped: Already syncing check-ins.");
-    //   return;
-    // }
-    if (!activeProject) {
+
+    if (isSyncInProgress.current) {
+      console.log("Check-in Sync skipped: Ref lock is active.");
+      // ✅ Even if skipped, we must schedule the next run!
+      scheduleNextSync(sessionId);
+      return;
+    }
+
+    if (!currentProject) { // ✅ Check currentProject
       console.log("Check-in Sync skipped: No active project.");
+      // ✅ Even if skipped, we must schedule the next run (or maybe wait for project change, but keeping it running is safer for now)
+      scheduleNextSync(sessionId);
       return;
     }
 
@@ -94,14 +116,19 @@ const CheckInSyncManager = () => {
     setSyncError(null); // เคลียร์ error เก่า
     setUploadedCount(0); // ✅ รีเซ็ตเคาน์เตอร์
     setTotalToUpload(0); // ✅ รีเซ็ตเคาน์เตอร์
-    console.log("Starting check-ins sync for project:", activeProject?.project_id);
+    console.log("Starting check-ins sync for project:", currentProject?.project_id);
 
     try {
       const session = await getActiveSession();
-      if (!session?.lpr_token) throw new Error("No LprToken found.");
+      // ✅ ถ้าไม่มี token (เช่นตอน logout) ให้หยุดอย่างสงบ ไม่ throw error
+      if (!session?.lpr_token) {
+        console.log("Check-in Sync skipped: No LprToken (user logged out).");
+        setIsCheckInSyncing(false);
+        return;
+      }
 
       const unsyncedCheckIns = await getUnsyncedCheckIns();
-      console.log('unsyncedCheckIns :>> ', unsyncedCheckIns);
+      console.log('unsyncedCheckIns :>> ', unsyncedCheckIns.length);
       if (unsyncedCheckIns.length === 0) {
         console.log("No unsynced check-ins to upload.");
         setLastCheckInSyncTime(new Date()); // อัปเดตเวลาแม้จะไม่มีข้อมูลให้ Sync
@@ -116,7 +143,14 @@ const CheckInSyncManager = () => {
 
       let successfulUploads = 0;
       for (const checkIn of unsyncedCheckIns) {
-        console.log('checkIn :>> ', checkIn);
+
+        // ✅ Check abort condition INSIDE loop
+        if (currentSyncSessionId.current !== sessionId) {
+          console.log("🛑 Sync loop aborted mid-process due to session change.");
+          break;
+        }
+
+        // console.log('checkIn :>> ', checkIn);
         try {
 
 
@@ -204,7 +238,7 @@ const CheckInSyncManager = () => {
             // throw new Error(`Server response for uid ${checkIn.uid} not ok, status: ${response.status}, message: ${errorText}`);
             throw new Error(errorText)
           }
-          setIsOnline(true);
+          // setIsOnline(true);
           const responseData = await response.json();
           console.log('responseData :>> ', responseData);
           // --- สิ้นสุดโค้ดจริง --- 
@@ -242,7 +276,7 @@ const CheckInSyncManager = () => {
           } else {
             setSyncError(`บางรายการมีปัญหา: ${errorMsg.substring(0, 50)}...`);
             await markCheckInAsSyncedError(checkIn.id, errorMsg);
-            setIsOnline(false);
+            // setIsOnline(false);
           }
         }
       } // สิ้นสุด for-loop
@@ -259,62 +293,61 @@ const CheckInSyncManager = () => {
     } catch (fullSyncError) { // ข้อผิดพลาดที่เกิดขึ้นก่อนเริ่มวนลูป (เช่น ไม่ได้ token)
       setSyncError(fullSyncError.message);
       console.error("Check-ins full sync failed:", fullSyncError);
-      setIsOnline(false);
+      // setIsOnline(false);
     } finally {
       isSyncInProgress.current = false;
       setIsCheckInSyncing(false);
+      // ✅ Schedule next run regardless of success/failure
+      scheduleNextSync(sessionId);
     }
-  }, [activeProject, setIsOnline, API_URL]);
+  }, [
+    // activeProject, // ❌ REMOVE dependency to avoid re-creation
+    //  setIsOnline, 
+    API_URL]);
+
+  const scheduleNextSync = (sessionId) => {
+    // Only schedule if the session is still valid
+    if (sessionId !== currentSyncSessionId.current) return;
+
+    console.log(`Scheduling next sync for session ${sessionId} in ${SYNC_INTERVAL}ms`);
+    timeoutIdRef.current = BackgroundTimer.setTimeout(() => {
+      syncCheckInsToServer(sessionId);
+    }, SYNC_INTERVAL);
+  };
 
 
   useEffect(() => {
-    const setupInterval = () => {
-      // ✅ 2. เปลี่ยนมาใช้ BackgroundTimer.clearInterval
-      if (intervalIdRef.current) {
-        BackgroundTimer.clearInterval(intervalIdRef.current);
-        intervalIdRef.current = null; // ✅ เคลียร์ ref ด้วย
-      }
-      // ✅ 3. เปลี่ยนมาใช้ BackgroundTimer.clearTimeout
-      if (initialSyncTimeoutRef.current) {
-        BackgroundTimer.clearTimeout(initialSyncTimeoutRef.current);
-        initialSyncTimeoutRef.current = null; // ✅ เคลียร์ ref ด้วย
-      }
+    // 1. Generate New Session ID
+    const newSessionId = Date.now();
+    currentSyncSessionId.current = newSessionId; // Set current "valid" session
+    console.log(`Session Started: ${newSessionId}`);
 
-      console.log("Setting up background timers...");
-
-      // ✅ 4. เปลี่ยนมาใช้ BackgroundTimer.setTimeout
-      initialSyncTimeoutRef.current = BackgroundTimer.setTimeout(() => {
-        console.log("BackgroundTimer: Initial sync triggered.");
-        syncCheckInsToServer(); // เรียก sync ครั้งแรก
-
-        // ✅ 5. เปลี่ยนมาใช้ BackgroundTimer.setInterval
-        //    (หลังจากที่ timeout ทำงานแล้ว)
-        intervalIdRef.current = BackgroundTimer.setInterval(
-          syncCheckInsToServer,
-          SYNC_INTERVAL
-        );
-      }, 10000); // ดีเลย์ 10 วินาทีเหมือนเดิม
-    };
+    // Clear any existing timer
+    if (timeoutIdRef.current) {
+      BackgroundTimer.clearTimeout(timeoutIdRef.current);
+      timeoutIdRef.current = null;
+    }
 
     if (activeProject) {
-      setupInterval();
+      console.log("Setting up initial background timer...");
+      // Initial delay before first sync
+      timeoutIdRef.current = BackgroundTimer.setTimeout(() => {
+        console.log("BackgroundTimer: Initial sync triggered.");
+        syncCheckInsToServer(newSessionId);
+      }, 20000); // 20 seconds initial delay
     } else {
-      // ถ้าไม่มี activeProject ก็เคลียร์ timer ทิ้ง
-      if (intervalIdRef.current) BackgroundTimer.clearInterval(intervalIdRef.current);
-      if (initialSyncTimeoutRef.current) BackgroundTimer.clearTimeout(initialSyncTimeoutRef.current);
+      console.log("No active project, sync not started.");
     }
 
     // ✅ 6. Cleanup function (สำคัญมาก!)
     return () => {
-      console.log("BackgroundTimer: Cleaning up timers on unmount.");
-      if (initialSyncTimeoutRef.current) {
-        BackgroundTimer.clearTimeout(initialSyncTimeoutRef.current);
-      }
-      if (intervalIdRef.current) {
-        BackgroundTimer.clearInterval(intervalIdRef.current);
+      console.log(`Session Cleaned: ${newSessionId} (Timer removed)`);
+      if (timeoutIdRef.current) {
+        BackgroundTimer.clearTimeout(timeoutIdRef.current);
+        timeoutIdRef.current = null;
       }
     };
-  }, [activeProject, syncCheckInsToServer]);
+  }, [activeProject]); // ✅ Depend on activeProject to restart session when it changes
 
   return null; // Component นี้ไม่จำเป็นต้อง render อะไร
 

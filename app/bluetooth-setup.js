@@ -38,6 +38,8 @@ export default function BluetoothSetupScreen() {
       try {
         ds = typeof rsp.devices === 'object' ? rsp.devices : JSON.parse(rsp.devices);
       } catch (e) { /* ignore error */ }
+
+
       if (ds && ds.length) {
         setPairedDevices(ds);
       }
@@ -51,6 +53,7 @@ export default function BluetoothSetupScreen() {
       try {
         r = typeof rsp.device === 'object' ? rsp.device : JSON.parse(rsp.device);
       } catch (e) { /* ignore error */ }
+      
       if (r) {
         setFoundDevices((prev) => {
           if (prev.some((device) => device.address === r.address)) {

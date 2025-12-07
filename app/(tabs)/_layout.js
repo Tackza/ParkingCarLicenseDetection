@@ -1,19 +1,20 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Tabs, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons"; // หรือ Icon library อื่นๆ ที่คุณใช้
-import { Alert, ActivityIndicator } from "react-native";
-import SyncStatus from "../../components/SyncStatus";
-import * as ImagePicker from "expo-image-picker"; // เพิ่มการนำเข้า ImagePicker
+import {
+  getActiveSession,
+  getLastRegisterSyncState,
+  saveRegisters,
+} from "@/constants/Database";
+import { useEnvironment } from "@/contexts/EnvironmentContext";
 import { useMode } from "@/contexts/ModeContext";
 import { useProject } from "@/contexts/ProjectContext";
 import { SyncProvider, useSync } from "@/contexts/SyncContext";
-import {
-  getLastRegisterSyncState,
-  saveRegisters,
-  getActiveSession,
-} from "@/constants/Database";
-import { useEnvironment } from "@/contexts/EnvironmentContext";
-import { LogBox } from 'react-native';
+import { Ionicons } from "@expo/vector-icons"; // หรือ Icon library อื่นๆ ที่คุณใช้
+import * as ImagePicker from "expo-image-picker"; // เพิ่มการนำเข้า ImagePicker
+import { Tabs, useRouter } from "expo-router";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, LogBox } from "react-native";
+import BackgroundTimer from 'react-native-background-timer';
+import SyncStatus from "../../components/SyncStatus";
+
 
 LogBox.ignoreLogs([
   "`new NativeEventEmitter()` was called with a non-null argument"
@@ -21,6 +22,9 @@ LogBox.ignoreLogs([
 
 // ✅ กำหนดเวลา Sync (30 วินาที = 30,000 มิลลิวินาที)
 const SYNC_INTERVAL = 30000;
+
+// ✅ Module-level lock เพื่อป้องกัน sync ซ้ำซ้อนข้าม component re-renders
+let globalSyncLock = false;
 
 
 function TabLogic() {
@@ -31,41 +35,55 @@ function TabLogic() {
   const syncTimeoutIdRef = useRef(null);
   const isSyncInProgress = useRef(false);
   const [isOpeningCamera, setIsOpeningCamera] = useState(false);
-
-  // ✅ ใช้ useRef เก็บ ID ของ interval
-  const intervalIdRef = useRef(null);
-  const initialSyncTimeoutRef = useRef(null); // สำหรับ initial timeout
-
   const { environment } = useEnvironment();
+
+
+  // ✅ Ref for tracking the current unique session of the effect/timer
+  const currentSyncSessionId = useRef(0);
+  const timeoutIdRef = useRef(null);
 
   const API_URL = environment === 'prod' ?
     "https://mbus.dhammakaya.network/api" :
     "https://mbus-test.dhammakaya.network/api";
 
   // ✅ 1. แก้ไข useCallback โดยเอา isSyncing ออกจาก dependency array
-  const syncRegistersData = useCallback(async () => {
-    // หาก isSyncing เป็น true แสดงว่ากำลัง sync อยู่ ไม่ต้องเรียกซ้ำ
-
-    if (isSyncInProgress.current) {
-      console.log("Sync skipped: Ref lock is active.");
-      return false; // ข้ามไปเลย
-    }
-    if (!activeProject) {
-      console.log("Sync skipped: No active project.");
+  const syncRegistersData = useCallback(async (sessionId) => {
+    // ✅ Verify Session
+    if (sessionId && sessionId !== currentSyncSessionId.current) {
+      console.log(`Sync aborted: Stale session (Current: ${currentSyncSessionId.current}, This: ${sessionId})`);
       return;
     }
 
-    isSyncInProgress.current = true;
+    // ✅ ใช้ global lock แทน ref เพื่อป้องกัน sync ซ้ำข้าม re-renders
+    if (globalSyncLock) {
+      console.log("Sync skipped: Global lock is active.");
+      return; // ไม่ schedule ใหม่ตรงนี้ ให้ sync ที่กำลังทำงานอยู่ schedule เอง
+    }
+
+    if (!activeProject) {
+      console.log("Sync skipped: No active project.");
+      scheduleNextSync(sessionId);
+      return;
+    }
+
+    globalSyncLock = true;
     setIsSyncing(true);
 
-    console.log("Starting sync for project:", activeProject?.project_id); // เพิ่ม log
+    console.log("Starting sync for project:", activeProject?.project_id);
     try {
       const session = await getActiveSession();
-      if (!session?.lpr_token) throw new Error("No LprToken found.");
+      // ✅ ถ้าไม่มี token (เช่นตอน logout) ให้หยุดอย่างสงบ ไม่ throw error
+      if (!session?.lpr_token) {
+        console.log("Register Sync skipped: No LprToken (user logged out).");
+        globalSyncLock = false;
+        setIsSyncing(false);
+        return;
+      }
 
       const syncState = await getLastRegisterSyncState();
       const last_update = syncState?.last_update || "";
       const last_id = syncState?.last_id || 0;
+
       const apiUrl = `${API_URL}/lpr/registers?last_update=${last_update}&last_id=${last_id}&project_id=${activeProject.project_id}`;
 
       const response = await fetch(apiUrl, {
@@ -78,69 +96,69 @@ function TabLogic() {
       setIsOnline(true);
 
       const data = await response.json();
-      console.log('data :>> ', data);
       if (data.status === "success" && data.result?.length > 0) {
         console.log('data C7 :>> ', data);
         await saveRegisters(data.result);
         setLastSyncTime(new Date());
-        console.log("Sync successful. New records:", data.result.length); // เพิ่ม log
+        console.log("Sync successful. New records:", data.result.length);
         return true;
       } else {
         return false;
       }
     } catch (error) {
       console.log('Data sync failed :>> ', error);
-      // console.error("Data sync failed:", error);
       setIsOnline(false);
       return false;
     } finally {
-      isSyncInProgress.current = false;
+      globalSyncLock = false;
       setIsSyncing(false);
+      scheduleNextSync(sessionId);
     }
-  }, [activeProject, setIsOnline, setLastSyncTime, setIsSyncing, API_URL]); // <-- isSyncing ถูกเอาออกไปแล้ว
+  }, [activeProject, setIsOnline, setLastSyncTime, setIsSyncing, API_URL]);
 
+  const scheduleNextSync = useCallback((sessionId) => {
+    if (sessionId !== currentSyncSessionId.current) return;
 
+    // ✅ Clear pending timer ก่อน schedule ใหม่
+    if (timeoutIdRef.current) {
+      BackgroundTimer.clearTimeout(timeoutIdRef.current);
+      timeoutIdRef.current = null;
+    }
 
-
+    console.log(`Scheduling next register sync in ${SYNC_INTERVAL}ms`);
+    timeoutIdRef.current = BackgroundTimer.setTimeout(() => {
+      syncRegistersData(sessionId);
+    }, SYNC_INTERVAL);
+  }, [syncRegistersData]);
 
   useEffect(() => {
-    // ฟังก์ชันสำหรับตั้งค่า interval
-    const setupInterval = () => {
-      // ล้าง interval เก่าก่อนเสมอ ถ้ามี
-      if (intervalIdRef.current) {
-        clearInterval(intervalIdRef.current);
-      }
-      if (initialSyncTimeoutRef.current) {
-        clearTimeout(initialSyncTimeoutRef.current);
-      }
+    // 1. Generate New Session ID
+    const newSessionId = Date.now();
+    currentSyncSessionId.current = newSessionId;
+    console.log(`Register Sync Session Started: ${newSessionId}`);
 
-      // ตั้งค่า initial sync และ interval ใหม่
-      initialSyncTimeoutRef.current = setTimeout(() => {
-        syncRegistersData(); // เรียก sync ทันทีหลังจาก initial delay
-        intervalIdRef.current = setInterval(syncRegistersData, SYNC_INTERVAL);
-      }, 1000); // หน่วง 1 วินาทีก่อน sync ครั้งแรก
-    };
-
-    // เรียก setupInterval เมื่อ activeProject เปลี่ยน
-    // หรือเมื่อ Component mount ครั้งแรก
-    if (activeProject) { // ✅ เฉพาะเมื่อมี activeProject แล้วเท่านั้น
-      setupInterval();
-    } else {
-      // ถ้าไม่มี activeProject ก็เคลียร์ interval เก่าทิ้ง
-      if (intervalIdRef.current) clearInterval(intervalIdRef.current);
-      if (initialSyncTimeoutRef.current) clearTimeout(initialSyncTimeoutRef.current);
+    // ✅ Clear existing timer ก่อนเสมอ
+    if (timeoutIdRef.current) {
+      BackgroundTimer.clearTimeout(timeoutIdRef.current);
+      timeoutIdRef.current = null;
     }
 
-    // Cleanup function: จะถูกเรียกเมื่อ Component unmount หรือ dependency เปลี่ยน (ก่อนเรียก setupInterval ใหม่)
+    if (activeProject) {
+      // ✅ Initial delay - ใช้เวลานานขึ้นเพื่อให้แน่ใจว่า component stable แล้ว
+      timeoutIdRef.current = BackgroundTimer.setTimeout(() => {
+        syncRegistersData(newSessionId);
+      }, 3000); // เพิ่มเป็น 3 วินาที
+    }
+
+    // Cleanup
     return () => {
-      if (initialSyncTimeoutRef.current) {
-        clearTimeout(initialSyncTimeoutRef.current);
-      }
-      if (intervalIdRef.current) {
-        clearInterval(intervalIdRef.current);
+      console.log(`Register Sync Session Cleaned: ${newSessionId}`);
+      if (timeoutIdRef.current) {
+        BackgroundTimer.clearTimeout(timeoutIdRef.current);
+        timeoutIdRef.current = null;
       }
     };
-  }, [activeProject, syncRegistersData]);
+  }, [activeProject, syncRegistersData]); // ✅ เพิ่ม syncRegistersData
 
 
   const handleScanTabPress = async (e) => {

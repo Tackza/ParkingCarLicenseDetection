@@ -2,10 +2,13 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, SectionList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons'; // Import ไอคอน
+import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
+import * as Updates from 'expo-updates';
 import { clearSession, deleteSetting, getActiveSession, getSetting, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
-import { useMode } from '../../contexts/ModeContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
+import { useMode } from '../../contexts/ModeContext';
+import { exportDatabaseToJSON } from '../../utils/exportUtils';
 
 
 const sections = [
@@ -13,20 +16,18 @@ const sections = [
     title: '',
     data: [
       { id: 'refresh', title: 'โหลดข้อมูลใหม่', icon: 'refresh' },
+      { id: 'export', title: 'Export Database', icon: 'share-social' },
       { id: 'machineCode', title: 'รหัสเครื่อง', icon: 'code' },
       { id: 'mode', title: 'โหมด', icon: 'invert-mode' },
       { id: 'environment', title: 'Environment', icon: 'server' },
     ],
   },
-  // {
-  //   title: 'Settings',
-  //   data: [
-  //     { id: '4', title: 'Notifications', icon: 'bell' },
-  //     { id: '5', title: 'Privacy', icon: 'shield' },
-  //     { id: '6', title: 'Language', icon: 'globe' },
-  //   ],
-  // },
-
+  {
+    title: 'ข้อมูลแอป',
+    data: [
+      { id: 'version', title: 'เวอร์ชัน', icon: 'information-circle' },
+    ],
+  },
 ];
 
 
@@ -48,6 +49,35 @@ export default function SettingsScreen() {
   const [isEnvModalVisible, setEnvModalVisible] = useState(false);
   const [envMasterCodeInput, setEnvMasterCodeInput] = useState('');
   const { environment, updateEnvironment, isLoading: isEnvLoading } = useEnvironment();
+
+  // Export Modal States
+  const [isExportModalVisible, setExportModalVisible] = useState(false);
+  const [exportStartDate, setExportStartDate] = useState('');
+  const [exportEndDate, setExportEndDate] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
+
+  // Version Info States
+  const [isVersionModalVisible, setVersionModalVisible] = useState(false);
+  const appVersion = Constants.expoConfig?.version || '1.0.0';
+  const runtimeVersion = Constants.expoConfig?.runtimeVersion || '-';
+  const updateId = Updates.updateId || null;
+  const updateChannel = Updates.channel || '-';
+  const updateCreatedAt = Updates.createdAt || null;
+
+  // สร้าง OTA Version จากวันที่ update (เช่น 2025.12.06.1713)
+  const getOtaVersion = () => {
+    if (updateCreatedAt) {
+      const d = new Date(updateCreatedAt);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const hours = String(d.getHours()).padStart(2, '0');
+      const mins = String(d.getMinutes()).padStart(2, '0');
+      return `${year}.${month}.${day}.${hours}${mins}`;
+    }
+    return null;
+  };
+  const otaVersion = getOtaVersion();
 
   // useEffect จะทำงานแค่ครั้งเดียวตอนหน้านี้ถูกโหลดขึ้นมา
   useEffect(() => {
@@ -82,7 +112,7 @@ export default function SettingsScreen() {
   }, []); // [] หมายถึงให้ทำงานแค่ครั้งเดียว
 
   const API_BASE_URL = environment === 'prod'
-    ? 'https://mbus.dhammakaya.network/api' // <-- ❗️ URL ของ Prod (ผมเดา)
+    ? 'https://mbus.dhammakaya.network/api' // <-- ❗️ URL ของ Prod
     : 'https://mbus-test.dhammakaya.network/api'; // <-- URL ของ Test
 
   const handleLogout = async () => {
@@ -120,7 +150,7 @@ export default function SettingsScreen() {
               const data = await result.json();
 
               if (!data.result) {
-                console.error('Server responded with an error during logout:', result.status);
+                console.log('Server responded with an error during logout:', result.status);
                 const errorData = await result.json();
                 console.log('❌ Error details during logout:', errorData);
                 // แสดง Alert เฉพาะถ้า API มีปัญหา แต่ผู้ใช้ได้ออกจากระบบ local แล้ว
@@ -131,7 +161,7 @@ export default function SettingsScreen() {
 
               setLoading(false);
             } catch (e) {
-              console.error("Failed to perform full logout process:", e);
+              console.log("Failed to perform full logout process:", e);
               Alert.alert('ข้อผิดพลาด', 'เกิดข้อผิดพลาดในการออกจากระบบ');
               setLoading(false);
             }
@@ -143,7 +173,7 @@ export default function SettingsScreen() {
     );
   };
 
-  if (loading || isEnvLoading) {
+  if (loading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#0000ff" />
@@ -174,19 +204,31 @@ export default function SettingsScreen() {
         'Authorization': `Bearer ${lprToken}`, // ถ้าต้องใช้ token
       },
     });
-    console.log('result :>> ', result.json());
 
-    if (!result.ok) {
-      console.error('Server responded with an error during getProject:', result.status);
-      const errorData = await result.json(); // ลองดูว่ามีข้อมูล error อะไรส่งมาไหม
-      console.error('Error details during getProject:', errorData);
+    try {
+      if (!result.ok) {
+        console.error('Server responded with an error during getProject:', result.status);
+        const errorData = await result.json(); // ลองดูว่ามีข้อมูล error อะไรส่งมาไหม
+        console.error('Error details during getProject:', errorData);
+        Alert.alert('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
+        setLoading(false);
+        return;
+      }
+      const data = await result.json();
+      console.log('data :>> ', data);
+      saveProjects(data.result);
+      Alert.alert('สำเร็จ', 'โหลดข้อมูลเรียบร้อย');
+      setLoading(false);
+
+    } catch (error) {
+      console.error('Error during getProject:', error);
       Alert.alert('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
-      return;
+      setLoading(false);
+    } finally {
+      setLoading(false);
     }
-    const data = await result.json();
-    console.log('data :>> ', data);
-    saveProjects(data.result);
-    Alert.alert('สำเร็จ', 'โหลดข้อมูลเรียบร้อย');
+
+
   }
 
 
@@ -212,6 +254,14 @@ export default function SettingsScreen() {
           setEnvModalVisible(true); // เปิด Modal ใหม่
         } else if (item.id === 'refresh') {
           getProject()
+        } else if (item.id === 'export') {
+          // เปิด Modal เลือกวันที่ก่อน Export
+          const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+          setExportStartDate(today);
+          setExportEndDate(today);
+          setExportModalVisible(true);
+        } else if (item.id === 'version') {
+          setVersionModalVisible(true);
         }
         else {
           <Ionicons name={item.icon} size={20} color="#555" style={styles.itemIcon} />
@@ -236,6 +286,11 @@ export default function SettingsScreen() {
       {item.id == 'environment' && (
         <Text style={[styles.itemValueText, environment === 'prod' ? styles.prodText : styles.testText]}>
           {environment === 'prod' ? 'Prod' : 'Test'}
+        </Text>
+      )}
+      {item.id === 'version' && (
+        <Text style={styles.itemValueText}>
+          {otaVersion || appVersion}
         </Text>
       )}
 
@@ -419,6 +474,185 @@ export default function SettingsScreen() {
     </Modal>
   );
 
+  // ฟังก์ชันจัดการ Export
+  const handleExport = async (type) => {
+    setIsExporting(true);
+    try {
+      let startDate = null;
+      let endDate = null;
+
+      if (type === 'today') {
+        const today = new Date().toISOString().split('T')[0];
+        startDate = today;
+        endDate = today;
+      } else if (type === 'custom') {
+        // Validate date format
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        if (!dateRegex.test(exportStartDate) || !dateRegex.test(exportEndDate)) {
+          Alert.alert('ผิดพลาด', 'รูปแบบวันที่ไม่ถูกต้อง กรุณาใช้รูปแบบ YYYY-MM-DD');
+          setIsExporting(false);
+          return;
+        }
+        if (exportStartDate > exportEndDate) {
+          Alert.alert('ผิดพลาด', 'วันที่เริ่มต้นต้องไม่มากกว่าวันที่สิ้นสุด');
+          setIsExporting(false);
+          return;
+        }
+        startDate = exportStartDate;
+        endDate = exportEndDate;
+      }
+      // type === 'all' will keep startDate and endDate as null
+
+      await exportDatabaseToJSON(startDate, endDate);
+      setExportModalVisible(false);
+    } catch (error) {
+      console.error('Export error:', error);
+      Alert.alert('ผิดพลาด', 'ไม่สามารถ Export ข้อมูลได้');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // Modal สำหรับเลือกวันที่ Export
+  const renderExportModal = () => (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={isExportModalVisible}
+      onRequestClose={() => setExportModalVisible(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContainer}>
+          <Text style={styles.modalTitle}>📦 Export Database</Text>
+          <Text style={styles.modalSubTitle}>เลือกช่วงวันที่ที่ต้องการ Export</Text>
+
+          {/* ปุ่ม Export ทั้งหมด */}
+          <TouchableOpacity
+            style={[styles.exportOptionButton, styles.exportAllButton]}
+            onPress={() => handleExport('all')}
+            disabled={isExporting}
+          >
+            <Ionicons name="cloud-download" size={20} color="#fff" />
+            <Text style={styles.exportOptionText}>Export ทั้งหมด</Text>
+          </TouchableOpacity>
+
+          {/* ปุ่ม Export วันนี้ */}
+          <TouchableOpacity
+            style={[styles.exportOptionButton, styles.exportTodayButton]}
+            onPress={() => handleExport('today')}
+            disabled={isExporting}
+          >
+            <Ionicons name="today" size={20} color="#fff" />
+            <Text style={styles.exportOptionText}>Export วันนี้</Text>
+          </TouchableOpacity>
+
+          {/* ช่องกรอกวันที่ */}
+          <View style={styles.dateInputContainer}>
+            <Text style={styles.dateLabel}>ตั้งแต่วันที่:</Text>
+            <TextInput
+              style={styles.dateInput}
+              placeholder="YYYY-MM-DD"
+              value={exportStartDate}
+              onChangeText={setExportStartDate}
+              keyboardType="default"
+            />
+          </View>
+
+          <View style={styles.dateInputContainer}>
+            <Text style={styles.dateLabel}>ถึงวันที่:</Text>
+            <TextInput
+              style={styles.dateInput}
+              placeholder="YYYY-MM-DD"
+              value={exportEndDate}
+              onChangeText={setExportEndDate}
+              keyboardType="default"
+            />
+          </View>
+
+          {/* ปุ่ม Export ตามวันที่เลือก */}
+          <TouchableOpacity
+            style={[styles.exportOptionButton, styles.exportCustomButton]}
+            onPress={() => handleExport('custom')}
+            disabled={isExporting}
+          >
+            <Ionicons name="calendar" size={20} color="#fff" />
+            <Text style={styles.exportOptionText}>Export ตามช่วงวันที่</Text>
+          </TouchableOpacity>
+
+          {isExporting && (
+            <View style={styles.exportingContainer}>
+              <ActivityIndicator size="small" color="#007AFF" />
+              <Text style={styles.exportingText}>กำลัง Export...</Text>
+            </View>
+          )}
+
+          {/* ปุ่มยกเลิก */}
+          <TouchableOpacity
+            style={styles.exportCancelButton}
+            onPress={() => setExportModalVisible(false)}
+            disabled={isExporting}
+          >
+            <Text style={styles.exportCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // Modal สำหรับแสดง Version Info
+  const renderVersionModal = () => (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={isVersionModalVisible}
+      onRequestClose={() => setVersionModalVisible(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContainer}>
+          <Text style={styles.modalTitle}>📱 ข้อมูลเวอร์ชัน</Text>
+
+          <View style={styles.versionInfoContainer}>
+            {otaVersion && (
+              <View style={[styles.versionRow, { backgroundColor: '#e8f5e9' }]}>
+                <Text style={[styles.versionLabel, { color: '#2e7d32' }]}>📦 OTA Version:</Text>
+                <Text style={[styles.versionValue, { color: '#2e7d32' }]}>{otaVersion}</Text>
+              </View>
+            )}
+
+            <View style={styles.versionRow}>
+              <Text style={styles.versionLabel}>App Version:</Text>
+              <Text style={styles.versionValue}>{appVersion}</Text>
+            </View>
+
+            <View style={styles.versionRow}>
+              <Text style={styles.versionLabel}>Runtime Version:</Text>
+              <Text style={styles.versionValue}>{runtimeVersion}</Text>
+            </View>
+
+            <View style={styles.versionRow}>
+              <Text style={styles.versionLabel}>Update Channel:</Text>
+              <Text style={styles.versionValue}>{updateChannel}</Text>
+            </View>
+
+            <View style={styles.versionRow}>
+              <Text style={styles.versionLabel}>Update ID:</Text>
+              <Text style={[styles.versionValue, styles.updateIdText]} numberOfLines={1}>
+                {updateId ? updateId.substring(0, 16) + '...' : 'ไม่มี OTA Update'}
+              </Text>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[  { marginTop: 10 }]}
+            onPress={() => setVersionModalVisible(false)}
+          >
+            <Text >ปิด</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
   return (
     <View style={styles.container}>
       <View style={styles.tabMobile}>
@@ -426,6 +660,8 @@ export default function SettingsScreen() {
       {renderMachineCodeModal()}
       {renderModeChangeModal()}
       {renderEnvironmentModal()}
+      {renderExportModal()}
+      {renderVersionModal()}
       <View style={styles.profileHeader}>
         {/* Avatar จาก 2 ตัวอักษรแรก */}
         <View style={[styles.avatarTextContainer, { backgroundColor: '#007AFF' }]}>
@@ -638,5 +874,103 @@ const styles = StyleSheet.create({
     color: '#555',
     marginBottom: 20,
     textAlign: 'center'
+  },
+  // Export Modal Styles
+  exportOptionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    borderRadius: 10,
+    marginBottom: 10,
+    width: '100%',
+  },
+  exportAllButton: {
+    backgroundColor: '#34C759', // สีเขียว
+  },
+  exportTodayButton: {
+    backgroundColor: '#007AFF', // สีฟ้า
+  },
+  exportCustomButton: {
+    backgroundColor: '#5856D6', // สีม่วง
+  },
+  exportOptionText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 16,
+    marginLeft: 10,
+  },
+  dateInputContainer: {
+    width: '100%',
+    marginBottom: 10,
+  },
+  dateLabel: {
+    fontSize: 14,
+    color: '#555',
+    marginBottom: 5,
+  },
+  dateInput: {
+    width: '100%',
+    height: 45,
+    borderColor: '#ddd',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    fontSize: 16,
+    backgroundColor: '#f9f9f9',
+  },
+  exportingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  exportingText: {
+    marginLeft: 10,
+    color: '#007AFF',
+    fontSize: 14,
+  },
+  exportCancelButton: {
+    marginTop: 15,
+    width: '100%',
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#FF3B30',
+    backgroundColor: '#fff',
+    alignItems: 'center',
+  },
+  exportCancelText: {
+    color: '#FF3B30',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  // Version Modal Styles
+  versionInfoContainer: {
+    width: '100%',
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+    padding: 15,
+  },
+  versionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  versionLabel: {
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '500',
+  },
+  versionValue: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: 'bold',
+  },
+  updateIdText: {
+    fontSize: 12,
+    maxWidth: 150,
   },
 });

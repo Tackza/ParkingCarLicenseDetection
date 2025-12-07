@@ -1,18 +1,16 @@
-import {
-  DarkTheme,
-  DefaultTheme,
-  ThemeProvider,
-} from "@react-navigation/native";
+import { EnvironmentProvider } from "@/contexts/EnvironmentContext";
+import { SyncProvider } from "@/contexts/SyncContext";
+import { DefaultTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
+import { setupDatabase } from "../constants/Database";
 import { AuthProvider } from "../contexts/AuthContext";
 import { ModeProvider } from "../contexts/ModeContext";
-import { setupDatabase } from "../constants/Database";
 import { ProjectProvider } from "../contexts/ProjectContext";
-import { SyncProvider } from "@/contexts/SyncContext";
-import { EnvironmentProvider } from "@/contexts/EnvironmentContext";
+
+import CheckInSyncManager from "../components/CheckInSyncManager";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -46,6 +44,7 @@ export default function RootLayout() {
           <ProjectProvider>
             <ModeProvider>
               <ThemeProvider value={DefaultTheme}>
+                <CheckInSyncManager />
                 <Stack screenOptions={{ headerShown: false }}>
                   <Stack.Screen name="login" />
                   <Stack.Screen name="bluetooth-setup" />

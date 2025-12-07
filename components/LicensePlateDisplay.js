@@ -1,19 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
-import { StyleSheet, Text, Pressable, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 export default function LicensePlateDisplay({ plate, province, onEditPress }) {
   return (
     <Pressable style={styles.container} onPress={onEditPress}>
-      {/* ส่วนกรอบและเนื้อหาของป้ายทะเบียน */}
       <View style={styles.plateContainer}>
         <Text style={styles.plateText}>{plate || ''}</Text>
         <Text style={styles.provinceText}>{province || ''}</Text>
       </View>
 
-      {/* 2. เปลี่ยนปุ่มแก้ไขจาก TouchableOpacity เป็น View ธรรมดา */}
+      {/* Edit Button outside container, aligned below */}
       <View style={styles.editButton}>
-        <Ionicons name="settings-outline" size={20} color="#4f5a5e" />
+        <Ionicons name="create-outline" size={18} color="#7f8c8d" />
+        <Text style={styles.editButtonText}>แตะเพื่อแก้ไข</Text>
       </View>
     </Pressable>
   );
@@ -40,27 +39,27 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   provinceText: {
-    fontSize: 22,
+    fontSize: 30,
     color: '#2c3e50',
     fontWeight: '600',
     marginBottom: 5,
   },
   plateText: {
-    fontSize: 32,
+    fontSize: 48,
     fontWeight: 'bold',
     color: '#000000',
     letterSpacing: 2, // เพิ่มระยะห่างระหว่างตัวอักษร
   },
   editButton: {
-    position: 'absolute',
-    top: 85,
-    right:5,
-    backgroundColor: 'white',
-    borderRadius: 15,
-    width: 30,
-    height: 30,
+    flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 0, // สำหรับ Android
+    marginTop: 8,
+  },
+  editButtonText: {
+    fontSize: 14,
+    color: '#7f8c8d', // สีเทาให้ดูไม่เด่นเกินไปแต่รู้ว่ากดได้
+    fontWeight: '600',
+    marginLeft: 6,
   },
 });

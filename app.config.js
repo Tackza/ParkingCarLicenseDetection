@@ -6,7 +6,7 @@ export default () => {
   // เราจะใช้ object นี้เป็นค่าตั้งต้น
   let config = {
     "expo": {
-      "name": "RegisterMbus", // <-- ชื่อสำหรับ Production
+      "name": "Mbus Register", // <-- ชื่อสำหรับ Production
       "slug": "tackpongsatorn",
       "version": "1.0.0",
       "orientation": "portrait",
@@ -75,7 +75,7 @@ export default () => {
   // ถ้า Profile ที่สั่ง build คือ 'development'
   if (appVariant === 'development') {
     // ให้ทำการแก้ไขค่า config สำหรับเวอร์ชัน Dev
-    config.expo.name = "RegisterMbus (Dev)"; // เปลี่ยนชื่อแอป
+    config.expo.name = "Mbus Register (Dev)"; // เปลี่ยนชื่อแอป
     config.expo.android.package = "com.donnytang.myapp.dev"; // เปลี่ยน Package Name
     config.expo.ios.bundleIdentifier = "com.donnytang.myapp.dev"; // เปลี่ยน Bundle ID
   }

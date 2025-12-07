@@ -1,12 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 // import * as ImagePicker from 'expo-image-picker';
 import { useMode } from "@/contexts/ModeContext";
+import { createSpokenPlate } from '@/utils/speechUtils';
 import axios from 'axios';
 import {
   useLocalSearchParams,
   // useFocusEffect, 
   useRouter
 } from 'expo-router';
+import * as Speech from 'expo-speech';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -28,10 +30,8 @@ import ViewShot, { captureRef } from 'react-native-view-shot';
 import LicensePlateDisplay from '../../components/LicensePlateDisplay';
 import { findRegisterByPlate, getActiveSession, getSetting, insertCheckIn } from '../../constants/Database';
 import { THAI_PROVINCES } from '../../constants/provinces';
-import { useProject } from '../../contexts/ProjectContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
-import * as Speech from 'expo-speech';
-import { createSpokenPlate } from '@/utils/speechUtils';
+import { useProject } from '../../contexts/ProjectContext';
 
 const IMAGE_PROCESSING_TIMEOUT = 15000;
 
@@ -163,26 +163,23 @@ export default function ScanScreen() {
       const provinceExists = checkProvinceExists(detectedProvince)
       setProvince(provinceExists);
 
-      // "แปล" ทะเบียนรถ โดยเรียกใช้ฟังก์ชันจาก utils
-      const spokenPlate = createSpokenPlate(detectedPlate); // 👈 ใช้งานได้เลย
+      // พูดเลขทะเบียนทันที
+      speakPlateNo(detectedPlate, provinceExists);
 
-      // สร้างประโยคเต็มๆ
-      const finalSpokenText = `ทะเบียน,  
-      ${spokenPlate || 'ไม่พบทะเบียน'}, ${provinceExists || 'ไม่พบจังหวัด'}`;
-
-      // สั่งให้พูด!
-      Speech.stop();
-      Speech.speak(finalSpokenText, {
-        language: 'th-TH',
-        rate: 0.9
-      });
-
-      await checkWithRegisterList(detectedPlate, provinceExists);
+      const isFound = await checkWithRegisterList(detectedPlate, provinceExists);
 
       if (!detectedPlate || !provinceExists) {
-
         openEditModal(detectedPlate, provinceExists);
       }
+
+      // พูดผลลัพธ์การตรวจสอบ
+      speakVerificationResult(isFound);
+
+
+
+
+
+
 
     } catch (error) {
       // ✅ การจัดการ Error ของ Axios
@@ -223,6 +220,31 @@ export default function ScanScreen() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const speakPlateNo = (detectedPlate, provinceExists) => {
+    const spokenPlate = createSpokenPlate(detectedPlate);
+    const text = `ทะเบียน, ${spokenPlate || 'ไม่พบทะเบียน'}, ${provinceExists || 'ไม่พบจังหวัด'}`;
+
+    Speech.stop();
+    Speech.speak(text, {
+      language: 'th-TH',
+      rate: 1.1,
+      pitch: 1.1,
+    });
+  };
+
+  const speakVerificationResult = (isFound) => {
+    const text = isFound ? "" : "ไม่พบซีเจ็ด";
+
+    // ไม่ต้อง Speech.stop() เพื่อให้พูดต่อจากเลขทะเบียนได้เลย (ถ้าเลขทะเบียนยังพูดไม่จบ มันจะต่อคิว)
+    // แต่ถ้าต้องการให้พูดแทรก ก็ใส่ Speech.stop()
+    // ในที่นี้เราอยากให้พูดต่อกัน
+    Speech.speak(text, {
+      language: 'th-TH',
+      rate: 1.1,
+      pitch: 1.1,
+    });
   };
 
 
@@ -270,7 +292,7 @@ export default function ScanScreen() {
 
       // ✅ สร้าง Object newCheckInData ตามโครงสร้างที่ต้องการ
       let newCheckInData = {
-        uid: foundRegisterData.uid,
+        uid: foundRegisterData?.uid || null,
         project_id: activeProject.project_id,
         activity_id: activeProject.activity_id,
         register_id: foundRegisterData?.register_id || null,
@@ -319,14 +341,9 @@ export default function ScanScreen() {
       setShowReceipt(true);
       // รอให้ Receipt component render ข้อมูลใหม่เสร็จก่อน
 
-      const uid = newCheckInData.uid || 0;
-      const seqNumber = newCheckInData.seq_no;
-      const urlFromResponse = `${API_URL}/lpr?q=${uid}${seqNumber}`;
-      console.log('urlFromResponse :>> ', urlFromResponse);
-
       if (isVerified) {
         setTimeout(async () => {
-          await generateAndPrint(urlFromResponse);
+          await generateAndPrint();
         }, 500);
         return;
       }
@@ -342,7 +359,7 @@ export default function ScanScreen() {
 
 
 
-  const generateAndPrint = async (urlFromResponse) => {
+  const generateAndPrint = async () => {
     try {
       // Capture receipt as image
       const uri = await captureRef(receiptRef, {
@@ -357,10 +374,7 @@ export default function ScanScreen() {
         left: 0,
       });
       await BluetoothEscposPrinter.printerAlign(BluetoothEscposPrinter.ALIGN.CENTER);
-      await BluetoothEscposPrinter.printQRCode(
-        urlFromResponse, 200,
-        BluetoothEscposPrinter.ERROR_CORRECTION.L,
-      );
+
       await BluetoothEscposPrinter.printText('\r\n\r\n', {});
 
 
@@ -431,7 +445,11 @@ export default function ScanScreen() {
 
     // 3. ✅ เรียกใช้ฟังก์ชันค้นหา C7 ใหม่อีกครั้งด้วยข้อมูลที่ผู้ใช้เพิ่งกรอก
     // เราใช้ค่าจาก temp state เพราะเป็นค่าล่าสุดที่ผู้ใช้ยืนยัน
-    await checkWithRegisterList(tempLicensePlate, tempProvince);
+    const isFound = await checkWithRegisterList(tempLicensePlate, tempProvince);
+
+    // Speak again
+    speakPlateNo(tempLicensePlate, tempProvince);
+    speakVerificationResult(isFound);
 
     // 4. ปิด Modal แก้ไข
     setIsEditModalVisible(false);
@@ -440,11 +458,10 @@ export default function ScanScreen() {
   const checkWithRegisterList = async (plate, prov) => {
     if (!plate || !prov || !activeProject) {
       setIsVerified(false);
-      return;
+      return false;
     }
 
     try {
-
       const provinceNew = prov.replace('กรุงเทพมหานคร', 'กทม.').trim();
       console.log(`Searching for Plate: ${plate}, Province: ${provinceNew}, ProjectID: ${activeProject.project_id}`);
       const foundRegister = await findRegisterByPlate(activeProject.project_id, plate, provinceNew);
@@ -496,23 +513,25 @@ export default function ScanScreen() {
             { cancelable: false } // บังคับให้ผู้ใช้กดยืนยัน
           );
 
-          return; // ‼️ สำคัญมาก: หยุดการทำงาน ไม่ต้อง setIsVerified
+          return false; // ‼️ สำคัญมาก: หยุดการทำงาน ไม่ต้อง setIsVerified
         }
         setIsVerified(true); // ตั้งสถานะเป็น "ตรวจสอบแล้ว"
         setFoundRegisterData(foundRegister); // เก็บข้อมูล C7 ทั้งหมดไว้ใน state
 
         // กรอกข้อมูลจาก C7 ลงในฟอร์มอัตโนมัติ
         setVehicleType(foundRegister.bus_type);
-
+        return true;
 
       } else {
         console.log('❌ C7 Record Not Found.');
         setIsVerified(false);
         setFoundRegisterData(null); // เคลียร์ข้อมูลเก่า
+        return false;
       }
     } catch (error) {
       console.error('Failed to check with register list', error);
       setIsVerified(false);
+      return false;
     }
   };
 
@@ -599,7 +618,11 @@ export default function ScanScreen() {
                   searchable={true}
                   placeholder="เลือกประเภทรถ"
                   // listMode="MODAL"
-                  style={styles.dropdown}
+                  style={[styles.dropdown, { minHeight: 60 }]}
+                  textStyle={{ fontSize: 26 }}
+                  placeholderStyle={{ fontSize: 26, color: '#999' }}
+                  listItemLabelStyle={{ fontSize: 26 }}
+                  searchTextInputStyle={{ fontSize: 26 }}
                   listMode="MODAL" // แนะนำให้ใช้โหมดนี้สำหรับรายการยาวๆ
                   listProps={{
                     keyboardShouldPersistTaps: "always"
@@ -812,7 +835,11 @@ export default function ScanScreen() {
                 searchable={true}
                 placeholder="เลือกจังหวัด"
                 listMode="MODAL" // MODAL mode is better for modals
-                style={styles.dropdown}
+                style={[styles.dropdown, { minHeight: 60 }]}
+                textStyle={{ fontSize: 26 }}
+                placeholderStyle={{ fontSize: 26, color: '#999' }}
+                listItemLabelStyle={{ fontSize: 26 }}
+                searchTextInputStyle={{ fontSize: 26 }} // เพิ่มขนาดตัวหนังสือตอนค้นหา
               />
             </View>
 
@@ -885,7 +912,7 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    padding: 5,
+    padding: 0,
   },
   scanContainer: {
     flex: 1,
@@ -1003,7 +1030,7 @@ const styles = StyleSheet.create({
   },
   confirmButtonText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 20,
     fontWeight: '600',
   },
   cancelButton: {
@@ -1014,7 +1041,7 @@ const styles = StyleSheet.create({
   },
   cancelButtonText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 20,
     fontWeight: '600',
   },
   receiptContainer: {
@@ -1024,7 +1051,7 @@ const styles = StyleSheet.create({
     width: 300,
   },
   receiptTitle: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: 'bold',
     textAlign: 'center',
     marginBottom: 5,
@@ -1042,34 +1069,41 @@ const styles = StyleSheet.create({
   receiptRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginVertical: 2,
+    alignItems: 'flex-start', // ให้จัดชิดบนทั้งคู่
+    marginVertical: 4, // เพิ่มระยะห่างระหว่างบรรทัดนิดหน่อย
   },
   receiptLabel: {
     fontSize: 18,
     fontFamily: 'Sarabun-Regular',
-    marginVertical: 0,
+    marginTop: 0,
+    flex: 1, // ให้พื้นที่ label บ้าง
   },
   receiptValue: {
     fontSize: 18,
     fontWeight: 'bold',
     fontFamily: 'Sarabun-Regular',
-    marginTop: 5,
+    marginTop: 0, // เอา margin บนออกเพื่อให้ตรงกับ Label
+    flex: 2, // ให้พื้นที่มากกว่า Label และให้ wrap ได้
+    textAlign: 'right', // จัดชิดขวา
+    flexWrap: 'wrap', // ให้ตัดบรรทัดได้
   },
   formContainer: {
+    flex: 1,
     backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 10,
+    // borderRadius: 20,
+    padding: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.08,
-    marginHorizontal: 1,
-    marginTop: 5,
+    marginHorizontal: 0,
+    marginTop: 0,
     shadowRadius: 8,
     elevation: 3,
+    minHeight: '100%',
   },
   previewImage: {
     width: '100%',
-    height: 180,
+    height: 200,
     borderRadius: 15,
     marginBottom: 5,
     backgroundColor: '#e9ecef',
@@ -1078,7 +1112,7 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   label: {
-    fontSize: 14,
+    fontSize: 18,
     fontWeight: '600',
     color: '#2c3e50',
     marginBottom: 8,
@@ -1087,7 +1121,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8f9fa',
     borderRadius: 12,
     padding: 15,
-    fontSize: 20,
+    fontSize: 24,
     letterSpacing: 2,
     borderWidth: 1,
     borderColor: '#e9ecef',
