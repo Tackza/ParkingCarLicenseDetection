@@ -450,7 +450,10 @@ const styles = StyleSheet.create({
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
   buttonDisabled: { backgroundColor: '#95a5a6' },
   receiptContainer: {
-    backgroundColor: '#fff', padding: 0, marginTop: 0, width: 300
+    backgroundColor: '#fff',
+     padding: 0, 
+     marginTop: 0, 
+     width: 300
   },
   textCenter: {
     textAlign: 'center',

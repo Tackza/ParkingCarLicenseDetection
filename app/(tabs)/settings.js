@@ -5,17 +5,17 @@ import { Ionicons } from '@expo/vector-icons'; // Import ไอคอน
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
-import { clearSession, deleteSetting, getActiveSession, getSetting, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getRegistersCountForId, getSetting, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
-import { exportDatabaseToJSON } from '../../utils/exportUtils';
+import { exportDatabaseFile } from '../../utils/exportUtils';
 
 
 const sections = [
   {
     title: '',
     data: [
-      { id: 'refresh', title: 'โหลดข้อมูลใหม่', icon: 'refresh' },
+      { id: 'refresh', title: 'อัพเดทข้อมูลกิจกรรม', icon: 'refresh' },
       { id: 'export', title: 'Export Database', icon: 'share-social' },
       { id: 'machineCode', title: 'รหัสเครื่อง', icon: 'code' },
       { id: 'mode', title: 'โหมด', icon: 'invert-mode' },
@@ -48,6 +48,13 @@ export default function SettingsScreen() {
   const [last_name, setLast_name] = useState('');
   const [isEnvModalVisible, setEnvModalVisible] = useState(false);
   const [envMasterCodeInput, setEnvMasterCodeInput] = useState('');
+  const [registersCount, setRegistersCount] = useState(0);
+  const [checkInsCount, setCheckInsCount] = useState(0);
+  const [currentId, setCurrentId] = useState(null); // project_id or activity_id depending on mode
+
+  // Clear Registers Modal States
+  const [isClearRegistersModalVisible, setClearRegistersModalVisible] = useState(false);
+  const [clearRegistersCodeInput, setClearRegistersCodeInput] = useState('');
   const { environment, updateEnvironment, isLoading: isEnvLoading } = useEnvironment();
 
   // Export Modal States
@@ -101,6 +108,27 @@ export default function SettingsScreen() {
         if (storedMachineCode !== null) {
           setMachineCode(storedMachineCode);
         }
+
+        // ดึง current project (ใช้เพื่อหาค่า project_id/activity_id)
+        const currentProject = await getCurrentProject();
+        let idForFilter = null;
+        if (currentProject) {
+          // default use project_id
+          idForFilter = currentProject.project_id;
+          const appMode = await getSetting('appMode');
+          const isModeOneLocal = appMode === null ? true : appMode === 'true';
+          if (!isModeOneLocal) {
+            idForFilter = currentProject.activity_id;
+          }
+        }
+        setCurrentId(idForFilter);
+
+        // ดึงจำนวน Registers (filtered) และ CheckIns (filtered)
+        const regCount = await getRegistersCountForId(idForFilter);
+        setRegistersCount(regCount);
+        // For checkins we pass single id computed based on appMode
+        const chkCount = await getCheckInsCountForId(idForFilter);
+        setCheckInsCount(chkCount);
       } catch (e) {
         console.error("Failed to fetch data from database", e);
       } finally {
@@ -110,6 +138,41 @@ export default function SettingsScreen() {
 
     fetchDataFromDB();
   }, []); // [] หมายถึงให้ทำงานแค่ครั้งเดียว
+
+  // Refresh counts separately so we can call when mode changes
+  const refreshCounts = async (idForFilter = currentId) => {
+    try {
+      const regCount = await getRegistersCountForId(idForFilter);
+      setRegistersCount(regCount);
+      const chkCount = await getCheckInsCountForId(idForFilter);
+      setCheckInsCount(chkCount);
+    } catch (e) {
+      console.error('Error refreshing counts', e);
+    }
+  };
+
+  // Refresh when mode changes
+  useEffect(() => {
+    (async () => {
+      // recompute currentId based on current project and mode
+      try {
+        const currentProject = await getCurrentProject();
+        let idForFilter = null;
+        if (currentProject) {
+          idForFilter = currentProject.project_id;
+          const appMode = await getSetting('appMode');
+          const isModeOneLocal = appMode === null ? true : appMode === 'true';
+          if (!isModeOneLocal) {
+            idForFilter = currentProject.activity_id;
+          }
+        }
+        setCurrentId(idForFilter);
+        await refreshCounts(idForFilter);
+      } catch (e) {
+        console.error('Error updating counts after mode change', e);
+      }
+    })();
+  }, [isModeOne]);
 
   const API_BASE_URL = environment === 'prod'
     ? 'https://mbus.dhammakaya.network/api' // <-- ❗️ URL ของ Prod
@@ -149,10 +212,10 @@ export default function SettingsScreen() {
               });
               const data = await result.json();
 
-              if (!data.result) {
+              // ตรวจสอบความสำเร็จจาก status หรือ result
+              if (data.status !== 'success' && !data.result) {
                 console.log('Server responded with an error during logout:', result.status);
-                const errorData = await result.json();
-                console.log('❌ Error details during logout:', errorData);
+                console.log('❌ Error details during logout:', data);
                 // แสดง Alert เฉพาะถ้า API มีปัญหา แต่ผู้ใช้ได้ออกจากระบบ local แล้ว
                 Alert.alert('ข้อผิดพลาด', 'ออกจากระบบในเครื่องแล้ว แต่มีปัญหาในการเชื่อมต่อเซิร์ฟเวอร์');
               } else {
@@ -209,19 +272,19 @@ export default function SettingsScreen() {
       if (!result.ok) {
         console.error('Server responded with an error during getProject:', result.status);
         const errorData = await result.json(); // ลองดูว่ามีข้อมูล error อะไรส่งมาไหม
-        console.error('Error details during getProject:', errorData);
+        // console.error('Error details during getProject:', errorData);
         Alert.alert('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
         setLoading(false);
         return;
       }
       const data = await result.json();
       console.log('data :>> ', data);
-      saveProjects(data.result);
-      Alert.alert('สำเร็จ', 'โหลดข้อมูลเรียบร้อย');
+      await saveProjects(data.result);
+      Alert.alert('สำเร็จ', 'อัพเดทข้อมูลเรียบร้อย');
       setLoading(false);
 
     } catch (error) {
-      console.error('Error during getProject:', error);
+      // console.error('Error during getProject:', error);
       Alert.alert('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
       setLoading(false);
     } finally {
@@ -235,10 +298,74 @@ export default function SettingsScreen() {
 
 
 
+  const handleClearRegisters = async () => {
+    if (clearRegistersCodeInput !== '8989') {
+      Alert.alert("ผิดพลาด", "รหัสอนุมัติไม่ถูกต้อง.");
+      return;
+    }
+
+    try {
+      await clearRegistersTable();
+      Alert.alert("สำเร็จ", "ลบข้อมูล Registers ทั้งหมดเรียบร้อยแล้ว!");
+      setClearRegistersModalVisible(false);
+      setClearRegistersCodeInput('');
+    } catch (e) {
+      console.error("Failed to clear registers:", e);
+      Alert.alert("ผิดพลาด", "ไม่สามารถลบข้อมูลได้.");
+    }
+  };
+
+  const renderClearRegistersModal = () => (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={isClearRegistersModalVisible}
+      onRequestClose={() => setClearRegistersModalVisible(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContainer}>
+          <Text style={styles.modalTitle}>⚠️ ลบข้อมูล Registers</Text>
+          <Text style={styles.modalSubTitle}>
+            การกระทำนี้จะลบข้อมูลทะเบียนรถทั้งหมดในเครื่อง
+            กรุณากรอกรหัสเพื่อยืนยัน
+          </Text>
+          <TextInput
+            style={styles.modalInput}
+            placeholder="กรอกรหัสอนุมัติ"
+            value={clearRegistersCodeInput}
+            onChangeText={setClearRegistersCodeInput}
+            secureTextEntry={true}
+            keyboardType="number-pad"
+          />
+          <View style={styles.modalButtonContainer}>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.cancelButton]}
+              onPress={() => setClearRegistersModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>ยกเลิก</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.saveButton, { backgroundColor: '#D32F2F' }]}
+              onPress={handleClearRegisters}
+            >
+              <Text style={styles.modalButtonText}>ลบข้อมูล</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
   // --- Render Functions สำหรับ SectionList ---
   const renderItem = ({ item }) => (
     <TouchableOpacity
       style={styles.itemContainer}
+      onLongPress={() => {
+        if (item.id === 'version') {
+          setClearRegistersCodeInput('');
+          setClearRegistersModalVisible(true);
+        }
+      }}
       // --- เปลี่ยน onPress ให้เปิด Modal ---
       onPress={() => {
         if (item.id === 'machineCode') {
@@ -256,9 +383,6 @@ export default function SettingsScreen() {
           getProject()
         } else if (item.id === 'export') {
           // เปิด Modal เลือกวันที่ก่อน Export
-          const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-          setExportStartDate(today);
-          setExportEndDate(today);
           setExportModalVisible(true);
         } else if (item.id === 'version') {
           setVersionModalVisible(true);
@@ -284,7 +408,7 @@ export default function SettingsScreen() {
         </Text>
       )}
       {item.id == 'environment' && (
-        <Text style={[styles.itemValueText, environment === 'prod' ? styles.prodText : styles.testText]}>
+        <Text style={[styles.itemValueText, environment === 'prod' ? styles.envProdText : styles.envTestText]}>
           {environment === 'prod' ? 'Prod' : 'Test'}
         </Text>
       )}
@@ -475,35 +599,10 @@ export default function SettingsScreen() {
   );
 
   // ฟังก์ชันจัดการ Export
-  const handleExport = async (type) => {
+  const handleExport = async () => {
     setIsExporting(true);
     try {
-      let startDate = null;
-      let endDate = null;
-
-      if (type === 'today') {
-        const today = new Date().toISOString().split('T')[0];
-        startDate = today;
-        endDate = today;
-      } else if (type === 'custom') {
-        // Validate date format
-        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-        if (!dateRegex.test(exportStartDate) || !dateRegex.test(exportEndDate)) {
-          Alert.alert('ผิดพลาด', 'รูปแบบวันที่ไม่ถูกต้อง กรุณาใช้รูปแบบ YYYY-MM-DD');
-          setIsExporting(false);
-          return;
-        }
-        if (exportStartDate > exportEndDate) {
-          Alert.alert('ผิดพลาด', 'วันที่เริ่มต้นต้องไม่มากกว่าวันที่สิ้นสุด');
-          setIsExporting(false);
-          return;
-        }
-        startDate = exportStartDate;
-        endDate = exportEndDate;
-      }
-      // type === 'all' will keep startDate and endDate as null
-
-      await exportDatabaseToJSON(startDate, endDate);
+      await exportDatabaseFile();
       setExportModalVisible(false);
     } catch (error) {
       console.error('Export error:', error);
@@ -524,59 +623,16 @@ export default function SettingsScreen() {
       <View style={styles.modalOverlay}>
         <View style={styles.modalContainer}>
           <Text style={styles.modalTitle}>📦 Export Database</Text>
-          <Text style={styles.modalSubTitle}>เลือกช่วงวันที่ที่ต้องการ Export</Text>
+          <Text style={styles.modalSubTitle}>ต้องการ Export ฐานข้อมูลทั้งหมดใช่หรือไม่?</Text>
 
           {/* ปุ่ม Export ทั้งหมด */}
           <TouchableOpacity
             style={[styles.exportOptionButton, styles.exportAllButton]}
-            onPress={() => handleExport('all')}
+            onPress={handleExport}
             disabled={isExporting}
           >
             <Ionicons name="cloud-download" size={20} color="#fff" />
-            <Text style={styles.exportOptionText}>Export ทั้งหมด</Text>
-          </TouchableOpacity>
-
-          {/* ปุ่ม Export วันนี้ */}
-          <TouchableOpacity
-            style={[styles.exportOptionButton, styles.exportTodayButton]}
-            onPress={() => handleExport('today')}
-            disabled={isExporting}
-          >
-            <Ionicons name="today" size={20} color="#fff" />
-            <Text style={styles.exportOptionText}>Export วันนี้</Text>
-          </TouchableOpacity>
-
-          {/* ช่องกรอกวันที่ */}
-          <View style={styles.dateInputContainer}>
-            <Text style={styles.dateLabel}>ตั้งแต่วันที่:</Text>
-            <TextInput
-              style={styles.dateInput}
-              placeholder="YYYY-MM-DD"
-              value={exportStartDate}
-              onChangeText={setExportStartDate}
-              keyboardType="default"
-            />
-          </View>
-
-          <View style={styles.dateInputContainer}>
-            <Text style={styles.dateLabel}>ถึงวันที่:</Text>
-            <TextInput
-              style={styles.dateInput}
-              placeholder="YYYY-MM-DD"
-              value={exportEndDate}
-              onChangeText={setExportEndDate}
-              keyboardType="default"
-            />
-          </View>
-
-          {/* ปุ่ม Export ตามวันที่เลือก */}
-          <TouchableOpacity
-            style={[styles.exportOptionButton, styles.exportCustomButton]}
-            onPress={() => handleExport('custom')}
-            disabled={isExporting}
-          >
-            <Ionicons name="calendar" size={20} color="#fff" />
-            <Text style={styles.exportOptionText}>Export ตามช่วงวันที่</Text>
+            <Text style={styles.exportOptionText}>ยืนยัน Export</Text>
           </TouchableOpacity>
 
           {isExporting && (
@@ -643,7 +699,7 @@ export default function SettingsScreen() {
           </View>
 
           <TouchableOpacity
-            style={[  { marginTop: 10 }]}
+            style={[{ marginTop: 10 }]}
             onPress={() => setVersionModalVisible(false)}
           >
             <Text >ปิด</Text>
@@ -662,16 +718,46 @@ export default function SettingsScreen() {
       {renderEnvironmentModal()}
       {renderExportModal()}
       {renderVersionModal()}
+      {renderClearRegistersModal()}
       <View style={styles.profileHeader}>
-        {/* Avatar จาก 2 ตัวอักษรแรก */}
-        <View style={[styles.avatarTextContainer, { backgroundColor: '#007AFF' }]}>
-          <Text style={styles.avatarText}>{machineCode}</Text>
-        </View>
-        <Text style={styles.username}>{first_name} {last_name}</Text>
-        <Text style={[styles.envHeaderText, environment === 'prod' ? styles.prodText : styles.testText]}>
-          Env: {environment === 'prod' ? 'Prod' : 'Test'}
-        </Text>
+        <View style={styles.profileContent}>
+          {/* Avatar */}
+          <View style={[styles.avatarTextContainer, { backgroundColor: '#007AFF' }]}>
+            <Text style={styles.avatarText}>{machineCode}</Text>
+          </View>
 
+          {/* Info */}
+          <View style={styles.profileInfo}>
+            <Text style={styles.username}>{first_name} {last_name}</Text>
+            <View style={[styles.envBadge, environment === 'prod' ? styles.envProdBadge : styles.envTestBadge]}>
+              <Text style={[styles.envText, environment === 'prod' ? styles.envProdText : styles.envTestText]}>
+                Env: {environment === 'prod' ? 'Prod' : 'Test'}
+              </Text>
+            </View>
+          </View>
+        </View>
+      </View>
+
+      {/* Dashboard Section: two cards side-by-side to save vertical space */}
+      <View style={styles.dashboardContainerRow}>
+        <View style={[styles.dashboardCardRow, styles.dashboardCardLeft]}>
+          <View style={styles.dashboardIconContainerRow}>
+            <Ionicons name="clipboard" size={20} color="#007AFF" />
+          </View>
+          <View style={styles.dashboardTextContainerRow}>
+            <Text style={styles.dashboardLabel}>ใบ C7</Text>
+            <Text style={styles.dashboardValue}>{registersCount}</Text>
+          </View>
+        </View>
+        <View style={[styles.dashboardCardRow, styles.dashboardCardRight]}>
+          <View style={styles.dashboardIconContainerRow}>
+            <Ionicons name="car-sport" size={20} color="#4CAF50" />
+          </View>
+          <View style={styles.dashboardTextContainerRow}>
+            <Text style={styles.dashboardLabel}>พบรถ</Text>
+            <Text style={styles.dashboardValue}>{checkInsCount}</Text>
+          </View>
+        </View>
       </View>
 
       {/* --- ส่วน List การตั้งค่า --- */}
@@ -722,20 +808,29 @@ const styles = StyleSheet.create({
   },
   profileHeader: {
     backgroundColor: '#fff',
-    paddingVertical: 24,
-    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    borderBottomColor: '#f0f0f0',
   },
-
+  profileContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  profileInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
   username: {
-    fontSize: 22,
-    fontWeight: 'bold',
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 2,
   },
 
   // SectionList
   listContent: {
-    paddingTop: 6,
+    paddingTop: 0,
     paddingHorizontal: 16,
 
   },
@@ -783,17 +878,18 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   avatarTextContainer: {
-    width: 60,
-    height: 60,
-    borderRadius: 50,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
+    backgroundColor: '#007AFF',
+    marginRight: 12,
   },
   avatarText: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 'bold',
-    color: '#fff', // สีตัวอักษรใน Avatar
+    color: '#fff',
   },
   itemValueText: {
     fontSize: 16,
@@ -858,16 +954,29 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 16,
   },
-  envHeaderText: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginTop: 4,
+  envBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+    backgroundColor: '#f0f0f0',
   },
-  testText: {
-    color: '#F57C00', // สีส้ม
+  envProdBadge: {
+    backgroundColor: '#E8F5E9',
   },
-  testText: {
-    color: '#F57C00', // สีส้ม
+  envTestBadge: {
+    backgroundColor: '#FFF3E0',
+  },
+  envText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#555',
+  },
+  envProdText: {
+    color: '#2e7d32',
+  },
+  envTestText: {
+    color: '#F57C00',
   },
   modalSubTitle: {
     fontSize: 16,
@@ -972,5 +1081,81 @@ const styles = StyleSheet.create({
   updateIdText: {
     fontSize: 12,
     maxWidth: 150,
+  },
+  // Dashboard Styles
+  dashboardContainer: {
+    padding: 16,
+    paddingBottom: 0,
+  },
+  dashboardContainerRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  dashboardCardRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    padding: 12,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  dashboardCardLeft: {
+    marginRight: 8,
+  },
+  dashboardCardRight: {
+    marginLeft: 8,
+  },
+  dashboardIconContainerRow: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#E3F2FD',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  dashboardTextContainerRow: {
+    flex: 1,
+  },
+  dashboardCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  dashboardIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#E3F2FD',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  dashboardTextContainer: {
+    flex: 1,
+  },
+  dashboardLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 4,
+  },
+  dashboardValue: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#333',
   },
 });

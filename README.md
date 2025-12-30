@@ -1,5 +1,7 @@
 # Welcome to your Expo app 👋
 
+npx expo start
+
 # ParkingCarLicenseDetection Deployment
 
 -  eas build --profile development --platform android --clear-cache

@@ -4,6 +4,7 @@ import { StyleSheet } from 'react-native';
 // import { Ionicons } from '@expo/vector-icons';
 import {
   getActiveSession,
+  getCurrentProject,
   getUnsyncedCheckIns,
   markCheckInAsSynced,
   markCheckInAsSyncedError
@@ -68,21 +69,22 @@ const CheckInSyncManager = () => {
     errorText = errorText.toLowerCase();
     console.log('errorText to check :>> ', errorText);
 
-    // ✅ เช็คด้วยทั้ง RegEx และ includes()
-    const hasKeyword =
-      errorText.includes('uid:') ||
-      errorText.includes('ซ้ำ') ||
-      errorText.includes('duplicate') ||
-      errorText.includes('already exists') ||
-      errorText.includes('already registered');
 
-    return hasKeyword;
+    return errorText.includes('duplicate') || errorText.includes('already exists');
   };
 
 
   // ✅ Ref for tracking the current unique session of the effect/timer
   const currentSyncSessionId = useRef(0);
   const timeoutIdRef = useRef(null); // ✅ Use a single ref for the timeout
+
+
+  const checkOCRConnection = (data) => {
+    if (!data.detect_plate_no && !data.detect_plate_no) {
+      return "0"
+    }
+    return "1"
+  }
 
   const syncCheckInsToServer = useCallback(async (sessionId) => {
     // console.log('syncCheckInsToServer called');
@@ -119,7 +121,9 @@ const CheckInSyncManager = () => {
     console.log("Starting check-ins sync for project:", currentProject?.project_id);
 
     try {
+      const currentProject = await getCurrentProject();
       const session = await getActiveSession();
+      console.log('currentProject :>> ', currentProject);
       // ✅ ถ้าไม่มี token (เช่นตอน logout) ให้หยุดอย่างสงบ ไม่ throw error
       if (!session?.lpr_token) {
         console.log("Check-in Sync skipped: No LprToken (user logged out).");
@@ -139,7 +143,7 @@ const CheckInSyncManager = () => {
       setTotalToUpload(unsyncedCheckIns.length); // ✅ ตั้งค่าจำนวนทั้งหมด
       console.log(`Preparing to upload ${unsyncedCheckIns.length} unsynced check-ins to server, one by one.`);
 
-      const apiUrl = `${API_URL}/lpr/registers/checkin`; // <-- ✅ เปลี่ยน API Endpoint สำหรับส่งทีละรายการ
+      const apiUrl = `${API_URL}/lpr/checkins`; // <-- ✅ เปลี่ยน API Endpoint สำหรับส่งทีละรายการ
 
       let successfulUploads = 0;
       for (const checkIn of unsyncedCheckIns) {
@@ -174,14 +178,17 @@ const CheckInSyncManager = () => {
             }
           }
 
+          const ocrConnected = checkOCRConnection(checkIn) ? '1' : '0';
+
           const formData = new FormData();
 
           formData.append('uid', checkIn.uid);
+          formData.append('local_id', checkIn.id.toString());
           formData.append('project_id', checkIn.project_id);
           formData.append('activity_id', checkIn.activity_id || 0);
           formData.append('register_id', checkIn.register_id || ''); // ถ้า register_id เป็น null/undefined ส่งเป็น empty string
-          formData.append('detect_plate_no', checkIn.detect_plate_no || checkIn.plate_no);
-          formData.append('detect_plate_province', checkIn.detect_plate_province || checkIn.plate_province);
+          formData.append('detect_plate_no', checkIn.detect_plate_no);
+          formData.append('detect_plate_province', checkIn.detect_plate_province);
           formData.append('plate_no', checkIn.plate_no || '');
           formData.append('plate_province', checkIn.plate_province || '');
           formData.append('is_manual', checkIn.is_plate_manual ? '1' : '0'); // แปลง boolean/integer เป็น string '1'/'0'
@@ -190,9 +197,10 @@ const CheckInSyncManager = () => {
           formData.append('sticker_no', checkIn.sticker_no || '');
           formData.append('note', checkIn.note || '');
           formData.append('comp_id', checkIn.comp_id || '');
+          formData.append('ocr_connected', ocrConnected);
           formData.append('lat', 0);
           formData.append('long', 0);
-          formData.append('seq_no', session.seq_no || '');
+          formData.append('seq_no', currentProject.seq_no || '');
           formData.append('printed', checkIn.printed ? '1' : '0');
           formData.append('created_at', checkIn.created_at || new Date().toISOString()); // ใช้ ISO string หรือรูปแบบที่ server ต้องการ
           formData.append('created_by', checkIn.created_by || '');
@@ -236,7 +244,9 @@ const CheckInSyncManager = () => {
           if (!response.ok) {
             const errorText = await response.text();
             // throw new Error(`Server response for uid ${checkIn.uid} not ok, status: ${response.status}, message: ${errorText}`);
-            throw new Error(errorText)
+            const err = new Error(errorText);
+            err.status = response.status;
+            throw err;
           }
           // setIsOnline(true);
           const responseData = await response.json();
@@ -245,7 +255,7 @@ const CheckInSyncManager = () => {
 
           if (responseData.status === "success") {
             console.log(`Check-in uid ${checkIn.uid} uploaded successfully. Marking as synced.`);
-            await markCheckInAsSynced(checkIn.id);
+            await markCheckInAsSynced(checkIn.id, 2);
             successfulUploads++;
             setUploadedCount(successfulUploads); // ✅ อัปเดตเคาน์เตอร์
           } else {
@@ -253,13 +263,13 @@ const CheckInSyncManager = () => {
 
             if (isDuplicateError(errorMessage)) {
               console.log(`✅ UID ${checkIn.uid} already exists (from response). Marking as synced.`);
-              await markCheckInAsSynced(checkIn.id);
+              await markCheckInAsSynced(checkIn.id, 2);
               successfulUploads++;
               setUploadedCount(successfulUploads);
             } else {
               console.log(`Server reported an error for check-in uid ${checkIn.uid}:`, errorMessage);
               setSyncError(`บางรายการมีปัญหา: ${errorMessage.substring(0, 50)}...`);
-              await markCheckInAsSyncedError(checkIn.id, errorMessage);
+              await markCheckInAsSyncedError(checkIn.id, errorMessage, 4);
             }
           }
         } catch (itemError) {
@@ -267,15 +277,23 @@ const CheckInSyncManager = () => {
           console.log(`Failed to upload check-in uid ${checkIn.uid}:`, errorMsg);
           console.log('itemError message :>> ', itemError);
           console.log('isDuplicateError(errorMessage) :>> ', isDuplicateError(errorMsg));
+
+          let syncStatus = 3;
+          console.log('itemError.status :>> ', itemError.status);
+          if (itemError.status) {
+            if (itemError.status >= 400 && itemError.status < 500) syncStatus = 4;
+            else if (itemError.status >= 500) syncStatus = 3;
+          }
+
           // ✅ ตรวจสอบว่าเป็น error ซ้ำหรือไม่
           if (isDuplicateError(errorMsg)) {
             console.log(`✅ UID ${checkIn.uid} already exists on server. Marking as synced.`);
-            await markCheckInAsSynced(checkIn.id);
+            await markCheckInAsSynced(checkIn.id, 2);
             successfulUploads++;
             setUploadedCount(successfulUploads);
           } else {
             setSyncError(`บางรายการมีปัญหา: ${errorMsg.substring(0, 50)}...`);
-            await markCheckInAsSyncedError(checkIn.id, errorMsg);
+            await markCheckInAsSyncedError(checkIn.id, errorMsg, syncStatus);
             // setIsOnline(false);
           }
         }

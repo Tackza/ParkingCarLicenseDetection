@@ -165,6 +165,12 @@ function TabLogic() {
     // 1. ป้องกันไม่ให้แอปเปลี่ยนไปหน้า scan ตามปกติ
     e.preventDefault();
 
+    // ✅ ตรวจสอบว่ามี activeProject หรือไม่
+    if (!activeProject) {
+      Alert.alert("ไม่พบกิจกรรม", "ไม่สามารถสแกนได้");
+      return;
+    }
+
     // ✅ ป้องกันการกดซ้ำ: ถ้ากำลังเปิดกล้องอยู่ ให้ return ทันที
     if (isOpeningCamera) {
       return;
@@ -221,7 +227,7 @@ function TabLogic() {
           backgroundColor: "#f8f9fa",
           borderTopWidth: 1,
           borderTopColor: "#f8f9fa",
-          height: 40,
+          height: 50,
         },
         tabBarLabelStyle: {
           fontSize: 10,
@@ -249,7 +255,7 @@ function TabLogic() {
                 ? "#3498db"
                 : "#f39c12"
               : color;
-            return <Ionicons name="home" size={22} color={iconColor} />;
+            return <Ionicons name="home" size={28} color={iconColor} />;
           },
         }}
       />
@@ -283,7 +289,7 @@ function TabLogic() {
                 ? "#3498db"
                 : "#f39c12"
               : color;
-            return <Ionicons name="camera" size={22} color={iconColor} />;
+            return <Ionicons name="camera" size={28} color={iconColor} />;
           },
           tabBarStyle: { display: "none" },
         }}
@@ -369,7 +375,7 @@ function TabLogic() {
                 ? "#3498db"
                 : "#f39c12"
               : color;
-            return <Ionicons name="person" size={22} color={iconColor} />;
+            return <Ionicons name="settings" size={28} color={iconColor} />;
           },
         }}
       />

@@ -17,6 +17,20 @@ const getDb = async () => {
 };
 
 /**
+ * 🚀 Force WAL Checkpoint (Sync WAL to DB file)
+ */
+export const checkpointDatabase = async () => {
+  const db = await getDb();
+  try {
+    // TRUNCATE mode writes all transactions from WAL to DB and truncates the WAL file
+    await db.runAsync('PRAGMA wal_checkpoint(TRUNCATE);');
+    console.log("✅ Database checkpointed successfully.");
+  } catch (error) {
+    console.error("❌ Error checkpointing database:", error);
+  }
+};
+
+/**
  * 🚀 ตั้งค่าฐานข้อมูลและตาราง
  */
 export const setupDatabase = async () => {
@@ -81,10 +95,12 @@ export const setupDatabase = async () => {
         activity1_date TEXT,
         activity2_date TEXT,
         activity1_user TEXT,
+        activity1_name varchar(100) null,
         activity2_user TEXT,
         checkin_printno INTEGER NOT NULL DEFAULT 0,
         activity1_printno INTEGER NOT NULL DEFAULT 0,
         activity2_printno INTEGER NOT NULL DEFAULT 0,
+        show_activity2 INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL,
         deleted_at TEXT
       );
@@ -112,37 +128,28 @@ export const setupDatabase = async () => {
           note TEXT,
           comp_id INTEGER NOT NULL,
           printed INTEGER NOT NULL DEFAULT 0,
-          synced INTEGER NOT NULL DEFAULT 0,
+          sync_status INTEGER NOT NULL DEFAULT 0,
           sync_at TEXT,
           error_msg TEXT,
+          ocr_connected INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
           created_by INTEGER NOT NULL
 );
 
-        -- สร้าง Index สำหรับคอลัมน์ synced เพื่อเร่งความเร็วในการค้นหาข้อมูลที่ยังไม่ถูก Sync
-        CREATE INDEX IF NOT EXISTS ix_checkins_synced ON check_ins(synced);
+        -- สร้าง Index สำหรับคอลัมน์ sync_status เพื่อเร่งความเร็วในการค้นหาข้อมูลที่ยังไม่ถูก Sync
+        CREATE INDEX IF NOT EXISTS ix_checkins_sync_status ON check_ins(sync_status);
 
         CREATE TABLE IF NOT EXISTS settings (
           key TEXT PRIMARY KEY NOT NULL,value TEXT);
 
         INSERT OR IGNORE INTO settings (key, value) VALUES ('environment', 'prod');
-
-        
      
     `);
     }
     user_version = 1;
 
-    if (user_version < 2) {
-      //   console.log("Migrating to version 2: Adding 'plate_url' to check_ins table...");
-      //   // ✅ นี่คือคำสั่งสำหรับเพิ่มคอลัมน์ใหม่
-      //   await db.execAsync(`
-      //     ALTER TABLE check_ins ADD COLUMN plate_url TEXT;
+    // 🛠️ Auto-fix: Rename synced to sync_status if needed (for dev environment)
 
-      //     -- ตั้งค่าเวอร์ชันเป็น 2
-      //     PRAGMA user_version = 2;
-      //   `);
-    }
     console.log("Database and tables are set up successfully.");
   } catch (error) {
     console.error("Error setting up database:", error);
@@ -194,12 +201,7 @@ export const getActiveSession = async () => {
   try {
     // ใช้ getFirstAsync เพราะเราต้องการแค่แถวเดียว
     const session = await db.getFirstAsync(
-      `SELECT
-         s.lpr_token,
-         u.id as userId,
-         u.username,
-         u.first_name,
-        u.last_name
+      `SELECT s.*, u.username, u.first_name, u.last_name
        FROM sessions s
        JOIN users u ON s.user_id = u.id
        ORDER BY s.created_at DESC
@@ -256,8 +258,34 @@ export const deleteSetting = async (key) => {
   }
 };
 
+const formatDateToLocalSqlite = (dateString) => {
+  if (!dateString) return null;
+  // Create Date object
+  const d = new Date(dateString);
+  if (isNaN(d.getTime())) return dateString; // Invalid date, return original
+
+  // Format to YYYY-MM-DD HH:MM:SS in Local Time
+  // Use manual formatting to ensure consistency regardless of environment timezone if possible, 
+  // but relying on system local time is usually what 'localtime' in sqlite expects.
+  // A safe way to get local YYYY-MM-DD HH:MM:SS string:
+  const pad = (n) => n < 10 ? '0' + n : n;
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const minutes = pad(d.getMinutes());
+  const seconds = pad(d.getSeconds());
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+};
+
 export const saveProjects = async (projectsData) => {
-  const db = await getDb();;
+  const db = await getDb();
+
+  if (!Array.isArray(projectsData)) {
+    console.error("saveProjects: projectsData is not an array", projectsData);
+    return;
+  }
 
   try {
     // ใช้ Transaction เพื่อให้การบันทึกข้อมูลทั้งหมดเกิดขึ้นพร้อมกัน
@@ -266,6 +294,13 @@ export const saveProjects = async (projectsData) => {
       console.log("Deleting all old projects from local DB...");
       await db.runAsync('DELETE FROM projects;');
       for (const project of projectsData) {
+
+        // Normalize Date
+        const startTime = formatDateToLocalSqlite(project.start_time);
+        const endTime = formatDateToLocalSqlite(project.end_time);
+
+        console.log(`Inserting project: ${project.project_id} - ${project.name}`);
+
         await db.runAsync(
           `INSERT INTO projects
             (project_id, activity_id, name, start_time, end_time, seq_no) 
@@ -275,14 +310,19 @@ export const saveProjects = async (projectsData) => {
             project.project_id,
             project.activity_id,
             project.name,
-            project.start_time,
-            project.end_time,
+            startTime,
+            endTime,
             project.seq_no
           ]
         );
       }
     });
     console.log(`Successfully saved ${projectsData.length} projects.`);
+
+    // ✅ ตรวจสอบข้อมูลในฐานข้อมูลหลังจากบันทึก
+    const allProjects = await db.getAllAsync('SELECT * FROM projects');
+    console.log('📊 Current projects in DB:', JSON.stringify(allProjects, null, 2));
+
   } catch (error) {
     console.error("Error saving projects:", error);
     throw error; // ส่ง error ออกไปให้ส่วนอื่นจัดการต่อ
@@ -290,15 +330,19 @@ export const saveProjects = async (projectsData) => {
 };
 
 export const getCurrentProject = async () => {
-  const db = await getDb();;
+  const db = await getDb();
   try {
-    // ใช้ getFirstAsync เพราะเราคาดหวังผลลัพธ์แค่ 1 รายการ (หรือไม่มีเลย)
-    const project = await db.getFirstAsync(
+    // 1. Try to find a currently active project
+    let project = await db.getFirstAsync(
       "SELECT * FROM projects WHERE datetime('now', 'localtime') BETWEEN start_time AND end_time LIMIT 1;"
     );
 
-    // getFirstAsync จะคืนค่า object ถ้าพบ หรือ undefined ถ้าไม่พบ
-    // เราจะแปลง undefined เป็น null เพื่อให้ใช้งานง่าย
+    if (project) {
+      console.log("Found project:", project.name);
+    } else {
+      console.log("No active project found.");
+    }
+
     return project || null;
   } catch (error) {
     console.error("Error getting current project:", error);
@@ -320,9 +364,9 @@ export const saveRegisters = async (registersData) => {
             register_id, project_id, short_code, plate_no, plate_province,
             bus_type, station_name, station_province, passenger, note,
             alert_message, checkin_date, activity1_date, activity2_date,
-            activity1_user, activity2_user, checkin_printno, activity1_printno,
-            activity2_printno, updated_at, deleted_at
-          ) VALUES (?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+            activity1_user, activity1_name, activity2_user, checkin_printno, activity1_printno,
+            activity2_printno, show_activity2, updated_at, deleted_at
+          ) VALUES (?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
           [
             reg.uid,
             reg.reg_id,          // จาก JSON
@@ -340,10 +384,12 @@ export const saveRegisters = async (registersData) => {
             reg.act1_date,       // จาก JSON
             reg.act2_date,       // จาก JSON
             reg.act1_user,       // จาก JSON
+            reg.act1_name,       // จาก JSON
             reg.act2_user,       // จาก JSON
             reg.chk_pno,         // จาก JSON
             reg.act1_pno,        // จาก JSON
             reg.act2_pno,        // จาก JSON
+            reg.show_act2 || 0,  // จาก JSON
             reg.update_date,      // จาก JSON
             reg.delete_date,      // จาก JSON
           ]
@@ -398,42 +444,33 @@ export const getLastRegisterSyncState = async () => {
 
 // ใน constants/Database.js
 
-export const getScanHistory = async (projectId, searchQuery = '') => {
-  if (!projectId) {
-    console.log("getScanHistory ถูกเรียกใช้โดยไม่มี projectId.");
+export const getScanHistory = async (id, searchQuery = '') => {
+  if (!id) {
+    console.log("getScanHistory ถูกเรียกใช้โดยไม่มี id.");
     return [];
   }
 
   const db = await getDb();
   try {
-    // 1. เริ่มต้น SQL query
-    let sql = 'SELECT * FROM check_ins WHERE project_id = ?';
-    const params = [projectId];
+    // อ่าน appMode จาก settings
+    const appMode = await getSetting('appMode');
+    const isModeOne = appMode === null ? true : appMode === 'true';
+    // เลือก field ที่จะใช้ใน WHERE
+    const field = isModeOne ? 'project_id' : 'activity_id';
+    let sql = `SELECT * FROM check_ins WHERE ${field} = ?`;
+    const params = [id];
 
-    // 2. เก็บค่า searchQuery ที่ .trim() แล้ว
     const normalizedQuery = searchQuery.trim();
-
-    // 3. ตรวจสอบว่ามีคำค้นหาหรือไม่
     if (normalizedQuery !== '') {
-      // 🔷 ถ้ามีคำค้นหา: ให้ค้นหาด้วย LIKE
       sql += ' AND plate_no LIKE ?';
       params.push(`%${normalizedQuery}%`);
     }
-
-    // 4. เพิ่มการเรียงลำดับ (ต้องมีเสมอ)
     sql += ' ORDER BY created_at DESC';
-
-    // 5. 🔷 (นี่คือส่วนที่เพิ่มเข้ามา)
-    // ถ้า "ไม่มี" คำค้นหา: ให้จำกัดผลลัพธ์แค่ 5 รายการล่าสุด
     if (normalizedQuery === '') {
       sql += ' LIMIT 5';
     }
-
-    // 6. รัน query
     const history = await db.getAllAsync(sql, params);
-
     return history;
-
   } catch (error) {
     console.error("Error getting scan history:", error);
     return [];
@@ -449,9 +486,9 @@ export const insertCheckIn = async (checkInData) => {
       `INSERT INTO check_ins (
          uid, project_id, register_id, activity_id, seq_no, detect_plate_no, detect_plate_province,
          plate_no, plate_province, is_plate_manual, photo_path, bus_type,
-         passenger, sticker_no, note, comp_id, printed, error_msg,
+         passenger, sticker_no, note, comp_id, printed, error_msg, ocr_connected,
          created_by 
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         newId, // ลบขีดกลางออกจาก ULID
         checkInData.project_id,
@@ -472,6 +509,7 @@ export const insertCheckIn = async (checkInData) => {
         // checkInData.activity_seq_no || null, // ✅ activity_seq_no ควรเป็น null ถ้าไม่มีค่า
         checkInData.printed,
         checkInData.error_msg || null,
+        checkInData.ocr_connected !== undefined ? checkInData.ocr_connected : 1, // ✅ Default to 1 if undefined
         checkInData.created_by,
       ]
     );
@@ -524,7 +562,7 @@ export const getUnsyncedCheckIns = async () => { // ต้องเป็น asy
   const db = await getDb(); // เรียก getDb()
   try {
     const rows = await db.getAllAsync( // ใช้ getAllAsync โดยตรง
-      `SELECT * FROM check_ins WHERE synced = 0;`
+      `SELECT * FROM check_ins WHERE sync_status IN (0, 3);`
     );
     return rows;
   } catch (error) {
@@ -534,12 +572,12 @@ export const getUnsyncedCheckIns = async () => { // ต้องเป็น asy
 };
 
 // ✅ ฟังก์ชัน: อัปเดต Check-in ให้เป็น Synced
-export const markCheckInAsSynced = async (checkInId) => { // ✅ ต้องเป็น async function
+export const markCheckInAsSynced = async (checkInId, status = 2) => { // ✅ ต้องเป็น async function
   const db = await getDb(); // ✅ ใช้ getDb()
   try {
     const result = await db.runAsync( // ✅ ใช้ runAsync แทน db.transaction
-      `UPDATE check_ins SET synced = 1, sync_at = datetime('now', 'localtime') WHERE id = ?;`,
-      [checkInId]
+      `UPDATE check_ins SET sync_status = ?, sync_at = datetime('now', 'localtime') WHERE id = ?;`,
+      [status, checkInId]
     );
     return result;
   } catch (error) {
@@ -548,12 +586,12 @@ export const markCheckInAsSynced = async (checkInId) => { // ✅ ต้องเ
   }
 };
 
-export const markCheckInAsSyncedError = async (checkInId, errorMsg) => {
+export const markCheckInAsSyncedError = async (checkInId, errorMsg, status = 3) => {
   const db = await getDb(); // ✅ ใช้ getDb()
   try {
     const result = await db.runAsync( // ✅ ใช้ runAsync แทน db.transaction
-      `UPDATE check_ins SET synced = 2, error_msg = ? WHERE uid = ?;`,
-      [errorMsg, checkInId]
+      `UPDATE check_ins SET sync_status = ?, error_msg = ? WHERE id = ?;`,
+      [status, errorMsg, checkInId]
     );
     return result;
   } catch (error) {
@@ -621,5 +659,82 @@ export const getAllDataForExport = async (startDate = null, endDate = null) => {
   } catch (error) {
     console.error("Error getting all data for export:", error);
     throw error;
+  }
+};
+
+export const clearRegistersTable = async () => {
+  const db = await getDb();
+  try {
+    await db.runAsync('DELETE FROM registers;');
+    console.log("All data in registers table cleared.");
+  } catch (error) {
+    console.error("Error clearing registers table:", error);
+    throw error;
+  }
+};
+
+export const getRegistersCount = async () => {
+  const db = await getDb();
+  try {
+    const result = await db.getFirstAsync('SELECT COUNT(*) as count FROM registers');
+    return result.count;
+  } catch (error) {
+    console.error("Error getting registers count:", error);
+    return 0;
+  }
+};
+
+/**
+ * ดึงจำนวน check_ins โดยเลือก field ตามค่า appMode
+ * ถ้า isModeOne === true จะกรองด้วย project_id = ?
+ * ถ้า isModeOne === false จะกรองด้วย activity_id = ?
+ * @param {number} id (project_id หรือ activity_id ขึ้นกับโหมด)
+ */
+export const getCheckInsCountForId = async (id) => {
+  if (id === undefined || id === null) return 0;
+  const db = await getDb();
+  try {
+    const appMode = await getSetting('appMode');
+    const isModeOne = appMode === null ? true : appMode === 'true';
+    const field = isModeOne ? 'project_id' : 'activity_id';
+    // Build SQL safely by using selected field name and parameterized id
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ?`;
+    const res = await db.getFirstAsync(sql, [id]);
+    return res?.count || 0;
+  } catch (error) {
+    console.error('Error getting checkins count for id with appMode:', error);
+    return 0;
+  }
+};
+
+/**
+ * ดึงจำนวน registers ตาม project_id หรือ activity_id ขึ้นกับค่า appMode
+ * ถ้าไม่มี currentId จะคืนค่า 0
+ * @param {number} currentId
+ */
+export const getRegistersCountForId = async (currentId) => {
+  if (!currentId && currentId !== 0) return 0;
+  const db = await getDb();
+  try {
+    const appMode = await getSetting('appMode');
+    const isModeOne = appMode === null ? true : appMode === 'true';
+    // registers table only stores project_id; when in activity mode we need to join projects to filter by activity_id
+    if (isModeOne) {
+      const res = await db.getFirstAsync('SELECT COUNT(*) as count FROM registers WHERE project_id = ?', [currentId]);
+      return res?.count || 0;
+    } else {
+      // activity mode: find all project_ids that have this activity_id then count registers with those project_ids
+      const projectRows = await db.getAllAsync('SELECT project_id FROM projects WHERE activity_id = ?', [currentId]);
+      const projectIds = projectRows.map(r => r.project_id);
+      if (projectIds.length === 0) return 0;
+      // build placeholders
+      const placeholders = projectIds.map(() => '?').join(',');
+      const sql = `SELECT COUNT(*) as count FROM registers WHERE project_id IN (${placeholders})`;
+      const res = await db.getFirstAsync(sql, projectIds);
+      return res?.count || 0;
+    }
+  } catch (error) {
+    console.error('Error getting registers count for id:', error);
+    return 0;
   }
 };

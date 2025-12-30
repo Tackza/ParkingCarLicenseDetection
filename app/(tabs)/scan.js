@@ -28,6 +28,7 @@ import DropDownPicker from 'react-native-dropdown-picker';
 import ImageZoom from 'react-native-image-pan-zoom';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import LicensePlateDisplay from '../../components/LicensePlateDisplay';
+import Receipt from '../../components/Receipt';
 import { findRegisterByPlate, getActiveSession, getSetting, insertCheckIn } from '../../constants/Database';
 import { THAI_PROVINCES } from '../../constants/provinces';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
@@ -71,6 +72,7 @@ export default function ScanScreen() {
   const [tempLicensePlate, setTempLicensePlate] = useState('');
   const [tempProvince, setTempProvince] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSaveOptionModalVisible, setIsSaveOptionModalVisible] = useState(false); // ✅ State สำหรับ Modal เลือกการบันทึก
   const { activeProject } = useProject();
   const [originalDetectedPlate, setOriginalDetectedPlate] = useState(''); // เก็บค่าที่สแกนได้ครั้งแรก
   const [originalDetectedProvince, setOriginalDetectedProvince] = useState(''); // เก็บค่าที่สแกนได้ครั้งแรก
@@ -80,6 +82,7 @@ export default function ScanScreen() {
   const [sessionData, setSessionData] = useState(null);
   const { isModeOne } = useMode();
   const { environment } = useEnvironment();
+  const [ocrConnected, setOcrConnected] = useState(1); // ✅ เพิ่ม state สำหรับเก็บสถานะ OCR
 
   const API_URL = environment === 'prod' ?
     "https://mbus.dhammakaya.network/api" :
@@ -124,6 +127,7 @@ export default function ScanScreen() {
     setIsVerified(false);
     setFoundRegisterData(null); // เคลียร์ข้อมูล C7 เก่าทุกครั้งที่สแกนใหม่
     setIsManualEdit(false); // รีเซ็ตสถานะการแก้ไข
+    setOcrConnected(1); // ✅ รีเซ็ตสถานะ OCR เป็น 1 (Connected) ก่อนเริ่ม
 
     try {
       const formData = new FormData();
@@ -153,8 +157,13 @@ export default function ScanScreen() {
       const detectedPlate = data.license_plate || '';
       const detectedProvince = data.province || '';
 
-      setOriginalDetectedPlate(detectedPlate);
-      setOriginalDetectedProvince(detectedProvince);
+      // เก็บค่า OCR ต้นฉบับไว้ครั้งเดียวเท่านั้น (ไม่ให้ถูกเขียนทับ)
+      if (!originalDetectedPlate) {
+        setOriginalDetectedPlate(detectedPlate);
+      }
+      if (!originalDetectedProvince) {
+        setOriginalDetectedProvince(detectedProvince);
+      }
       console.log('detectedPlate :>> ', detectedPlate);
       console.log('detectedProvince :>> ', detectedProvince);
 
@@ -202,7 +211,7 @@ export default function ScanScreen() {
         // Server ตอบกลับมา แต่เป็นสถานะ Error (เช่น 4xx, 5xx)
         console.log('Server error response:', error.response.status, error.response.data);
         openEditModal(null, null);
-        Alert.alert('ข้อผิดพลาดจากเซิร์ฟเวอร์', error.response.data.message || 'ไม่สามารถตรวจจับทะเบียนรถได้');
+        // Alert.alert('ข้อผิดพลาดจากเซิร์ฟเวอร์', error.response.data.message || 'ไม่สามารถตรวจจับทะเบียนรถได้');
       } else if (error.request) {
         // Request ถูกส่งไปแล้ว แต่ไม่มี response กลับมา (เช่น ไม่มีเน็ต, Server ไม่ตอบ)
         console.log('No response received:', error.request);
@@ -210,11 +219,13 @@ export default function ScanScreen() {
         //   'ไม่มีการเชื่อมต่ออินเทอร์เน็ต',
         //   'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ตรวจจับทะเบียนรถได้ กรุณาตรวจสอบการเชื่อมต่อ หรือกรอกข้อมูลเอง'
         // );
+        setOcrConnected(0); // ✅ Set OCR status to 0 (Disconnected)
         openEditModal(null, null);
       } else {
         // Error อื่นๆ
         console.log('Axios Error:', error.message);
         Alert.alert('ข้อผิดพลาด', error.message || 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ');
+        setOcrConnected(0); // ✅ Set OCR status to 0 (Disconnected) for other errors too just in case
         openEditModal(null, null);
       }
     } finally {
@@ -255,31 +266,22 @@ export default function ScanScreen() {
 
 
 
-  const handlePrintAndSave = async () => {
-    if (isSubmitting || !activeProject) return;
-    // --- Validation ---
-    if (!licensePlate.trim() || !province || !vehicleType) {
-      Alert.alert('ข้อมูลไม่ครบ', 'กรุณากรอกข้อมูลให้ครบถ้วน');
-      return;
-    }
-
-
-    // --- Validation เพิ่มเติมสำหรับประเภทรถ 'อื่นๆ' ---
-    if (vehicleType === 'Other' && !customVehicleType.trim()) {
-      Alert.alert('ข้อมูลไม่ครบ', 'กรุณาระบุประเภทรถในช่อง "โปรดระบุประเภทรถ"');
-      return;
-    }
-
-
-    if (!stickerNumber.trim() && !isModeOne) {
-      Alert.alert('ข้อมูลไม่ครบ', 'กรุณากรอกหมายเลขสติกเกอร์');
-      return;
-    }
-
+  // ✅ ฟังก์ชันสำหรับดำเนินการบันทึก (แยกออกมาเพื่อให้เรียกใช้ได้จากหลายจุด)
+  const executeSave = async (shouldPrint) => {
+    setIsSaveOptionModalVisible(false); // ปิด Modal ก่อน
     setIsSubmitting(true);
 
     try {
-      if (!sessionData || !sessionData.userId) { // ✅ ใช้ sessionData จาก state
+      let currentSession = sessionData;
+
+      // ถ้าไม่มี sessionData ใน state ให้ลองดึงใหม่จาก Database
+      if (!currentSession || !currentSession.user_id) {
+        console.log('Session data missing in state, fetching again...');
+        currentSession = await getActiveSession();
+        setSessionData(currentSession); // อัปเดต state ด้วย
+      }
+
+      if (!currentSession || !currentSession.user_id) { // ✅ ใช้ currentSession แทน
         throw new Error("ไม่พบข้อมูลผู้ใช้งาน, กรุณาเข้าสู่ระบบใหม่");
       }
 
@@ -309,9 +311,10 @@ export default function ScanScreen() {
         sticker_no: isModeOne ? "" : stickerNumber, // ✅ เพิ่ม sticker_no จาก state
         comp_id: machineCode, // ✅ comp_id ควรมาจาก machineCode ที่คุณดึงมา
         seq_no: activeProject?.seq_no || null, // ✅ seq_no มาจาก activeProject
-        printed: isVerified ? 1 : 0, // ✅ `printed` ตอนนี้เปลี่ยนเป็น 1 ถ้า verified, 0 ถ้ายังไม่ verified
+        printed: shouldPrint ? 1 : 0, // ✅ ใช้ shouldPrint แทน isVerified
         error_msg: '',
-        created_by: sessionData.userId,
+        ocr_connected: ocrConnected, // ✅ ส่งค่า ocrConnected ไปบันทึก
+        created_by: currentSession.user_id,
         // synced และ sync_at ไม่ต้องใส่ตรงนี้ เพราะมี DEFAULT values และจะถูก update ตอน sync
       };
       console.log('newCheckInData :>> ', newCheckInData);
@@ -341,7 +344,7 @@ export default function ScanScreen() {
       setShowReceipt(true);
       // รอให้ Receipt component render ข้อมูลใหม่เสร็จก่อน
 
-      if (isVerified) {
+      if (shouldPrint) {
         setTimeout(async () => {
           await generateAndPrint();
         }, 500);
@@ -354,6 +357,40 @@ export default function ScanScreen() {
       console.error('Failed to save check-in data:', error);
       Alert.alert('ข้อผิดพลาด', error.message || 'ไม่สามารถบันทึกข้อมูลได้');
       setIsSubmitting(false);
+    }
+  };
+
+  const handlePrintAndSave = async () => {
+    if (isSubmitting || !activeProject) return;
+    // --- Validation ---
+    if (!licensePlate.trim() || !province || !vehicleType) {
+      Alert.alert('ข้อมูลไม่ครบ', 'กรุณากรอกข้อมูลให้ครบถ้วน');
+      return;
+    }
+    console.log('handlePrintAndSave1');
+
+
+    // --- Validation เพิ่มเติมสำหรับประเภทรถ 'อื่นๆ' ---
+    if (vehicleType === 'Other' && !customVehicleType.trim()) {
+      Alert.alert('ข้อมูลไม่ครบ', 'กรุณาระบุประเภทรถในช่อง "โปรดระบุประเภทรถ"');
+      return;
+    }
+    console.log('handlePrintAndSave2');
+
+
+    if (!stickerNumber.trim() && !isModeOne) {
+      Alert.alert('ข้อมูลไม่ครบ', 'กรุณากรอกหมายเลขสติกเกอร์');
+      return;
+    }
+    console.log('handlePrintAndSave3');
+
+    // ✅ Logic ใหม่: ถ้าเป็นโหมดธุดงค์ (!isModeOne) และเจอ C7 ให้แสดง Modal เลือก
+    if (!isModeOne && foundRegisterData) {
+      setIsSaveOptionModalVisible(true);
+    } else {
+      // กรณีอื่นๆ (โหมดทั่วไป หรือ ไม่เจอ C7) ทำงานตามปกติ
+      // ถ้าเจอ C7 (isVerified=true) ก็พิมพ์, ถ้าไม่เจอก็ไม่พิมพ์
+      executeSave(isVerified);
     }
   };
 
@@ -435,6 +472,13 @@ export default function ScanScreen() {
   };
 
   const handleSaveChanges = async () => { // ทำให้เป็น async
+
+    //varidate inputs
+    if (!tempLicensePlate?.trim() || !tempProvince?.trim()) {
+      Alert.alert('ข้อมูลไม่ครบ', 'กรุณากรอกเลขทะเบียนและจังหวัดให้ครบถ้วน');
+      return;
+    }
+
     // 1. ตั้งค่า state ว่ามีการแก้ไขด้วยมือเกิดขึ้นแล้ว
     setIsManualEdit(true);
 
@@ -470,6 +514,7 @@ export default function ScanScreen() {
         console.log('✅ C7 Record Found:', foundRegister);
 
         const seqNo = activeProject?.seq_no;
+        console.log('seqNo :>> ', seqNo);
         let duplicateField = null; // ตัวแปรเก็บชื่อ field ที่ซ้ำ
         let hasDuplicate = false;
 
@@ -535,34 +580,7 @@ export default function ScanScreen() {
     }
   };
 
-  // ฟังก์ชันสำหรับแปลง 'ผู้ใหญ่|เด็ก|พระ|สามเณร' เป็นข้อความที่อ่านง่าย
-  const formatPassengerInfo = (passengerString) => {
-    if (!passengerString || typeof passengerString !== 'string') {
-      return '-- คน'; // ค่า default ถ้าไม่มีข้อมูล
-    }
-    const parts = passengerString.split('|');
-    if (parts.length < 4) {
-      return '-- คน';
-    }
 
-    let textCount = '';
-
-    const people = parseInt(parts[0] || 0) + parseInt(parts[1] || 0); // รวมผู้ใหญ่กับเด็ก
-    const monks = parseInt(parts[2] || 0);
-    const novices = parseInt(parts[3] || 0);
-
-
-    if (people > 0) {
-      textCount += `${people}คน`;
-    }
-    if (monks > 0) {
-      textCount += `/${monks}รูป`;
-    }
-    if (novices > 0) {
-      textCount += `/สณ${novices}รูป`;
-    }
-    return textCount || '-- คน';
-  };
 
   return (
     <View style={styles.container}>
@@ -683,7 +701,7 @@ export default function ScanScreen() {
                     ) : (
                       <Text style={styles.confirmButtonText}>
                         {/* ใช้ Ternary Operator เพื่อเปลี่ยนข้อความตาม isVerified */}
-                        {isVerified ? 'บันทึกและพิมพ์' : 'บันทึก'}
+                        {isVerified ? 'บันทึก' : 'บันทึก'}
                       </Text>
                     )}
                   </TouchableOpacity>)}
@@ -693,86 +711,24 @@ export default function ScanScreen() {
             {/* Hidden Receipt for printing */}
             {showReceipt && (
               <View style={{ position: 'absolute', left: -10000 }}>
-                {/* <View style={{ position: 'absolute' }}> */}
-                <ViewShot ref={receiptRef} style={styles.receiptContainer}>
-                  <Text style={styles.textCenter}>! เอกสารสำคัญ ห้ามทำหาย !</Text>
-
-                  <View style={[styles.receiptRow, { marginTop: 1, marginBottom: 1 }]}>
-                    <Text style={styles.receiptMetaSmall}>#{sessionData?.userId || '--'}</Text>
-
-                    <Text style={styles.receiptMetaSmall}>{foundRegisterData?.register_id || '--'}</Text>
-                  </View>
-
-                  <Text style={styles.receiptTitle}>ใบลงทะเบียนรถ</Text>
-                  {/* ✅ ดึงชื่อโปรเจกต์มาแสดง */}
-                  <Text style={styles.receiptSubtitle}>{activeProject?.name || 'ไม่พบชื่อโปรเจกต์'}</Text>
-
-                  <View style={styles.divider} />
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>ทะเบียนรถ:</Text>
-                    <Text style={styles.receiptValue}>{licensePlate}</Text>
-                  </View>
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>จังหวัด:</Text>
-                    <Text style={styles.receiptValue}>{province}</Text>
-                  </View>
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>ประเภทรถ:</Text>
-                    <Text style={styles.receiptValue}>
-                      {vehicleType === 'Other' ? customVehicleType : vehicleType}
-                    </Text>
-                  </View>
-
-                  {/* ✅ ดึงข้อมูลจาก C7 (foundRegisterData) ถ้ามี */}
-                  {foundRegisterData && (
-                    <>
-
-                      <View style={styles.receiptRow}>
-                        <Text style={styles.receiptLabel}>จุดออกรถ:</Text>
-                        <Text style={styles.receiptValue}>{foundRegisterData.station_name || '--'}</Text>
-                      </View>
-                      <View style={styles.receiptRow}>
-                        <Text style={styles.receiptLabel}>จังหวัด:</Text>
-                        <Text style={styles.receiptValue}>{foundRegisterData.station_province || '--'}</Text>
-                      </View>
-                      <View style={styles.receiptRow}>
-                        <Text style={styles.receiptLabel}>ผู้โดยสาร:</Text>
-                        <Text style={styles.receiptValue}>{formatPassengerInfo(foundRegisterData.passenger)}</Text>
-                      </View>
-                    </>
-                  )}
-
-                  {/* <View style={styles.divider} />
-
-                
-                  {stickerNumber && (
-                    <View style={styles.receiptRow}>
-                      <Text style={styles.receiptLabel}>สติกเกอร์:</Text>
-                      <Text style={styles.receiptValue}>{stickerNumber}</Text>
-                    </View>
-                  )} */}
-
-                  <View style={styles.divider} />
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>เวลาลงทะเบียน:</Text>
-                    <Text style={styles.receiptValue}>
-                      {new Date().toLocaleDateString('th-TH-u-ca-buddhist', {
-                        year: '2-digit', month: '2-digit', day: '2-digit',
-                        hour: '2-digit', minute: '2-digit',
-                      })}
-                    </Text>
-                  </View>
-
-                  {/* <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>รหัสยืนยัน:</Text>
-                    <Text style={styles.receiptValue}>{foundRegisterData?.register_id || '--'}</Text>
-                  </View> */}
-
-                  {/* <View style={styles.divider} /> */}
+                <ViewShot ref={receiptRef} style={{ backgroundColor: '#fff' }}>
+                  <Receipt
+                    machineCode={machineCode || '--'}
+                    registerId={foundRegisterData?.register_id || '--'}
+                    projectName={activeProject?.name}
+                    showActivity2={foundRegisterData?.show_activity2}
+                    licensePlate={licensePlate}
+                    province={province}
+                    vehicleType={vehicleType === 'Other' ? customVehicleType : vehicleType}
+                    stationName={foundRegisterData?.station_name}
+                    stationProvince={foundRegisterData?.station_province}
+                    passenger={foundRegisterData?.passenger}
+                    date={new Date().toLocaleDateString('th-TH-u-ca-buddhist', {
+                      year: 'numeric', month: '2-digit', day: 'numeric',
+                      hour: '2-digit', minute: '2-digit',
+                    })}
+                    register={foundRegisterData}
+                  />
                 </ViewShot>
               </View>
             )}
@@ -805,6 +761,47 @@ export default function ScanScreen() {
 
       {/* เพิ่ม Modal นี้เข้าไปในส่วนท้ายของ return */}
       <Modal
+        visible={isSaveOptionModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setIsSaveOptionModalVisible(false)}
+      >
+        <View style={styles.actionModalContainer}>
+          <View style={styles.actionModalContent}>
+            <Text style={styles.actionModalTitle}>พบข้อมูลในระบบ (C7)</Text>
+            <Text style={styles.actionModalSubtitle}>กรุณาเลือกรูปแบบการบันทึก</Text>
+
+            <View style={styles.actionButtonContainer}>
+              <TouchableOpacity
+                style={[styles.actionButton, styles.saveButton]}
+                onPress={() => executeSave(false)}
+              >
+                <Ionicons name="save-outline" size={40} color="#fff" />
+                <Text style={styles.actionButtonText}>บันทึก</Text>
+                <Text style={styles.actionButtonSubText}>(ไม่พิมพ์)</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionButton, styles.printButton]}
+                onPress={() => executeSave(true)}
+              >
+                <Ionicons name="print-outline" size={40} color="#fff" />
+                <Text style={styles.actionButtonText}>บันทึกและพิมพ์</Text>
+                {/* <Text style={styles.actionButtonSubText}>(พิมพ์ใบเสร็จ)</Text> */}
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.closeActionModalButton}
+              onPress={() => setIsSaveOptionModalVisible(false)}
+            >
+              <Text style={styles.closeActionModalText}>ยกเลิก</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
         visible={isEditModalVisible}
         transparent={true}
         animationType="fade"
@@ -836,8 +833,8 @@ export default function ScanScreen() {
                 placeholder="เลือกจังหวัด"
                 listMode="MODAL" // MODAL mode is better for modals
                 style={[styles.dropdown, { minHeight: 60 }]}
-                textStyle={{ fontSize: 26 }}
-                placeholderStyle={{ fontSize: 26, color: '#999' }}
+                textStyle={{ fontSize: 20 }}
+                placeholderStyle={{ fontSize: 20, color: '#999' }}
                 listItemLabelStyle={{ fontSize: 26 }}
                 searchTextInputStyle={{ fontSize: 26 }} // เพิ่มขนาดตัวหนังสือตอนค้นหา
               />
@@ -1051,13 +1048,13 @@ const styles = StyleSheet.create({
     width: 300,
   },
   receiptTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: 22,
+    // fontWeight: 'bold',
     textAlign: 'center',
     marginBottom: 5,
   },
   receiptSubtitle: {
-    fontSize: 16,
+    fontSize: 19,
     textAlign: 'center',
     marginBottom: 15,
   },
@@ -1069,23 +1066,20 @@ const styles = StyleSheet.create({
   receiptRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start', // ให้จัดชิดบนทั้งคู่
-    marginVertical: 4, // เพิ่มระยะห่างระหว่างบรรทัดนิดหน่อย
+    marginVertical: 0,
   },
   receiptLabel: {
     fontSize: 18,
     fontFamily: 'Sarabun-Regular',
-    marginTop: 0,
-    flex: 1, // ให้พื้นที่ label บ้าง
+    paddingTop: 3,
+    flex: 2, // Allow label to take space but shrink if needed
   },
   receiptValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 22,
     fontFamily: 'Sarabun-Regular',
-    marginTop: 0, // เอา margin บนออกเพื่อให้ตรงกับ Label
-    flex: 2, // ให้พื้นที่มากกว่า Label และให้ wrap ได้
-    textAlign: 'right', // จัดชิดขวา
-    flexWrap: 'wrap', // ให้ตัดบรรทัดได้
+    flex: 3, // Allow value to take remaining space
+    textAlign: 'right', // Align text to right
+    flexWrap: 'wrap', // Allow wrapping
   },
   formContainer: {
     flex: 1,
@@ -1109,7 +1103,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#e9ecef',
   },
   inputGroup: {
-    marginBottom: 5,
+    marginBottom: 15,
   },
   label: {
     fontSize: 18,
@@ -1121,7 +1115,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8f9fa',
     borderRadius: 12,
     padding: 15,
-    fontSize: 24,
+    fontSize: 20,
     letterSpacing: 2,
     borderWidth: 1,
     borderColor: '#e9ecef',
@@ -1131,10 +1125,10 @@ const styles = StyleSheet.create({
     borderColor: '#e9ecef',
   },
   receiptMetaSmall: {
-    fontSize: 20,
+    fontSize: 18,
     color: '#555',
+    // fontWeight: 'bold',
     fontFamily: 'Sarabun-Regular',
-    fontWeight: 'bold',
   },
 
   // --- Modal Styles ---
@@ -1321,5 +1315,99 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: 'bold',
     marginLeft: 10,
+  },
+  // --- Action Modal Styles ---
+  actionModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)', // พื้นหลังทึบแสง
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  actionModalContent: {
+    width: '90%',
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 30,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  actionModalTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  actionModalSubtitle: {
+    fontSize: 16,
+    color: '#7f8c8d',
+    marginBottom: 30,
+    textAlign: 'center',
+  },
+  actionButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 20,
+  },
+  actionButton: {
+    flex: 1,
+    paddingVertical: 25,
+    paddingHorizontal: 10,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  saveButton: {
+    backgroundColor: '#3498db', // สีฟ้า
+  },
+  printButton: {
+    backgroundColor: '#27ae60', // สีเขียว
+  },
+  actionButtonText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  actionButtonSubText: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 14,
+    marginTop: 5,
+    textAlign: 'center',
+  },
+  closeActionModalButton: {
+    marginTop: 10,
+    padding: 15,
+  },
+  closeActionModalText: {
+    color: '#e74c3c',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  activity2Container: {
+    borderWidth: 2,
+    borderColor: '#000',
+    padding: 5,
+    marginVertical: 5,
+    alignSelf: 'center',
+    borderRadius: 5,
+    width: '60%',
+  },
+  activity2Text: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    textAlign: 'center',
   },
 });

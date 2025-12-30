@@ -32,34 +32,7 @@ const formatPassengerInfo = (passengerString) => {
   return textCount || '-- คน';
 };
 
-const convertError = (data) => {
-  try {
-    // 1. ดึง String ต้นทาง
-    const errorMsgString = data.error_msg;
-    // console.log('errorMsgString :>> ', errorMsgString);
 
-    // 2. ค้นหาตำแหน่งเริ่มต้นของ JSON (ตัว '{' แรก)
-    const jsonStartIndex = errorMsgString.indexOf('{');
-
-    // 3. ตัดเอาเฉพาะส่วนที่เป็น String JSON
-    // (เราสมมติว่ามันจบที่ตัว '}' สุดท้าย)
-    const jsonString = errorMsgString.substring(jsonStartIndex);
-
-    // 4. แปลง String JSON ให้เป็น Object
-    const innerErrorObject = JSON.parse(jsonString);
-
-    // 5. ดึงค่า message ที่ต้องการ
-    const finalMessage = innerErrorObject.message;
-
-    // console.log('ข้อความ Error ที่แท้จริง:');
-    // console.log(finalMessage);
-    // ผลลัพธ์: "uid: 3a322c97fb194d7a9cd7dfc0c6bb47af ซ้ำในระบบ"
-    return finalMessage;
-
-  } catch (e) {
-    // console.error("ไม่สามารถแกะ JSON จาก error_msg ได้:", e);
-  }
-}
 
 // 1. รับ props ทั้งหมดที่จำเป็นเข้ามา: item, index, และฟังก์ชัน 2 ตัว
 const HistoryItem = ({ item, index, numberPlate, openImageModal }) => {
@@ -73,9 +46,11 @@ const HistoryItem = ({ item, index, numberPlate, openImageModal }) => {
 
   return (
     <View style={styles.card}>
-      <View style={styles.cornerNumber}>
-        <Text style={styles.cornerNumberText}>{item.id}</Text>
-      </View>
+      {/* <View style={styles.cornerNumber}>
+        <Text style={styles.cornerNumberText}>
+          {typeof numberPlate === 'function' ? numberPlate(index) : item.id}
+        </Text>
+      </View> */}
 
       {/* ส่วนรูปภาพ Thumbnail */}
       <View style={styles.leftContainer}>
@@ -134,19 +109,23 @@ const HistoryItem = ({ item, index, numberPlate, openImageModal }) => {
         <View style={styles.metaRow}>
           {/* ✅ ใช้ displayTime ที่ถูกประมวลผลอย่างปลอดภัยแล้ว */}
           <Text style={styles.metaText}>{displayTime}</Text>
-          <Ionicons
-            name={item.synced == 1 ? "checkmark-done" : item.synced == 0 ? "cloud-upload" : "warning-outline"}
-            size={16}
-            color={item.synced == 1 ? '#27ae60' : item.synced == 0 ? '#f39c12' : '#e74c3c'}
-          />
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {/* <Text style={styles.metaText}>สถานะ: {item.sync_status} </Text> */}
+
+
+            <Ionicons
+              name={item.sync_status == 2 ? "checkmark-done" : item.sync_status == 4 ? "warning-outline" : "cloud-upload"}
+              size={16}
+              color={item.sync_status == 2 ? '#27ae60' : item.sync_status == 4 ? '#e74c3c' : '#f39c12'}
+            />
+          </View>
         </View>
         {
-          item.error_msg && (
+          item.error_msg ? (
             <View style={styles.metaRow}>
-
-              <Text style={[styles.metaText, { color: '#e74c3c' }]}>{convertError(item)}</Text>
+              <Text style={[styles.metaText, { color: '#e74c3c' }]}>{JSON.parse(item.error_msg)?.message}</Text>
             </View>
-          )
+          ) : null
         }
 
       </View>
@@ -174,7 +153,7 @@ const styles = StyleSheet.create({
   },
   // ✅ สไตล์สำหรับ Container ด้านซ้าย
   leftContainer: {
-    alignItems: 'center', // จัดให้อยู่กึ่งกลางแนวนอน
+    alignItems: '', // จัดให้อยู่กึ่งกลางแนวนอน
     marginRight: 12,
     width: 100,
   },
@@ -194,6 +173,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
     borderWidth: 1,
     borderColor: '#eee',
+    marginVertical: 4,
   },
   cornerNumber: {
     position: 'absolute', // ทำให้ลอยออกจาก layout ปกติ
@@ -239,7 +219,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   provinceText: {
-    fontSize: 14,
+    fontSize: 16,
+    fontWeight: '700',
     color: '#666',
     marginTop: 2,
   },
@@ -249,8 +230,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#e74c3c',
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 16,
-    marginTop: 8,
+    borderRadius: 6,
+    marginTop: 0,
   },
   chipErrorText: {
     color: '#fff',
