@@ -146,11 +146,60 @@ export const setupDatabase = async () => {
      
     `);
     }
-    user_version = 1;
 
-    // 🛠️ Auto-fix: Rename synced to sync_status if needed (for dev environment)
+    // ✅ Migration to version 2: Create error_logs table
+    if (user_version < 2) {
+      console.log("Migrating to version 2: Creating error_logs table...");
+      await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS error_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        comp_id INTEGER,
+        error_type TEXT NOT NULL,
+        error_message TEXT NOT NULL,
+        error_code TEXT,
+        page_name TEXT,
+        action_name TEXT,
+        user_id INTEGER,
+        created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      );
+      `);
+      user_version = 2;
+    }
 
-    console.log("Database and tables are set up successfully.");
+    // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
+    // This handles cases where the database was created before version tracking was added
+    try {
+      const tableCheck = await db.getFirstAsync(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='error_logs';"
+      );
+
+      if (!tableCheck) {
+        console.log("⚠️ error_logs table missing, creating now...");
+        await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS error_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          comp_id INTEGER,
+          error_type TEXT NOT NULL,
+          error_message TEXT NOT NULL,
+          error_code TEXT,
+          page_name TEXT,
+          action_name TEXT,
+          user_id INTEGER,
+          created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+        );
+        `);
+        console.log("✅ error_logs table created successfully.");
+      }
+    } catch (checkError) {
+      console.error("Error checking/creating error_logs table:", checkError);
+    }
+
+    // ✅ Update database version
+    if (user_version > 0) {
+      await db.runAsync(`PRAGMA user_version = ${user_version};`);
+    }
+
+    console.log(`✅ Database version ${user_version} is ready.`);
   } catch (error) {
     console.error("Error setting up database:", error);
   }
@@ -227,6 +276,82 @@ export const clearSession = async () => {
     console.error("Error clearing sessions:", error);
   }
 };
+
+/**
+ * 🚀 บันทึก Error Log
+ * @param {object} errorData - ข้อมูล error ที่ต้องการบันทึก
+ * @param {number} errorData.comp_id - รหัสเครื่อง
+ * @param {string} errorData.error_type - ประเภท error (OCR_TIMEOUT, API_ERROR, DATABASE_ERROR, etc)
+ * @param {string|object|Error} errorData.error_message - ข้อความ error (รองรับทุก type)
+ * @param {string|number} errorData.error_code - error code เช่น ECONNABORTED, 404, 500
+ * @param {string} errorData.page_name - หน้าที่เกิด error
+ * @param {string} errorData.action_name - action ที่เกิด error
+ * @param {number} errorData.user_id - user_id ที่เกิด error (optional)
+ */
+export const insertErrorLog = async (errorData) => {
+  const db = await getDb();
+  try {
+    // ✅ แปลง error_message ให้เป็น string เสมอ
+    let errorMessage = '';
+    if (errorData.error_message) {
+      if (typeof errorData.error_message === 'string') {
+        errorMessage = errorData.error_message;
+      } else if (errorData.error_message instanceof Error) {
+        // ถ้าเป็น Error object ให้เอา message และ stack
+        errorMessage = errorData.error_message.message || errorData.error_message.toString();
+        if (errorData.error_message.stack) {
+          errorMessage += `\n${errorData.error_message.stack}`;
+        }
+      } else if (typeof errorData.error_message === 'object') {
+        // ถ้าเป็น object ให้แปลงเป็น JSON string
+        try {
+          errorMessage = JSON.stringify(errorData.error_message);
+        } catch (e) {
+          errorMessage = String(errorData.error_message);
+        }
+      } else {
+        // กรณีอื่นๆ ให้แปลงเป็น string
+        errorMessage = String(errorData.error_message);
+      }
+    }
+
+    // ✅ จำกัดความยาวของ error_message ไม่ให้เกิน 5000 ตัวอักษร (ป้องกัน overflow)
+    if (errorMessage.length > 5000) {
+      errorMessage = errorMessage.substring(0, 4997) + '...';
+    }
+
+    // ✅ แปลง error_code ให้เป็น string เสมอ
+    let errorCode = null;
+    if (errorData.error_code !== null && errorData.error_code !== undefined) {
+      errorCode = String(errorData.error_code);
+    }
+
+    const result = await db.runAsync(
+      `INSERT INTO error_logs (
+        comp_id, error_type, error_message, error_code, 
+        page_name, action_name, user_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?);`,
+      [
+        errorData.comp_id || null,
+        errorData.error_type || 'UNKNOWN_ERROR',
+        errorMessage,
+        errorCode,
+        errorData.page_name || null,
+        errorData.action_name || null,
+        errorData.user_id || null
+      ]
+    );
+    console.log('✅ Error log saved successfully:', {
+      id: result.lastInsertRowId,
+      type: errorData.error_type
+    });
+    return result;
+  } catch (error) {
+    console.error('❌ Error saving error log:', error);
+    throw error;
+  }
+};
+
 
 export const saveSetting = async (key, value) => {
   const db = await getDb();;
@@ -420,13 +545,21 @@ export const findRegisterByPlate = async (projectId, plateNo, plateProvince) => 
 };
 
 
-export const getLastRegisterSyncState = async () => {
+export const getLastRegisterSyncState = async (projectId) => {
   const db = await getDb();;
   try {
     // เรียงลำดับจาก update_date ล่าสุด และ register_id ล่าสุดเผื่อมีเวลาซ้ำกัน
-    const lastRegister = await db.getFirstAsync(
-      'SELECT updated_at, register_id FROM registers ORDER BY updated_at DESC, register_id DESC LIMIT 1;'
-    );
+    let sql = 'SELECT updated_at, register_id FROM registers';
+    const params = [];
+
+    if (projectId) {
+      sql += ' WHERE project_id = ?';
+      params.push(projectId);
+    }
+
+    sql += ' ORDER BY updated_at DESC, register_id DESC LIMIT 1;';
+
+    const lastRegister = await db.getFirstAsync(sql, params);
 
     if (lastRegister) {
       return {
@@ -454,9 +587,8 @@ export const getScanHistory = async (id, searchQuery = '') => {
   try {
     // อ่าน appMode จาก settings
     const appMode = await getSetting('appMode');
-    const isModeOne = appMode === null ? true : appMode === 'true';
     // เลือก field ที่จะใช้ใน WHERE
-    const field = isModeOne ? 'project_id' : 'activity_id';
+    const field = appMode == "true" ? 'project_id' : 'activity_id';
     let sql = `SELECT * FROM check_ins WHERE ${field} = ?`;
     const params = [id];
 
@@ -695,8 +827,7 @@ export const getCheckInsCountForId = async (id) => {
   const db = await getDb();
   try {
     const appMode = await getSetting('appMode');
-    const isModeOne = appMode === null ? true : appMode === 'true';
-    const field = isModeOne ? 'project_id' : 'activity_id';
+    const field = appMode == "true" ? 'project_id' : 'activity_id';
     // Build SQL safely by using selected field name and parameterized id
     const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ?`;
     const res = await db.getFirstAsync(sql, [id]);
@@ -717,10 +848,11 @@ export const getRegistersCountForId = async (currentId) => {
   const db = await getDb();
   try {
     const appMode = await getSetting('appMode');
-    const isModeOne = appMode === null ? true : appMode === 'true';
+    // app mode is false to dharmmakaya mode
+    // app mode is true to general mode
     // registers table only stores project_id; when in activity mode we need to join projects to filter by activity_id
-    if (isModeOne) {
-      const res = await db.getFirstAsync('SELECT COUNT(*) as count FROM registers WHERE project_id = ?', [currentId]);
+    if (appMode === 'true') {
+      const res = await db.getFirstAsync('SELECT COUNT(*) as count FROM registers WHERE project_id = ? AND deleted_at IS NULL', [currentId]);
       return res?.count || 0;
     } else {
       // activity mode: find all project_ids that have this activity_id then count registers with those project_ids
@@ -729,12 +861,92 @@ export const getRegistersCountForId = async (currentId) => {
       if (projectIds.length === 0) return 0;
       // build placeholders
       const placeholders = projectIds.map(() => '?').join(',');
-      const sql = `SELECT COUNT(*) as count FROM registers WHERE project_id IN (${placeholders})`;
+      const sql = `SELECT COUNT(*) as count FROM registers WHERE project_id IN (${placeholders}) AND deleted_at IS NULL`;
       const res = await db.getFirstAsync(sql, projectIds);
       return res?.count || 0;
     }
   } catch (error) {
     console.error('Error getting registers count for id:', error);
+    return 0;
+  }
+};
+
+/**
+ * ดึงจำนวน check_ins ที่ยังไม่ Sync (sync_status IN (0, 3)) โดยเลือก field ตามค่า appMode
+ * @param {number} id (project_id หรือ activity_id ขึ้นกับโหมด)
+ */
+export const getUnsyncedCheckInsCountForId = async (id) => {
+  if (id === undefined || id === null) return 0;
+  const db = await getDb();
+  try {
+    const appMode = await getSetting('appMode');
+    const field = appMode == "true" ? 'project_id' : 'activity_id';
+    // Count where sync_status is 0 (pending) or 3 (error)
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 3`;
+    const res = await db.getFirstAsync(sql, [id]);
+    return res?.count || 0;
+  } catch (error) {
+    console.error('Error getting unsynced checkins count for id:', error);
+    return 0;
+  }
+};
+
+/**
+ * ดึงจำนวน check_ins ที่ยังไม่ได้ส่ง (sync_status IN (0, 3)) โดยเลือก field ตามค่า appMode
+ * @param {number} id (project_id หรือ activity_id ขึ้นกับโหมด)
+ */
+export const getPendingSyncCheckInsCountForId = async (id) => {
+  if (id === undefined || id === null) return 0;
+  const db = await getDb();
+  try {
+    const appMode = await getSetting('appMode');
+    const field = appMode == "true" ? 'project_id' : 'activity_id';
+    // Count where sync_status is 0 (pending) or 3 (error)
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status IN (0, 3)`;
+    const res = await db.getFirstAsync(sql, [id]);
+    return res?.count || 0;
+  } catch (error) {
+    console.error('Error getting pending sync checkins count for id:', error);
+    return 0;
+  }
+};
+
+/**
+ * ดึงจำนวน check_ins ที่พบปัญหา (sync_status = 4) โดยเลือก field ตามค่า appMode
+ * @param {number} id (project_id หรือ activity_id ขึ้นกับโหมด)
+ */
+export const getSyncErrorCheckInsCountForId = async (id) => {
+  if (id === undefined || id === null) return 0;
+  const db = await getDb();
+  try {
+    const appMode = await getSetting('appMode');
+    const field = appMode == "true" ? 'project_id' : 'activity_id';
+    // Count where sync_status is 4 (error/problem)
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 4`;
+    const res = await db.getFirstAsync(sql, [id]);
+    return res?.count || 0;
+  } catch (error) {
+    console.error('Error getting sync error checkins count for id:', error);
+    return 0;
+  }
+};
+
+/**
+ * ดึงจำนวน check_ins ที่สำเร็จ (sync_status = 2) โดยเลือก field ตามค่า appMode
+ * @param {number} id (project_id หรือ activity_id ขึ้นกับโหมด)
+ */
+export const getSuccessCheckInsCountForId = async (id) => {
+  if (id === undefined || id === null) return 0;
+  const db = await getDb();
+  try {
+    const appMode = await getSetting('appMode');
+    const field = appMode == "true" ? 'project_id' : 'activity_id';
+    // Count where sync_status is 2 (success)
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 2`;
+    const res = await db.getFirstAsync(sql, [id]);
+    return res?.count || 0;
+  } catch (error) {
+    console.error('Error getting success checkins count for id:', error);
     return 0;
   }
 };

@@ -29,7 +29,7 @@ import ImageZoom from 'react-native-image-pan-zoom';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import LicensePlateDisplay from '../../components/LicensePlateDisplay';
 import Receipt from '../../components/Receipt';
-import { findRegisterByPlate, getActiveSession, getSetting, insertCheckIn } from '../../constants/Database';
+import { findRegisterByPlate, getActiveSession, getSetting, insertCheckIn, insertErrorLog } from '../../constants/Database';
 import { THAI_PROVINCES } from '../../constants/provinces';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useProject } from '../../contexts/ProjectContext';
@@ -73,6 +73,7 @@ export default function ScanScreen() {
   const [tempProvince, setTempProvince] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSaveOptionModalVisible, setIsSaveOptionModalVisible] = useState(false); // ✅ State สำหรับ Modal เลือกการบันทึก
+  const [isSuccessModalVisible, setIsSuccessModalVisible] = useState(false); // State สำหรับ Modal ความสำเร็จ
   const { activeProject } = useProject();
   const [originalDetectedPlate, setOriginalDetectedPlate] = useState(''); // เก็บค่าที่สแกนได้ครั้งแรก
   const [originalDetectedProvince, setOriginalDetectedProvince] = useState(''); // เก็บค่าที่สแกนได้ครั้งแรก
@@ -113,7 +114,16 @@ export default function ScanScreen() {
         }
       } catch (error) {
         console.error("Error during initial data fetch:", error);
-        // อาจจะแสดง Alert หรือจัดการข้อผิดพลาดอื่นๆ
+        // บันทึก error log
+        await insertErrorLog({
+          comp_id: machineCode || null,
+          error_type: 'INITIAL_DATA_FETCH_ERROR',
+          error_message: error.message || 'Error during initial data fetch',
+          error_code: error.code || null,
+          page_name: 'scan',
+          action_name: 'fetchDataAndProcessImage',
+          user_id: null
+        });
       }
     };
 
@@ -137,7 +147,6 @@ export default function ScanScreen() {
         name: `image_${Date.now()}.jpg`,
       });
 
-      // ✅ ใช้ axios.post แทน fetch
       const response = await axios.post(
         "https://license-plate-service-833646348122.asia-southeast1.run.app/detect",
         formData,
@@ -195,6 +204,16 @@ export default function ScanScreen() {
       if (axios.isCancel(error)) { // ไม่น่าจะเกิดขึ้นในกรณี timeout, แต่เผื่อไว้
         console.log('Request cancelled:', error.message);
         openEditModal(null, null);
+        // บันทึก error log
+        insertErrorLog({
+          comp_id: machineCode || null,
+          error_type: 'OCR_REQUEST_CANCELLED',
+          error_message: error.message || 'Request cancelled',
+          error_code: error.code || null,
+          page_name: 'scan',
+          action_name: 'processImage',
+          user_id: sessionData?.user_id || null
+        }).catch(e => console.error('Failed to log error:', e));
         Alert.alert(
           'การเชื่อมต่อถูกยกเลิก',
           'การประมวลผลถูกยกเลิก กรุณาลองใหม่อีกครั้ง'
@@ -203,6 +222,16 @@ export default function ScanScreen() {
         // ✅ Error สำหรับ Timeout
         console.log('Image processing request timed out after 15 seconds.');
         openEditModal(null, null); // เปิด Modal ให้กรอกเอง
+        // บันทึก error log
+        insertErrorLog({
+          comp_id: machineCode || null,
+          error_type: 'OCR_TIMEOUT',
+          error_message: 'License plate detection service timeout after 15 seconds',
+          error_code: 'ECONNABORTED',
+          page_name: 'scan',
+          action_name: 'processImage',
+          user_id: sessionData?.user_id || null
+        }).catch(e => console.error('Failed to log error:', e));
         Alert.alert(
           'การเชื่อมต่อหมดเวลา',
           'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ตรวจจับทะเบียนรถได้ภายใน 15 วินาที กรุณาลองใหม่อีกครั้ง หรือกรอกข้อมูลเอง'
@@ -211,10 +240,30 @@ export default function ScanScreen() {
         // Server ตอบกลับมา แต่เป็นสถานะ Error (เช่น 4xx, 5xx)
         console.log('Server error response:', error.response.status, error.response.data);
         openEditModal(null, null);
+        // บันทึก error log
+        insertErrorLog({
+          comp_id: machineCode || null,
+          error_type: 'OCR_SERVER_ERROR',
+          error_message: error.response.data?.message || JSON.stringify(error.response.data) || 'Server error',
+          error_code: error.response.status?.toString() || null,
+          page_name: 'scan',
+          action_name: 'processImage',
+          user_id: sessionData?.user_id || null
+        }).catch(e => console.error('Failed to log error:', e));
         // Alert.alert('ข้อผิดพลาดจากเซิร์ฟเวอร์', error.response.data.message || 'ไม่สามารถตรวจจับทะเบียนรถได้');
       } else if (error.request) {
         // Request ถูกส่งไปแล้ว แต่ไม่มี response กลับมา (เช่น ไม่มีเน็ต, Server ไม่ตอบ)
         console.log('No response received:', error.request);
+        // บันทึก error log
+        insertErrorLog({
+          comp_id: machineCode || null,
+          error_type: 'OCR_NO_RESPONSE',
+          error_message: 'No response from OCR service - possible network issue',
+          error_code: null,
+          page_name: 'scan',
+          action_name: 'processImage',
+          user_id: sessionData?.user_id || null
+        }).catch(e => console.error('Failed to log error:', e));
         // Alert.alert(
         //   'ไม่มีการเชื่อมต่ออินเทอร์เน็ต',
         //   'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ตรวจจับทะเบียนรถได้ กรุณาตรวจสอบการเชื่อมต่อ หรือกรอกข้อมูลเอง'
@@ -224,6 +273,16 @@ export default function ScanScreen() {
       } else {
         // Error อื่นๆ
         console.log('Axios Error:', error.message);
+        // บันทึก error log
+        insertErrorLog({
+          comp_id: machineCode || null,
+          error_type: 'OCR_UNKNOWN_ERROR',
+          error_message: error.message || 'Unknown error occurred',
+          error_code: error.code || null,
+          page_name: 'scan',
+          action_name: 'processImage',
+          user_id: sessionData?.user_id || null
+        }).catch(e => console.error('Failed to log error:', e));
         Alert.alert('ข้อผิดพลาด', error.message || 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ');
         setOcrConnected(0); // ✅ Set OCR status to 0 (Disconnected) for other errors too just in case
         openEditModal(null, null);
@@ -285,12 +344,24 @@ export default function ScanScreen() {
         throw new Error("ไม่พบข้อมูลผู้ใช้งาน, กรุณาเข้าสู่ระบบใหม่");
       }
 
-      // กำหนดค่าประเภทรถสุดท้าย หากเลือก 'Other'
-      const finalVehicleType = vehicleType === 'Other' ? customVehicleType : convertBusTypeToLabel(vehicleType);
+      // กำหนดค่าประเภทรถสุดท้าย
+      // ถ้า vehicleType === 'Other' ใช้ customVehicleType
+      // ถ้า foundRegisterData.bus_type มีค่า แล้วไม่อยู่ใน vehicleTypes ใช้ค่านั้นแทน
+      // มิฉะนั้นใช้ convertBusTypeToLabel(vehicleType)
+      let finalVehicleType = customVehicleType;
+      console.log('finalVehicleType :>> ', finalVehicleType);
+      console.log('vehicleType :>> ', vehicleType);
+      if (vehicleType !== 'Other') {
+        finalVehicleType = convertBusTypeToLabel(vehicleType);
+      }
+      // ถ้า foundRegisterData มี bus_type ให้ใช้ค่านั้นแทน
+      if (foundRegisterData && foundRegisterData.bus_type) {
+        finalVehicleType = foundRegisterData.bus_type;
+      }
+      console.log('finalVehicleType2 :>> ', finalVehicleType);
 
       console.log('activeProject :>> ', activeProject);
       console.log('foundRegisterData :>> ', foundRegisterData);
-
 
       // ✅ สร้าง Object newCheckInData ตามโครงสร้างที่ต้องการ
       let newCheckInData = {
@@ -340,6 +411,11 @@ export default function ScanScreen() {
       const newId = await insertCheckIn(newCheckInData);
       console.log(`✅ Check-in record saved with local ID: ${newId}`);
 
+      // แสดง Success Modal หากไม่ได้พิมพ์
+      if (!shouldPrint) {
+        setIsSuccessModalVisible(true);
+        return;
+      }
 
       setShowReceipt(true);
       // รอให้ Receipt component render ข้อมูลใหม่เสร็จก่อน
@@ -355,6 +431,16 @@ export default function ScanScreen() {
 
     catch (error) {
       console.error('Failed to save check-in data:', error);
+      // บันทึก error log
+      insertErrorLog({
+        comp_id: machineCode || null,
+        error_type: 'CHECKIN_SAVE_ERROR',
+        error_message: error.message || 'Failed to save check-in data',
+        error_code: error.code || null,
+        page_name: 'scan',
+        action_name: 'executeSave',
+        user_id: sessionData?.user_id || null
+      }).catch(e => console.error('Failed to log error:', e));
       Alert.alert('ข้อผิดพลาด', error.message || 'ไม่สามารถบันทึกข้อมูลได้');
       setIsSubmitting(false);
     }
@@ -419,6 +505,16 @@ export default function ScanScreen() {
     } catch (error) {
       Alert.alert('ข้อผิดพลาด', 'ไม่สามารถพิมพ์ใบทะเบียนได้');
       console.error(error);
+      // บันทึก error log
+      insertErrorLog({
+        comp_id: machineCode || null,
+        error_type: 'PRINT_ERROR',
+        error_message: error.message || 'Failed to print receipt',
+        error_code: error.code || null,
+        page_name: 'scan',
+        action_name: 'generateAndPrint',
+        user_id: sessionData?.user_id || null
+      }).catch(e => console.error('Failed to log error:', e));
       setIsSubmitting(false);
     }
   };
@@ -564,7 +660,17 @@ export default function ScanScreen() {
         setFoundRegisterData(foundRegister); // เก็บข้อมูล C7 ทั้งหมดไว้ใน state
 
         // กรอกข้อมูลจาก C7 ลงในฟอร์มอัตโนมัติ
-        setVehicleType(foundRegister.bus_type);
+        // ตรวจสอบว่า bus_type จาก foundRegister อยู่ใน vehicleTypes หรือไม่
+        const busTypeExists = vehicleTypes.some(item => item.value === foundRegister.bus_type);
+        if (busTypeExists) {
+          // ถ้ามี ให้เลือก dropdown
+          setVehicleType(foundRegister.bus_type);
+          setCustomVehicleType('');
+        } else {
+          // ถ้าไม่มี ให้ตั้ง Other แล้วเก็บค่า bus_type ไว้ใน customVehicleType
+          setVehicleType('Other');
+          setCustomVehicleType(foundRegister.bus_type);
+        }
         return true;
 
       } else {
@@ -575,6 +681,16 @@ export default function ScanScreen() {
       }
     } catch (error) {
       console.error('Failed to check with register list', error);
+      // บันทึก error log
+      insertErrorLog({
+        comp_id: machineCode || null,
+        error_type: 'REGISTER_LOOKUP_ERROR',
+        error_message: error.message || 'Failed to check with register list',
+        error_code: error.code || null,
+        page_name: 'scan',
+        action_name: 'checkWithRegisterList',
+        user_id: sessionData?.user_id || null
+      }).catch(e => console.error('Failed to log error:', e));
       setIsVerified(false);
       return false;
     }
@@ -857,9 +973,36 @@ export default function ScanScreen() {
           </View>
         </View>
       </Modal >
+
+      {/* Success Modal - แจ้งเตือนบันทึกแล้ว */}
+      <Modal
+        visible={isSuccessModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setIsSuccessModalVisible(false)}
+      >
+        <View style={styles.successModalContainer}>
+          <View style={styles.successModalContent}>
+            <Ionicons name="checkmark-circle" size={80} color="#2ecc71" />
+            <Text style={styles.successModalTitle}>บันทึกสำเร็จ</Text>
+            <Text style={styles.successModalSubtitle}>บันทึกแบบไม่พิมพ์</Text>
+            <Text style={styles.successModalDescription}>ระบบบันทึกข้อมูลแล้ว</Text>
+            <TouchableOpacity
+              style={styles.successModalButton}
+              onPress={() => {
+                setIsSuccessModalVisible(false);
+                resetForm();
+              }}
+            >
+              <Text style={styles.successModalButtonText}>ตกลง</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View >
   );
 }
+
 
 const styles = StyleSheet.create({
   container: {
@@ -1408,6 +1551,58 @@ const styles = StyleSheet.create({
   activity2Text: {
     fontSize: 20,
     fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  // --- Success Modal Styles ---
+  successModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  successModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    paddingVertical: 50,
+    paddingHorizontal: 40,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  successModalTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#2ecc71',
+    marginTop: 20,
+    textAlign: 'center',
+  },
+  successModalSubtitle: {
+    fontSize: 16,
+    color: '#2ecc71',
+    marginTop: 15,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  successModalDescription: {
+    fontSize: 14,
+    color: '#7f8c8d',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  successModalButton: {
+    backgroundColor: '#2ecc71',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 40,
+    marginTop: 20,
+  },
+  successModalButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
     textAlign: 'center',
   },
 });

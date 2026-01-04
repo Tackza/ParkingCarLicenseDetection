@@ -4,7 +4,7 @@ npx expo start
 
 # ParkingCarLicenseDetection Deployment
 
--  eas build --profile development --platform android --clear-cache
+-  eas build --profile production --platform android --clear-cache
 
 
 # How to update the app

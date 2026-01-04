@@ -123,7 +123,18 @@ const HistoryItem = ({ item, index, numberPlate, openImageModal }) => {
         {
           item.error_msg ? (
             <View style={styles.metaRow}>
-              <Text style={[styles.metaText, { color: '#e74c3c' }]}>{JSON.parse(item.error_msg)?.message}</Text>
+              <Text style={[styles.metaText, { color: '#e74c3c' }]}>
+                {(() => {
+                  try {
+                    if (typeof item.error_msg === 'string') {
+                      return JSON.parse(item.error_msg)?.message || item.error_msg;
+                    }
+                    return item.error_msg?.message || item.error_msg;
+                  } catch (e) {
+                    return item.error_msg;
+                  }
+                })()}
+              </Text>
             </View>
           ) : null
         }

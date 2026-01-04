@@ -1,4 +1,4 @@
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -26,7 +26,7 @@ import { THAI_PROVINCES } from '../../constants/provinces';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 // import CheckInSyncManager from '../../components/CheckInSyncManager';
 import HistoryItem from '../../components/HistoryItem';
-import { getActiveSession, getScanHistory } from '../../constants/Database';
+import { getActiveSession, getScanHistory, insertErrorLog } from '../../constants/Database';
 import { useMode } from '../../contexts/ModeContext';
 import { useProject } from '../../contexts/ProjectContext';
 import { useSync } from '../../contexts/SyncContext';
@@ -39,10 +39,10 @@ export default function HistoryScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const router = useRouter();
+  // const router = useRouter();
   const { isOnline } = useSync();
   const { activeProject, refreshCurrentProject } = useProject();
-  const debounceTimer = useRef(null);
+  // const debounceTimer = useRef(null);
   const { isModeOne } = useMode();
 
   // --- New Search Feature State ---
@@ -55,6 +55,8 @@ export default function HistoryScreen() {
   const [isSearching, setIsSearching] = useState(false);
   const [printData, setPrintData] = useState(null);
   const [printLoading, setPrintLoading] = useState(false);
+  const [searchImageModalVisible, setSearchImageModalVisible] = useState(false);
+  const [selectedSearchImage, setSelectedSearchImage] = useState(null);
   const receiptRef = useRef();
 
   const handleOnlineSearch = async () => {
@@ -93,7 +95,6 @@ export default function HistoryScreen() {
           'Authorization': `Bearer ${token}`,
         }
       });
-      console.log('response :>> ', response.data);
 
       if (response.data && response.data.status === 'success') {
         console.log('Search Results Data:', response.data.result);
@@ -114,7 +115,20 @@ export default function HistoryScreen() {
       }
     } catch (error) {
       console.error('Search error:', error);
-      Alert.alert('ข้อผิดพลาด', 'เกิดข้อผิดพลาดในการค้นหา');
+
+      // Log error to database
+      const session = await getActiveSession();
+      await insertErrorLog({
+        comp_id: null,
+        error_type: 'API_ERROR',
+        error_message: error.message || 'เกิดข้อผิดพลาดในการค้นหา',
+        error_code: error.response?.status || error.code || 'SEARCH_ERROR',
+        page_name: 'main.js',
+        action_name: 'handleOnlineSearch',
+        user_id: session?.user_id || null
+      });
+
+      Alert.alert('ข้อผิดพลาด', error.message || 'เกิดข้อผิดพลาดในการค้นหา');
     } finally {
       setIsSearching(false);
     }
@@ -122,6 +136,7 @@ export default function HistoryScreen() {
 
   const handlePrint = async (item) => {
     if (!item.register_id || item.printed !== false || printLoading) return;
+
     setPrintLoading(true);
     setPrintData(item);
 
@@ -155,8 +170,12 @@ export default function HistoryScreen() {
 
       console.log('print-slip response:', printResp.data);
 
-      if (!(printResp.data && printResp.data.status === 'success')) {
-        throw new Error('Print API did not return success');
+      // ✅ ตรวจสอบเฉพาะ status === 'success' เท่านั้น ไม่สนใจ result
+      if (!printResp.data || printResp.data.status !== 'success') {
+        Alert.alert('ข้อผิดพลาด', 'ไม่สามารถบันทึกการพิมพ์ได้');
+        setPrintData(null);
+        setPrintLoading(false);
+        return;
       }
 
       // 2) Wait a short time to allow any back-end processing, then capture and print
@@ -188,6 +207,19 @@ export default function HistoryScreen() {
           }
         } catch (error) {
           console.error('Print error after API success:', error);
+
+          // Log error to database
+          const session = await getActiveSession();
+          await insertErrorLog({
+            comp_id: item?.comp_id || null,
+            error_type: 'PRINT_ERROR',
+            error_message: error.message || 'ไม่สามารถพิมพ์ได้',
+            error_code: error.code || 'BLUETOOTH_PRINT_ERROR',
+            page_name: 'main.js',
+            action_name: 'handlePrint - Bluetooth print',
+            user_id: session?.user_id || null
+          });
+
           Alert.alert('ข้อผิดพลาด', 'ไม่สามารถพิมพ์ได้');
         } finally {
           setPrintData(null);
@@ -197,7 +229,21 @@ export default function HistoryScreen() {
 
     } catch (error) {
       console.error('Print API error:', error);
-      Alert.alert('ข้อผิดพลาด', 'ไม่สามารถบันทึกการพิมพ์ได้');
+
+      // Log error to database
+      const session = await getActiveSession();
+      await insertErrorLog({
+        comp_id: item?.comp_id || null,
+        error_type: 'API_ERROR',
+        error_message: error.message || 'Print API error',
+        error_code: error.response?.status || error.code || 'PRINT_API_ERROR',
+        page_name: 'main.js',
+        action_name: 'handlePrint - API call',
+        user_id: session?.user_id || null
+      });
+
+      // ✅ ไม่แสดง alert เมื่อมี error จาก API (ลอง handle gracefully)
+      console.log('Continuing with print attempt despite API error');
       setPrintData(null);
       setPrintLoading(false);
     }
@@ -260,37 +306,23 @@ export default function HistoryScreen() {
       setHistory(data);
     } catch (error) {
       console.error('Error loading history:', error);
+
+      // Log error to database
+      const session = await getActiveSession();
+      await insertErrorLog({
+        comp_id: null,
+        error_type: 'DATABASE_ERROR',
+        error_message: error.message || 'ไม่สามารถโหลดประวัติได้',
+        error_code: error.code || 'LOAD_HISTORY_ERROR',
+        page_name: 'main.js',
+        action_name: 'loadHistory',
+        user_id: session?.user_id || null
+      });
+
+      setHistory([]); // รีเซ็ตให้เป็น array ว่างเพื่อแสดงข้อความ "ไม่มีข้อมูล"
       Alert.alert('ข้อผิดพลาด', 'ไม่สามารถโหลดประวัติได้');
     }
   };
-
-  useEffect(() => {
-    // (ถ้า project ยังไม่โหลด ก็ไม่ต้องทำอะไร)
-    if (!activeProject) {
-      return;
-    }
-
-    // เมื่อผู้ใช้พิมพ์, ให้เคลียร์ timer เก่า
-    if (debounceTimer.current) {
-      clearTimeout(debounceTimer.current);
-    }
-
-    // ตั้ง timer ใหม่ (300ms)
-    console.log("User typing... setting 300ms debounce");
-    debounceTimer.current = setTimeout(() => {
-      // เมื่อครบ 300ms (ผู้ใช้หยุดพิมพ์)
-      // ให้เรียก loadHistory ด้วย searchQuery "ล่าสุด"
-      console.log("Debounce timer fired! Searching for:", searchQuery);
-      loadHistory(searchQuery);
-    }, 300); // 300 มิลลิวินาที
-
-    // Cleanup: เคลียร์ timer ถ้า component ถูก unmount
-    return () => {
-      if (debounceTimer.current) {
-        clearTimeout(debounceTimer.current);
-      }
-    };
-  }, [searchQuery, activeProject]);
 
 
 
@@ -394,6 +426,37 @@ export default function HistoryScreen() {
         </View>
       </Modal>
 
+      {/* Modal สำหรับแสดงรูปภาพจากการค้นหาเต็มจอ */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={searchImageModalVisible}
+        onRequestClose={() => setSearchImageModalVisible(false)}
+      >
+        <View style={styles.modalContainer}>
+          <ImageZoom
+            cropWidth={windowWidth}
+            cropHeight={windowHeight}
+            imageWidth={windowWidth}
+            imageHeight={windowHeight}
+            minScale={0.8}
+            maxScale={2.5}
+          >
+            <Image
+              source={{ uri: selectedSearchImage }}
+              style={styles.fullscreenImage}
+              resizeMode="contain"
+            />
+          </ImageZoom>
+          <TouchableOpacity
+            style={styles.closeButton}
+            onPress={() => setSearchImageModalVisible(false)}
+          >
+            <Text style={styles.closeButtonText}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
       {/* ✅ ADD: Search Modal */}
       <Modal
         animationType="slide"
@@ -442,15 +505,21 @@ export default function HistoryScreen() {
               renderItem={({ item }) => {
                 if (!item) return null;
                 const reg = item.register || {};
+                const hasC7Data = !!(reg.station && reg.province);
                 return (
                   <View style={styles.resultItem}>
                     {/* Show image if photo_url exists */}
                     {item.photo_url ? (
-                      <Image
-                        source={{ uri: item.photo_url }}
-                        style={{ width: '100%', height: 100, borderRadius: 10, marginBottom: 10, alignSelf: 'center' }}
-                        resizeMode="center"
-                      />
+                      <TouchableOpacity onPress={() => {
+                        setSelectedSearchImage(item.photo_url);
+                        setSearchImageModalVisible(true);
+                      }}>
+                        <Image
+                          source={{ uri: item.photo_url }}
+                          style={{ width: '100%', height: 100, borderRadius: 10, marginBottom: 10, alignSelf: 'center' }}
+                          resizeMode="center"
+                        />
+                      </TouchableOpacity>
                     ) : null}
                     <View style={styles.resultRow}>
                       <Text style={styles.resultLabel}>จุดออกรถ:</Text>
@@ -487,7 +556,13 @@ export default function HistoryScreen() {
                         <Text style={{ color: 'red', fontWeight: 'bold', fontSize: 16, textAlign: 'center' }}>สลิปนี้ถูกพิมพ์ไปแล้ว</Text>
                       </View>
                     )}
-                    {item.can_print === true && (
+                    {/* แจ้งเตือนถ้าไม่มี C7 ข้อมูล */}
+                    {!hasC7Data && (
+                      <View style={{ marginTop: 8, marginBottom: 8, backgroundColor: '#fff3cd', borderColor: '#ffc107', borderWidth: 1, borderRadius: 8, padding: 10 }}>
+                        <Text style={{ color: 'red', fontWeight: 'bold', fontSize: 16, textAlign: 'center' }}>⚠️ ไม่มี C7 ไม่สามารถพิมพ์สลิปได้</Text>
+                      </View>
+                    )}
+                    {item.can_print === true && hasC7Data && (
                       <TouchableOpacity
                         style={[styles.printButton, printLoading && { opacity: 0.6 }]}
                         onPress={() => handlePrint(item)}

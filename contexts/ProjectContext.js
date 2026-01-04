@@ -1,10 +1,12 @@
 // file: contexts/ProjectContext.js
 
+import axios from 'axios';
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import {
   getActiveSession,
   getCurrentProject,
+  insertErrorLog,
   saveProjects,
 } from '../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useEnvironment } from './EnvironmentContext';
@@ -51,6 +53,22 @@ export const ProjectProvider = ({ children }) => {
       console.log("✅ [CONTEXT] Refreshed current project from local DB.");
     } catch (error) {
       console.error("❌ Error refreshing current project:", error);
+
+      // ✅ Log error to database
+      try {
+        const session = await getActiveSession();
+        await insertErrorLog({
+          comp_id: null,
+          error_type: 'DATABASE_ERROR',
+          error_message: error.message || 'Error refreshing current project',
+          error_code: error.code || 'REFRESH_PROJECT_ERROR',
+          page_name: 'ProjectContext.js',
+          action_name: 'refreshCurrentProject',
+          user_id: session?.user_id || null
+        });
+      } catch (logError) {
+        console.error('Failed to log error:', logError);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -65,15 +83,18 @@ export const ProjectProvider = ({ children }) => {
         throw new Error("No active session found. Cannot sync projects.");
       }
 
-      const response = await fetch(`${API_URL}/lpr/projects`, {
+      const response = await axios.get(`${API_URL}/lpr/projects`, {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.lpr_token}`,
         },
       });
-      if (!response.ok) throw new Error("Failed to fetch projects from API.");
 
-      const data = await response.json();
+      if (response.status !== 200) {
+        throw new Error("Failed to fetch projects from API.");
+      }
+
+      const data = response.data;
       console.log('data syncProjectsWithApi :>> ', data);
 
       if (data.result) {
@@ -86,6 +107,22 @@ export const ProjectProvider = ({ children }) => {
 
     } catch (error) {
       console.error("❌ Error syncing projects with API:", error);
+
+      // ✅ Log error to database
+      try {
+        const session = await getActiveSession();
+        await insertErrorLog({
+          comp_id: null,
+          error_type: 'API_ERROR',
+          error_message: error.message || 'Error syncing projects with API',
+          error_code: error.response?.status || error.code || 'SYNC_PROJECTS_ERROR',
+          page_name: 'ProjectContext.js',
+          action_name: 'syncProjectsWithApi',
+          user_id: session?.user_id || null
+        });
+      } catch (logError) {
+        console.error('Failed to log error:', logError);
+      }
     } finally {
       setIsLoading(false);
     }

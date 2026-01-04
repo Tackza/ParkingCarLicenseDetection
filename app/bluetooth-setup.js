@@ -17,7 +17,6 @@ import { PERMISSIONS, RESULTS, requestMultiple } from 'react-native-permissions'
 // MODIFIED: เพิ่มการ import AsyncStorage
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { deleteSetting, getSetting, saveSetting } from '../constants/Database';
-import { useMode } from '../contexts/ModeContext';
 
 const SAVED_PRINTER_KEY = 'saved_printer'; // Key สำหรับเก็บข้อมูลใน AsyncStorage
 
@@ -29,7 +28,6 @@ export default function BluetoothSetupScreen() {
   const [foundDevices, setFoundDevices] = useState([]);
   const [connectedDevice, setConnectedDevice] = useState(null);
   const router = useRouter();
-  const { isModeOne } = useMode();
 
   // --- ส่วนจัดการ Event Listeners (ไม่เปลี่ยนแปลง) ---
   const deviceAlreadPaired = useCallback(

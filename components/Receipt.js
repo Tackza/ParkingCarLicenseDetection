@@ -88,7 +88,7 @@ const Receipt = React.forwardRef(({
       </View>
 
       <View style={styles.receiptRow}>
-        <Text style={styles.receiptLabel}>จังหวัด:</Text>
+        <Text style={styles.receiptLabel}>ทะเบียนจังหวัด:</Text>
         <Text style={styles.receiptValue}>{province == 'กรุงเทพมหานคร' ? 'กทม.' : province}</Text>
       </View>
 

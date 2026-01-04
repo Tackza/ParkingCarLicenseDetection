@@ -6,11 +6,13 @@ import {
   getActiveSession,
   getCurrentProject,
   getUnsyncedCheckIns,
+  insertErrorLog,
   markCheckInAsSynced,
   markCheckInAsSyncedError
 } from '@/constants/Database';
 import { useEnvironment } from '@/contexts/EnvironmentContext';
 import { useProject } from '@/contexts/ProjectContext';
+import axios from 'axios';
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import BackgroundTimer from 'react-native-background-timer';
@@ -92,8 +94,6 @@ const CheckInSyncManager = () => {
 
     // ✅ Verify Session: If the session ID passed to this function doesn't match the current ref,
     // it means a new effect/timer has started, so we should abort this stale process.
-    console.log('sessionId :>> ', sessionId);
-    console.log('currentSyncSessionId.current :>> ', currentSyncSessionId.current);
     if (sessionId && sessionId !== currentSyncSessionId.current) {
       console.log(`Sync aborted: Stale session (Current: ${currentSyncSessionId.current}, This: ${sessionId})`);
       return;
@@ -148,13 +148,20 @@ const CheckInSyncManager = () => {
       let successfulUploads = 0;
       for (const checkIn of unsyncedCheckIns) {
 
+
+        // checkIn = {
+        //   ...checkIn,
+        //   activity_id: checkIn.activity_id === null ? "" : checkIn.activity_id,
+        //   seq_no: checkIn.seq_no === null ? "" : checkIn.seq_no,
+        // }
+
         // ✅ Check abort condition INSIDE loop
         if (currentSyncSessionId.current !== sessionId) {
           console.log("🛑 Sync loop aborted mid-process due to session change.");
           break;
         }
 
-        // console.log('checkIn :>> ', checkIn);
+        console.log('checkIn :>> ', checkIn);
         try {
 
 
@@ -185,7 +192,7 @@ const CheckInSyncManager = () => {
           formData.append('uid', checkIn.uid);
           formData.append('local_id', checkIn.id.toString());
           formData.append('project_id', checkIn.project_id);
-          formData.append('activity_id', checkIn.activity_id || 0);
+          formData.append('activity_id', checkIn.activity_id === null ? "" : checkIn.activity_id);
           formData.append('register_id', checkIn.register_id || ''); // ถ้า register_id เป็น null/undefined ส่งเป็น empty string
           formData.append('detect_plate_no', checkIn.detect_plate_no);
           formData.append('detect_plate_province', checkIn.detect_plate_province);
@@ -194,13 +201,13 @@ const CheckInSyncManager = () => {
           formData.append('is_manual', checkIn.is_plate_manual ? '1' : '0'); // แปลง boolean/integer เป็น string '1'/'0'
           formData.append('bus_type', checkIn.bus_type || '');
           formData.append('passenger', checkIn.passenger || '');
-          formData.append('sticker_no', checkIn.sticker_no || '');
+          formData.append('sticker_no', checkIn.sticker_no === null ? "" : checkIn.sticker_no);
           formData.append('note', checkIn.note || '');
           formData.append('comp_id', checkIn.comp_id || '');
           formData.append('ocr_connected', ocrConnected);
           formData.append('lat', 0);
           formData.append('long', 0);
-          formData.append('seq_no', currentProject.seq_no || '');
+          formData.append('seq_no', currentProject.seq_no === null ? "" : currentProject.seq_no);
           formData.append('printed', checkIn.printed ? '1' : '0');
           formData.append('created_at', checkIn.created_at || new Date().toISOString()); // ใช้ ISO string หรือรูปแบบที่ server ต้องการ
           formData.append('created_by', checkIn.created_by || '');
@@ -231,17 +238,15 @@ const CheckInSyncManager = () => {
           console.log('--- (React Native) ดูข้อมูล formData._parts ---');
           console.log(formData._parts);
 
-
-
-          const response = await fetch(apiUrl, {
-            method: 'POST',
+          const response = await axios.post(apiUrl, formData, {
             headers: {
               'Authorization': `Bearer ${session.lpr_token}`,
+              'Content-Type': 'multipart/form-data',
+
             },
-            body: formData, // ส่งทีละรายการ
           });
 
-          if (!response.ok) {
+          if (response.status !== 200) {
             const errorText = await response.text();
             // throw new Error(`Server response for uid ${checkIn.uid} not ok, status: ${response.status}, message: ${errorText}`);
             const err = new Error(errorText);
@@ -249,7 +254,7 @@ const CheckInSyncManager = () => {
             throw err;
           }
           // setIsOnline(true);
-          const responseData = await response.json();
+          const responseData = await response.data;
           console.log('responseData :>> ', responseData);
           // --- สิ้นสุดโค้ดจริง --- 
 
@@ -278,11 +283,44 @@ const CheckInSyncManager = () => {
           console.log('itemError message :>> ', itemError);
           console.log('isDuplicateError(errorMessage) :>> ', isDuplicateError(errorMsg));
 
-          let syncStatus = 3;
-          console.log('itemError.status :>> ', itemError.status);
-          if (itemError.status) {
-            if (itemError.status >= 400 && itemError.status < 500) syncStatus = 4;
-            else if (itemError.status >= 500) syncStatus = 3;
+          // ✅ Log error to database
+          try {
+            const session = await getActiveSession();
+            await insertErrorLog({
+              comp_id: checkIn.comp_id || null,
+              error_type: 'SYNC_ERROR',
+              error_message: errorMsg,
+              error_code: itemError.response?.status || itemError.status || itemError.code || 'CHECKIN_UPLOAD_ERROR',
+              page_name: 'CheckInSyncManager.js',
+              action_name: 'syncCheckInsToServer - itemError',
+              user_id: session?.user_id || null
+            });
+          } catch (logError) {
+            console.error('Failed to log error:', logError);
+          }
+
+          // ✅ ตรวจสอบ Network Error แลา HTTP Status Code อย่างละเอียด
+          let syncStatus = 3; // ค่าเริ่มต้นสำหรับ Network/Server Error
+
+          if (itemError.response?.status) {
+            // ✅ ถ้ามี HTTP status code จาก axios response
+            console.log('itemError.response.status :>> ', itemError.response.status);
+            if (itemError.response.status >= 400 && itemError.response.status < 500) syncStatus = 4;
+            else if (itemError.response.status >= 500) syncStatus = 3;
+          } else if (itemError.code === 'ECONNABORTED' || errorMsg.includes('timeout')) {
+            // ✅ Request timeout
+            syncStatus = 3;
+            console.log('Network timeout detected');
+          } else if (itemError.code === 'ENOTFOUND' || errorMsg.includes('Network')) {
+            // ✅ Network Error (No Internet)
+            syncStatus = 3;
+            console.log('Network connection error detected');
+          } else {
+            console.log('itemError.status :>> ', itemError.status);
+            if (itemError.status) {
+              if (itemError.status >= 400 && itemError.status < 500) syncStatus = 4;
+              else if (itemError.status >= 500) syncStatus = 3;
+            }
           }
 
           // ✅ ตรวจสอบว่าเป็น error ซ้ำหรือไม่
@@ -308,9 +346,26 @@ const CheckInSyncManager = () => {
       }
       setLastCheckInSyncTime(new Date());
 
-    } catch (fullSyncError) { // ข้อผิดพลาดที่เกิดขึ้นก่อนเริ่มวนลูป (เช่น ไม่ได้ token)
+    } catch (fullSyncError) { // ข้อผิดพลาดที่เกิดขึ้นก่อนเริ่ัมวนลูป (เช่น ไม่ได้ token)
       setSyncError(fullSyncError.message);
       console.error("Check-ins full sync failed:", fullSyncError);
+
+      // ✅ Log error to database
+      try {
+        const session = await getActiveSession();
+        await insertErrorLog({
+          comp_id: null,
+          error_type: 'SYNC_ERROR',
+          error_message: fullSyncError.message || 'Check-ins full sync failed',
+          error_code: fullSyncError.code || 'FULL_SYNC_ERROR',
+          page_name: 'CheckInSyncManager.js',
+          action_name: 'syncCheckInsToServer - fullSyncError',
+          user_id: session?.user_id || null
+        });
+      } catch (logError) {
+        console.error('Failed to log error:', logError);
+      }
+
       // setIsOnline(false);
     } finally {
       isSyncInProgress.current = false;

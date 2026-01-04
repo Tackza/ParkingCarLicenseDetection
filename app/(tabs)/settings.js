@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, SectionList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons'; // Import ไอคอน
+import axios from 'axios';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
-import { clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getRegistersCountForId, getSetting, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
 import { exportDatabaseFile } from '../../utils/exportUtils';
@@ -50,6 +51,10 @@ export default function SettingsScreen() {
   const [envMasterCodeInput, setEnvMasterCodeInput] = useState('');
   const [registersCount, setRegistersCount] = useState(0);
   const [checkInsCount, setCheckInsCount] = useState(0);
+  const [unsyncedCount, setUnsyncedCount] = useState(0);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0); // ยังไม่ได้ส่ง (sync_status 0,3)
+  const [syncErrorCount, setSyncErrorCount] = useState(0); // พบปัญหา (sync_status 4)
+  const [successCount, setSuccessCount] = useState(0); // สำเร็จ (sync_status 2)
   const [currentId, setCurrentId] = useState(null); // project_id or activity_id depending on mode
 
   // Clear Registers Modal States
@@ -93,7 +98,6 @@ export default function SettingsScreen() {
 
         // ดึงข้อมูล session ผู้ใช้
         const session = await getActiveSession();
-        console.log('session :>> ', session);
         if (session && session.username) {
           setUsername(session.username);
           setFirst_name(session.first_name);
@@ -116,8 +120,10 @@ export default function SettingsScreen() {
           // default use project_id
           idForFilter = currentProject.project_id;
           const appMode = await getSetting('appMode');
-          const isModeOneLocal = appMode === null ? true : appMode === 'true';
-          if (!isModeOneLocal) {
+
+          // app mode is false to dharmmakaya mode
+          // app mode is true to general mode
+          if (appMode == "false") {
             idForFilter = currentProject.activity_id;
           }
         }
@@ -129,8 +135,33 @@ export default function SettingsScreen() {
         // For checkins we pass single id computed based on appMode
         const chkCount = await getCheckInsCountForId(idForFilter);
         setCheckInsCount(chkCount);
+        const unsync = await getUnsyncedCheckInsCountForId(idForFilter);
+        setUnsyncedCount(unsync);
+        // ✅ เพิ่มการดึงข้อมูลใหม่
+        const pending = await getPendingSyncCheckInsCountForId(idForFilter);
+        setPendingSyncCount(pending);
+        const errors = await getSyncErrorCheckInsCountForId(idForFilter);
+        setSyncErrorCount(errors);
+        const success = await getSuccessCheckInsCountForId(idForFilter);
+        setSuccessCount(success);
       } catch (e) {
         console.error("Failed to fetch data from database", e);
+
+        // Log error to database
+        try {
+          const session = await getActiveSession();
+          await insertErrorLog({
+            comp_id: null,
+            error_type: 'DATABASE_ERROR',
+            error_message: e.message || 'Failed to fetch data from database',
+            error_code: e.code || 'FETCH_DATA_ERROR',
+            page_name: 'settings.js',
+            action_name: 'fetchDataFromDB',
+            user_id: session?.user_id || null
+          });
+        } catch (logError) {
+          console.error('Failed to log error:', logError);
+        }
       } finally {
         setLoading(false);
       }
@@ -146,8 +177,33 @@ export default function SettingsScreen() {
       setRegistersCount(regCount);
       const chkCount = await getCheckInsCountForId(idForFilter);
       setCheckInsCount(chkCount);
+      const unsync = await getUnsyncedCheckInsCountForId(idForFilter);
+      setUnsyncedCount(unsync);
+      // ✅ เพิ่มการดึงข้อมูลใหม่
+      const pending = await getPendingSyncCheckInsCountForId(idForFilter);
+      setPendingSyncCount(pending);
+      const errors = await getSyncErrorCheckInsCountForId(idForFilter);
+      setSyncErrorCount(errors);
+      const success = await getSuccessCheckInsCountForId(idForFilter);
+      setSuccessCount(success);
     } catch (e) {
-      console.error('Error refreshing counts', e);
+      console.error("Failed to refresh counts", e);
+
+      // Log error to database
+      try {
+        const session = await getActiveSession();
+        await insertErrorLog({
+          comp_id: null,
+          error_type: 'DATABASE_ERROR',
+          error_message: e.message || 'Failed to refresh counts',
+          error_code: e.code || 'REFRESH_COUNTS_ERROR',
+          page_name: 'settings.js',
+          action_name: 'refreshCounts',
+          user_id: session?.user_id || null
+        });
+      } catch (logError) {
+        console.error('Failed to log error:', logError);
+      }
     }
   };
 
@@ -203,14 +259,13 @@ export default function SettingsScreen() {
               router.replace('/login'); // ย้ายไปหน้า Login ทันที
 
               // ดักจับ error จาก fetch API call
-              const result = await fetch(`${API_BASE_URL}/lpr/logout`, {
-                method: 'POST',
+              const result = await axios.post(`${API_BASE_URL}/lpr/logout`, {
                 headers: {
                   'Content-Type': 'application/json',
                   'Authorization': `Bearer ${lprToken}`,
                 },
               });
-              const data = await result.json();
+              const data = await result.data;
 
               // ตรวจสอบความสำเร็จจาก status หรือ result
               if (data.status !== 'success' && !data.result) {
@@ -225,7 +280,24 @@ export default function SettingsScreen() {
               setLoading(false);
             } catch (e) {
               console.log("Failed to perform full logout process:", e);
-              Alert.alert('ข้อผิดพลาด', 'เกิดข้อผิดพลาดในการออกจากระบบ');
+
+              // Log error to database
+              try {
+                const session = await getActiveSession();
+                await insertErrorLog({
+                  comp_id: null,
+                  error_type: 'API_ERROR',
+                  error_message: e.message || 'Failed to perform full logout process',
+                  error_code: e.response?.status || e.code || 'LOGOUT_ERROR',
+                  page_name: 'settings.js',
+                  action_name: 'handleLogout',
+                  user_id: session?.user_id || null
+                });
+              } catch (logError) {
+                console.error('Failed to log error:', logError);
+              }
+
+              // Alert.alert('ข้อผิดพลาด', 'เกิดข้อผิดพลาดในการออกจากระบบ');
               setLoading(false);
             }
           },
@@ -260,8 +332,7 @@ export default function SettingsScreen() {
 
   const getProject = async () => {
     setLoading(true);
-    const result = await fetch(`${API_BASE_URL}/lpr/projects`, {
-      method: 'GET',
+    const result = await axios.get(`${API_BASE_URL}/lpr/projects`, {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${lprToken}`, // ถ้าต้องใช้ token
@@ -269,22 +340,34 @@ export default function SettingsScreen() {
     });
 
     try {
-      if (!result.ok) {
-        console.error('Server responded with an error during getProject:', result.status);
-        const errorData = await result.json(); // ลองดูว่ามีข้อมูล error อะไรส่งมาไหม
-        // console.error('Error details during getProject:', errorData);
+      if (result.status !== 200) {
         Alert.alert('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
         setLoading(false);
         return;
       }
-      const data = await result.json();
+      const data = await result.data;
       console.log('data :>> ', data);
       await saveProjects(data.result);
       Alert.alert('สำเร็จ', 'อัพเดทข้อมูลเรียบร้อย');
       setLoading(false);
 
     } catch (error) {
-      // console.error('Error during getProject:', error);
+      // Log error to database
+      try {
+        const session = await getActiveSession();
+        await insertErrorLog({
+          comp_id: null,
+          error_type: 'API_ERROR',
+          error_message: error.message || 'ไม่สามารถโหลดข้อมูลได้',
+          error_code: error.response?.status || error.code || 'GET_PROJECT_ERROR',
+          page_name: 'settings.js',
+          action_name: 'getProject',
+          user_id: session?.user_id || null
+        });
+      } catch (logError) {
+        console.error('Failed to log error:', logError);
+      }
+
       Alert.alert('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
       setLoading(false);
     } finally {
@@ -311,6 +394,23 @@ export default function SettingsScreen() {
       setClearRegistersCodeInput('');
     } catch (e) {
       console.error("Failed to clear registers:", e);
+
+      // Log error to database
+      try {
+        const session = await getActiveSession();
+        await insertErrorLog({
+          comp_id: null,
+          error_type: 'DATABASE_ERROR',
+          error_message: e.message || 'Failed to clear registers',
+          error_code: e.code || 'CLEAR_REGISTERS_ERROR',
+          page_name: 'settings.js',
+          action_name: 'handleClearRegisters',
+          user_id: session?.user_id || null
+        });
+      } catch (logError) {
+        console.error('Failed to log error:', logError);
+      }
+
       Alert.alert("ผิดพลาด", "ไม่สามารถลบข้อมูลได้.");
     }
   };
@@ -740,7 +840,10 @@ export default function SettingsScreen() {
 
       {/* Dashboard Section: two cards side-by-side to save vertical space */}
       <View style={styles.dashboardContainerRow}>
-        <View style={[styles.dashboardCardRow, styles.dashboardCardLeft]}>
+        <TouchableOpacity
+          style={[styles.dashboardCardRow, styles.dashboardCardLeft]}
+          onPress={() => refreshCounts()}
+        >
           <View style={styles.dashboardIconContainerRow}>
             <Ionicons name="clipboard" size={20} color="#007AFF" />
           </View>
@@ -748,16 +851,47 @@ export default function SettingsScreen() {
             <Text style={styles.dashboardLabel}>ใบ C7</Text>
             <Text style={styles.dashboardValue}>{registersCount}</Text>
           </View>
-        </View>
-        <View style={[styles.dashboardCardRow, styles.dashboardCardRight]}>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.dashboardCardRow, styles.dashboardCardRight]}
+          onPress={() => refreshCounts()}
+        >
           <View style={styles.dashboardIconContainerRow}>
-            <Ionicons name="car-sport" size={20} color="#4CAF50" />
+            <Ionicons name="checkmark-done" size={20} color="#4CAF50" />
           </View>
           <View style={styles.dashboardTextContainerRow}>
-            <Text style={styles.dashboardLabel}>พบรถ</Text>
-            <Text style={styles.dashboardValue}>{checkInsCount}</Text>
+            <Text style={styles.dashboardLabel}>ส่งสำเร็จ</Text>
+            <Text style={styles.dashboardValue}>{successCount}</Text>
           </View>
-        </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* Dashboard Section: pending sync and errors - second row */}
+      <View style={styles.dashboardContainerRow}>
+        <TouchableOpacity
+          style={[styles.dashboardCardRow, styles.dashboardCardLeft]}
+          onPress={() => refreshCounts()}
+        >
+          <View style={styles.dashboardIconContainerRow}>
+            <Ionicons name="cloud-upload" size={20} color="#FF9800" />
+          </View>
+          <View style={styles.dashboardTextContainerRow}>
+            <Text style={styles.dashboardLabel}>ยังไม่ได้ส่ง</Text>
+            <Text style={styles.dashboardValue}>{pendingSyncCount}</Text>
+          </View>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.dashboardCardRow, styles.dashboardCardRight]}
+          onPress={() => refreshCounts()}
+        >
+          <View style={styles.dashboardIconContainerRow}>
+            <Ionicons name="warning-outline" size={20} color="#F44336" />
+          </View>
+          <View style={styles.dashboardTextContainerRow}>
+            <Text style={styles.dashboardLabel}>พบปัญหา</Text>
+            <Text style={styles.dashboardValue}>{syncErrorCount}</Text>
+          </View>
+        </TouchableOpacity>
       </View>
 
       {/* --- ส่วน List การตั้งค่า --- */}
@@ -1089,9 +1223,9 @@ const styles = StyleSheet.create({
   },
   dashboardContainerRow: {
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 5,
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'space-evenly',
   },
   dashboardCardRow: {
     flex: 1,

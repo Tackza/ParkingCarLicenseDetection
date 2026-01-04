@@ -1,13 +1,17 @@
 import {
+  clearSession,
+  deleteSetting,
   getActiveSession,
   getLastRegisterSyncState,
-  saveRegisters,
+  insertErrorLog,
+  saveRegisters
 } from "@/constants/Database";
 import { useEnvironment } from "@/contexts/EnvironmentContext";
 import { useMode } from "@/contexts/ModeContext";
 import { useProject } from "@/contexts/ProjectContext";
 import { SyncProvider, useSync } from "@/contexts/SyncContext";
 import { Ionicons } from "@expo/vector-icons"; // หรือ Icon library อื่นๆ ที่คุณใช้
+import axios from 'axios';
 import * as ImagePicker from "expo-image-picker"; // เพิ่มการนำเข้า ImagePicker
 import { Tabs, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -80,22 +84,21 @@ function TabLogic() {
         return;
       }
 
-      const syncState = await getLastRegisterSyncState();
+      const syncState = await getLastRegisterSyncState(activeProject?.project_id);
       const last_update = syncState?.last_update || "";
       const last_id = syncState?.last_id || 0;
 
       const apiUrl = `${API_URL}/lpr/registers?last_update=${last_update}&last_id=${last_id}&project_id=${activeProject.project_id}`;
-
-      const response = await fetch(apiUrl, {
+      const response = await axios.get(apiUrl, {
         headers: { Authorization: `Bearer ${session.lpr_token}` },
       });
 
-      if (!response.ok) {
+      if (!response.data.status === "success") {
         throw new Error(`Network response was not ok, status: ${response.status}`);
       }
       setIsOnline(true);
 
-      const data = await response.json();
+      const data = response.data;
       if (data.status === "success" && data.result?.length > 0) {
         console.log('data C7 :>> ', data);
         await saveRegisters(data.result);
@@ -107,6 +110,22 @@ function TabLogic() {
       }
     } catch (error) {
       console.log('Data sync failed :>> ', error);
+      // บันทึก error log
+      insertErrorLog({
+        error_type: 'REGISTER_SYNC_ERROR',
+        error_message: error.message || 'Failed to sync registers',
+        error_code: error.response?.status?.toString() || error.code || null,
+        page_name: '_layout',
+        action_name: 'syncRegistersData',
+        user_id: null
+      }).catch(e => console.error('Failed to log error:', e));
+
+      if (error.response && error.response.status === 401) {
+        await clearSession();
+        await deleteSetting('saved_printer');
+        router.replace('/login');
+        return false;
+      }
       setIsOnline(false);
       return false;
     } finally {
@@ -114,7 +133,7 @@ function TabLogic() {
       setIsSyncing(false);
       scheduleNextSync(sessionId);
     }
-  }, [activeProject, setIsOnline, setLastSyncTime, setIsSyncing, API_URL]);
+  }, [activeProject, setIsOnline, setLastSyncTime, setIsSyncing, API_URL, router]);
 
   const scheduleNextSync = useCallback((sessionId) => {
     if (sessionId !== currentSyncSessionId.current) return;
@@ -176,15 +195,15 @@ function TabLogic() {
       return;
     }
 
-
+    // ✅ ตั้งสถานะเป็น "กำลังเปิด" เพื่อแสดง loading
+    setIsOpeningCamera(true);
 
     try {
-      // ✅ ตั้งสถานะเป็น "กำลังเปิด" เพื่อแสดง loading
-      setIsOpeningCamera(true);
       // 2. ขออนุญาตใช้กล้อง
       const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
       if (cameraPermission.status !== "granted") {
         Alert.alert("ขออนุญาต", "กรุณาอนุญาตให้เข้าถึงกล้อง");
+        setIsOpeningCamera(false);
         return;
       }
 
@@ -198,21 +217,33 @@ function TabLogic() {
       // 4. ถ้าถ่ายรูปสำเร็จ ให้ส่ง URI ไปที่หน้า scan
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const imageUri = result.assets[0].uri;
+        console.log('Image captured successfully:', imageUri);
         // ส่งพารามิเตอร์ไปพร้อมกับการนำทาง
         router.push({
           pathname: "/scan",
           params: { imageUri: imageUri },
         });
-      }
-      // ถ้าผู้ใช้ยกเลิก ก็ไม่ต้องทำอะไร ผู้ใช้จะยังอยู่ที่หน้าเดิม
-    } catch (error) {
-      Alert.alert("ข้อผิดพลาด", "ไม่สามารถเปิดกล้องได้");
-    } finally {
-      // ✅ คืนสถานะเป็น "ว่าง" เสมอ ไม่ว่าจะสำเร็จ, ล้มเหลว, หรือยกเลิก
-      // เพื่อให้ผู้ใช้สามารถกดได้อีกครั้ง
-      setTimeout(() => {
+        // ✅ คืนสถานะหลังจากนำทางสำเร็จ
         setIsOpeningCamera(false);
-      }, 1000);
+      } else {
+        // ถ้าผู้ใช้ยกเลิก ให้คืนสถานะ
+        console.log('Camera canceled by user');
+        setIsOpeningCamera(false);
+      }
+    } catch (error) {
+      console.error('Camera error:', error);
+      // บันทึก error log
+      insertErrorLog({
+        error_type: 'CAMERA_ERROR',
+        error_message: error.message || 'Failed to open camera',
+        error_code: error.code || null,
+        page_name: '_layout',
+        action_name: 'handleScanTabPress',
+        user_id: null
+      }).catch(e => console.error('Failed to log error:', e));
+      Alert.alert("ข้อผิดพลาด", "ไม่สามารถเปิดกล้องได้");
+      // ✅ คืนสถานะเมื่อมี error
+      setIsOpeningCamera(false);
     }
   };
 
