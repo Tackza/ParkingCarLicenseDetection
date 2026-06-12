@@ -220,6 +220,28 @@ export const setupDatabase = async () => {
       }
     }
 
+    // ✅ Migration to version 5: Add not_show_child_qty / not_show_novice_qty flags to projects
+    if (user_version < 5) {
+      console.log("Migrating to version 5: Adding not_show_child_qty / not_show_novice_qty to projects...");
+      try {
+        const projCols = await db.getAllAsync(`PRAGMA table_info('projects');`);
+        const hasNotShowChild = Array.isArray(projCols) && projCols.some(col => col.name === 'not_show_child_qty');
+        const hasNotShowNovice = Array.isArray(projCols) && projCols.some(col => col.name === 'not_show_novice_qty');
+        if (!hasNotShowChild) {
+          await db.runAsync(`ALTER TABLE projects ADD COLUMN not_show_child_qty INTEGER NOT NULL DEFAULT 0;`);
+          console.log("✅ Added column projects.not_show_child_qty");
+        }
+        if (!hasNotShowNovice) {
+          await db.runAsync(`ALTER TABLE projects ADD COLUMN not_show_novice_qty INTEGER NOT NULL DEFAULT 0;`);
+          console.log("✅ Added column projects.not_show_novice_qty");
+        }
+        user_version = 5;
+      } catch (e) {
+        console.error('❌ Error during version 5 migration:', e);
+        throw e;
+      }
+    }
+
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
     // This handles cases where the database was created before version tracking was added
     try {
@@ -481,12 +503,14 @@ export const saveProjects = async (projectsData) => {
         const busTypesJson = Array.isArray(project.bus_types)
           ? JSON.stringify(project.bus_types)
           : null;
+        const notShowChildQty = project.not_show_child_qty ? 1 : 0;
+        const notShowNoviceQty = project.not_show_novice_qty ? 1 : 0;
 
         await db.runAsync(
           `INSERT INTO projects
-            (project_id, activity_id, name, start_time, end_time, seq_no, bus_types)
+            (project_id, activity_id, name, start_time, end_time, seq_no, bus_types, not_show_child_qty, not_show_novice_qty)
            VALUES
-            (?, ?, ?, ?, ?, ?, ?);`,
+            (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
           [
             project.project_id,
             project.activity_id,
@@ -494,7 +518,9 @@ export const saveProjects = async (projectsData) => {
             startTime,
             endTime,
             project.seq_no,
-            busTypesJson
+            busTypesJson,
+            notShowChildQty,
+            notShowNoviceQty
           ]
         );
       }
@@ -531,6 +557,8 @@ export const getCurrentProject = async () => {
       } else {
         project.bus_types = [];
       }
+      project.not_show_child_qty = project.not_show_child_qty === 1;
+      project.not_show_novice_qty = project.not_show_novice_qty === 1;
     } else {
       console.log("No active project found.");
     }

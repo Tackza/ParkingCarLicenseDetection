@@ -33,6 +33,15 @@ export default function PassengerCountScreen() {
   const receiptRef = useRef();
   const { activeProject } = useProject();
 
+  // Flags จาก /lpr/projects — โปรเจกต์ที่ไม่ต้องนับเด็ก/สามเณร
+  const hideChildQty = activeProject?.not_show_child_qty === true;
+  const hideNoviceQty = activeProject?.not_show_novice_qty === true;
+
+  // ค่าที่ใช้ทั้งใน receipt และตอนบันทึก — ถูกบีบเป็น '0' ถ้าซ่อน
+  // ป้องกันค่าค้างจาก params.passenger ปะปนไปบนใบเสร็จและในฐานข้อมูล
+  const displayChildCount = hideChildQty ? '0' : childCount;
+  const displayNoviceCount = hideNoviceQty ? '0' : noviceCount;
+
   // ฟังก์ชันสำหรับเพิ่ม/ลด 
   const handleCountChange = (setter, currentValue, change) => {
     const currentNum = parseInt(currentValue, 10) || 0;
@@ -81,9 +90,10 @@ export default function PassengerCountScreen() {
     if (isSubmitting) return;
 
     const finalPassengerCount = parseInt(passengerCount, 10) || 0;
-    const finalChildCount = parseInt(childCount, 10) || 0;
+    // ถ้าโปรเจกต์ตั้ง flag ว่าไม่ต้องนับ ให้บังคับเป็น 0 เพื่อไม่ให้ค่าค้างจาก state หรือ params หลุดไป
+    const finalChildCount = hideChildQty ? 0 : (parseInt(childCount, 10) || 0);
     const finalMonkCount = parseInt(monkCount, 10) || 0;
-    const finalNoviceCount = parseInt(noviceCount, 10) || 0;
+    const finalNoviceCount = hideNoviceQty ? 0 : (parseInt(noviceCount, 10) || 0);
 
     setIsSubmitting(true);
     Keyboard.dismiss();
@@ -176,25 +186,27 @@ export default function PassengerCountScreen() {
             </View>
 
             {/* Child Counter */}
-            <View style={styles.counterSection}>
-              <Text style={styles.labelTypePassager}>เด็ก</Text>
-              <View style={styles.counterContainer}>
-                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setChildCount, childCount, -1)}>
-                  <Text style={styles.counterButtonText}>-</Text>
-                </TouchableOpacity>
-                <TextInput
-                  style={styles.counterInput}
-                  value={childCount}
-                  onChangeText={(text) => handleTextChange(text, setChildCount)}
-                  keyboardType="number-pad"
-                  textAlign="center"
-                  selectTextOnFocus={true}
-                />
-                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setChildCount, childCount, 1)}>
-                  <Text style={styles.counterButtonText}>+</Text>
-                </TouchableOpacity>
+            {!hideChildQty && (
+              <View style={styles.counterSection}>
+                <Text style={styles.labelTypePassager}>เด็ก</Text>
+                <View style={styles.counterContainer}>
+                  <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setChildCount, childCount, -1)}>
+                    <Text style={styles.counterButtonText}>-</Text>
+                  </TouchableOpacity>
+                  <TextInput
+                    style={styles.counterInput}
+                    value={childCount}
+                    onChangeText={(text) => handleTextChange(text, setChildCount)}
+                    keyboardType="number-pad"
+                    textAlign="center"
+                    selectTextOnFocus={true}
+                  />
+                  <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setChildCount, childCount, 1)}>
+                    <Text style={styles.counterButtonText}>+</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-            </View>
+            )}
 
             {/* Monk Counter */}
             <View style={styles.counterSection}>
@@ -218,25 +230,27 @@ export default function PassengerCountScreen() {
             </View>
 
             {/* Child Monk Counter */}
-            <View style={styles.counterSection}>
-              <Text style={styles.labelTypePassager}>สามเณร</Text>
-              <View style={styles.counterContainer}>
-                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setNoviceCount, noviceCount, -1)}>
-                  <Text style={styles.counterButtonText}>-</Text>
-                </TouchableOpacity>
-                <TextInput
-                  style={styles.counterInput}
-                  value={noviceCount}
-                  onChangeText={(text) => handleTextChange(text, setNoviceCount)}
-                  keyboardType="number-pad"
-                  textAlign="center"
-                  selectTextOnFocus={true}
-                />
-                <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setNoviceCount, noviceCount, 1)}>
-                  <Text style={styles.counterButtonText}>+</Text>
-                </TouchableOpacity>
+            {!hideNoviceQty && (
+              <View style={styles.counterSection}>
+                <Text style={styles.labelTypePassager}>สามเณร</Text>
+                <View style={styles.counterContainer}>
+                  <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setNoviceCount, noviceCount, -1)}>
+                    <Text style={styles.counterButtonText}>-</Text>
+                  </TouchableOpacity>
+                  <TextInput
+                    style={styles.counterInput}
+                    value={noviceCount}
+                    onChangeText={(text) => handleTextChange(text, setNoviceCount)}
+                    keyboardType="number-pad"
+                    textAlign="center"
+                    selectTextOnFocus={true}
+                  />
+                  <TouchableOpacity style={styles.counterButton} onPress={() => handleCountChange(setNoviceCount, noviceCount, 1)}>
+                    <Text style={styles.counterButtonText}>+</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-            </View>
+            )}
           </View>
 
           <View style={styles.buttonContainer}>
@@ -288,7 +302,7 @@ export default function PassengerCountScreen() {
                 </View>
                 <View style={styles.receiptRow}>
                   <Text style={styles.receiptLabel}>ผู้โดยสาร:</Text>
-                  <Text style={styles.receiptValue}>{formatPassengerInfo(passengerCount, childCount, monkCount, noviceCount)}</Text>
+                  <Text style={styles.receiptValue}>{formatPassengerInfo(passengerCount, displayChildCount, monkCount, displayNoviceCount)}</Text>
                 </View>
               </>
             )}
@@ -324,7 +338,7 @@ export default function PassengerCountScreen() {
             <View style={styles.receiptRow}>
               <Text style={styles.receiptLabel}>ผู้โดยสารรวม:</Text>
               {/* แสดงยอดรวมตัวใหญ่ๆ */}
-              <Text style={[styles.receiptValue, styles.totalPassengerValue]}>{formatPassengerInfo(passengerCount, childCount, monkCount, noviceCount)}</Text>
+              <Text style={[styles.receiptValue, styles.totalPassengerValue]}>{formatPassengerInfo(passengerCount, displayChildCount, monkCount, displayNoviceCount)}</Text>
             </View>
 
             {/* ✅ 3. เพิ่มช่องเซ็นชื่อ */}
