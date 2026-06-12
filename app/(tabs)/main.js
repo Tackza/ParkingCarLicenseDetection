@@ -27,6 +27,7 @@ import { useEnvironment } from '../../contexts/EnvironmentContext';
 // import CheckInSyncManager from '../../components/CheckInSyncManager';
 import HistoryItem from '../../components/HistoryItem';
 import { getActiveSession, getScanHistory, insertErrorLog } from '../../constants/Database';
+import { useAuth } from '../../contexts/AuthContext';
 import { useMode } from '../../contexts/ModeContext';
 import { useProject } from '../../contexts/ProjectContext';
 import { useSync } from '../../contexts/SyncContext';
@@ -58,6 +59,23 @@ export default function HistoryScreen() {
   const [searchImageModalVisible, setSearchImageModalVisible] = useState(false);
   const [selectedSearchImage, setSelectedSearchImage] = useState(null);
   const receiptRef = useRef();
+  const { user } = useAuth();
+
+  // ✅ Function สำหรับค้นหาอย่างรวดเร็วจากการ์ด
+  const handleQuickSearch = (plateNo, province) => {
+    // Preset ค่า plate_no และ province จากการ์ด แล้วเปิด modal
+    if (!plateNo || !province) {
+      Alert.alert('ข้อมูลไม่ครบ', 'กรุณาตรวจสอบข้อมูลทะเบียนและจังหวัด');
+      return;
+    }
+    setSearchPlateNo(plateNo);
+    setSearchProvince(province);
+    setSearchModalVisible(true);
+    // ค้นหาอัตโนมัติหลังจาก modal เปิด
+    setTimeout(() => {
+      handleOnlineSearchInternal(plateNo, province);
+    }, 300);
+  };
 
   const handleOnlineSearch = async () => {
     // varidate inputs
@@ -66,6 +84,12 @@ export default function HistoryScreen() {
       return;
     }
     if (!activeProject) return;
+
+    handleOnlineSearchInternal(searchPlateNo, searchProvince);
+  };
+
+  // ✅ Internal function สำหรับ API call
+  const handleOnlineSearchInternal = async (plateNo, province) => {
 
     setIsSearching(true);
     setSearchResults([]);
@@ -82,8 +106,8 @@ export default function HistoryScreen() {
         project_id: activeProject.project_id,
         activity_id: activeProject.activity_id || '',
         seq_no: activeProject.seq_no || '',
-        plate_no: searchPlateNo,
-        plate_province: searchProvince
+        plate_no: plateNo,
+        plate_province: province
       };
 
       console.log('Searching with params:', params);
@@ -117,7 +141,6 @@ export default function HistoryScreen() {
       console.error('Search error:', error);
 
       // Log error to database
-      const session = await getActiveSession();
       await insertErrorLog({
         comp_id: null,
         error_type: 'API_ERROR',
@@ -125,7 +148,7 @@ export default function HistoryScreen() {
         error_code: error.response?.status || error.code || 'SEARCH_ERROR',
         page_name: 'main.js',
         action_name: 'handleOnlineSearch',
-        user_id: session?.user_id || null
+        user_id: user?.id || null
       });
 
       Alert.alert('ข้อผิดพลาด', error.message || 'เกิดข้อผิดพลาดในการค้นหา');
@@ -209,7 +232,6 @@ export default function HistoryScreen() {
           console.error('Print error after API success:', error);
 
           // Log error to database
-          const session = await getActiveSession();
           await insertErrorLog({
             comp_id: item?.comp_id || null,
             error_type: 'PRINT_ERROR',
@@ -217,7 +239,7 @@ export default function HistoryScreen() {
             error_code: error.code || 'BLUETOOTH_PRINT_ERROR',
             page_name: 'main.js',
             action_name: 'handlePrint - Bluetooth print',
-            user_id: session?.user_id || null
+            user_id: user?.id || null
           });
 
           Alert.alert('ข้อผิดพลาด', 'ไม่สามารถพิมพ์ได้');
@@ -231,7 +253,6 @@ export default function HistoryScreen() {
       console.error('Print API error:', error);
 
       // Log error to database
-      const session = await getActiveSession();
       await insertErrorLog({
         comp_id: item?.comp_id || null,
         error_type: 'API_ERROR',
@@ -239,7 +260,7 @@ export default function HistoryScreen() {
         error_code: error.response?.status || error.code || 'PRINT_API_ERROR',
         page_name: 'main.js',
         action_name: 'handlePrint - API call',
-        user_id: session?.user_id || null
+        user_id: user?.id || null
       });
 
       // ✅ ไม่แสดง alert เมื่อมี error จาก API (ลอง handle gracefully)
@@ -308,7 +329,6 @@ export default function HistoryScreen() {
       console.error('Error loading history:', error);
 
       // Log error to database
-      const session = await getActiveSession();
       await insertErrorLog({
         comp_id: null,
         error_type: 'DATABASE_ERROR',
@@ -316,7 +336,7 @@ export default function HistoryScreen() {
         error_code: error.code || 'LOAD_HISTORY_ERROR',
         page_name: 'main.js',
         action_name: 'loadHistory',
-        user_id: session?.user_id || null
+        user_id: user?.id || null
       });
 
       setHistory([]); // รีเซ็ตให้เป็น array ว่างเพื่อแสดงข้อความ "ไม่มีข้อมูล"
@@ -388,6 +408,7 @@ export default function HistoryScreen() {
                 index={index}
                 numberPlate={numberPlate}
                 openImageModal={openImageModal}
+                onQuickSearch={handleQuickSearch}
               />
             )}
             keyboardShouldPersistTaps="handled"
@@ -822,11 +843,11 @@ const styles = StyleSheet.create({
   },
   resultList: {
     width: '100%',
-    marginVertical: 20,
+    marginVertical: 10,
   },
   resultItem: {
     backgroundColor: '#f8f9fa',
-    padding: 15,
+    padding: 10,
     borderRadius: 10,
     marginBottom: 10,
     borderWidth: 1,

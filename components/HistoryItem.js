@@ -35,7 +35,7 @@ const formatPassengerInfo = (passengerString) => {
 
 
 // 1. รับ props ทั้งหมดที่จำเป็นเข้ามา: item, index, และฟังก์ชัน 2 ตัว
-const HistoryItem = ({ item, index, numberPlate, openImageModal }) => {
+const HistoryItem = ({ item, index, numberPlate, openImageModal, onQuickSearch }) => {
   if (!item) return null;
   const passengerText = formatPassengerInfo(item.passenger);
   const createdAtDate = item.created_at ? new Date(item.created_at) : null;
@@ -46,6 +46,8 @@ const HistoryItem = ({ item, index, numberPlate, openImageModal }) => {
 
   return (
     <View style={styles.card}>
+   
+
       {/* <View style={styles.cornerNumber}>
         <Text style={styles.cornerNumberText}>
           {typeof numberPlate === 'function' ? numberPlate(index) : item.id}
@@ -82,6 +84,14 @@ const HistoryItem = ({ item, index, numberPlate, openImageModal }) => {
             {/* ✅ ใช้ Logical OR operator และทำการ replace อย่างปลอดภัย */}
             <Text style={styles.provinceText}>{(item.plate_province || 'ไม่ระบุจังหวัด')?.replace("กรุงเทพมหานคร", "กทม.")}</Text>
           </View>
+
+          {/* ✅ ไอคอน Search ที่ขวาบน */}
+          <TouchableOpacity
+            style={styles.searchIconButton}
+            onPress={() => onQuickSearch && onQuickSearch(item.plate_no, item.plate_province)}
+          >
+            <Ionicons name="search" size={20} color="#3498db" />
+          </TouchableOpacity>
         </View>
         <View style={styles.infoRow}>
           <View style={styles.infoItem}>
@@ -161,6 +171,20 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 10,
     elevation: 4,
+    position: 'relative',
+  },
+  // ✅ Style สำหรับปุ่มไอคอน search
+  searchIconButton: {
+    position: 'absolute',
+    top: 10,
+    right: 1,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
   },
   // ✅ สไตล์สำหรับ Container ด้านซ้าย
   leftContainer: {
@@ -214,7 +238,7 @@ const styles = StyleSheet.create({
   },
   topRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 8,
   },
   plateInfo: {
@@ -226,13 +250,13 @@ const styles = StyleSheet.create({
   plateText: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#1A1A1A',
+    color: '#000000ff',
     letterSpacing: 0.5,
   },
   provinceText: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
-    color: '#666',
+    color: '#000000ff',
     marginTop: 2,
   },
   chipError: {

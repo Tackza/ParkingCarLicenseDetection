@@ -10,6 +10,7 @@ import {
   saveProjects,
 } from '../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useEnvironment } from './EnvironmentContext';
+import { useAuth } from './AuthContext';
 
 
 
@@ -28,6 +29,7 @@ export const ProjectProvider = ({ children }) => {
   const [activeProject, setActiveProject] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const { environment, isLoading: isEnvLoading } = useEnvironment();
+  const { user } = useAuth();
 
 
   if (isEnvLoading) {
@@ -56,7 +58,6 @@ export const ProjectProvider = ({ children }) => {
 
       // ✅ Log error to database
       try {
-        const session = await getActiveSession();
         await insertErrorLog({
           comp_id: null,
           error_type: 'DATABASE_ERROR',
@@ -64,7 +65,7 @@ export const ProjectProvider = ({ children }) => {
           error_code: error.code || 'REFRESH_PROJECT_ERROR',
           page_name: 'ProjectContext.js',
           action_name: 'refreshCurrentProject',
-          user_id: session?.user_id || null
+          user_id: user?.id || null
         });
       } catch (logError) {
         console.error('Failed to log error:', logError);
@@ -110,7 +111,6 @@ export const ProjectProvider = ({ children }) => {
 
       // ✅ Log error to database
       try {
-        const session = await getActiveSession();
         await insertErrorLog({
           comp_id: null,
           error_type: 'API_ERROR',
@@ -118,7 +118,7 @@ export const ProjectProvider = ({ children }) => {
           error_code: error.response?.status || error.code || 'SYNC_PROJECTS_ERROR',
           page_name: 'ProjectContext.js',
           action_name: 'syncProjectsWithApi',
-          user_id: session?.user_id || null
+          user_id: user?.id || null
         });
       } catch (logError) {
         console.error('Failed to log error:', logError);

@@ -40,6 +40,7 @@ export const setupDatabase = async () => {
     let { user_version } = await db.getFirstAsync('PRAGMA user_version');
     console.log(`Current DB version: ${user_version}`);
     // ใช้ execAsync สำหรับการรัน SQL หลายคำสั่งพร้อมกัน
+    // Note: execAsync ใช้ transaction ภายใน ดังนั้นห้ามใช้ inside withTransactionAsync
     if (user_version < 1) {
       console.log("Migrating to version 1: Creating initial tables...");
       await db.execAsync(`
@@ -89,6 +90,7 @@ export const setupDatabase = async () => {
         station_name TEXT NOT NULL,
         station_province TEXT NOT NULL,
         passenger TEXT NOT NULL,
+        check_mileage INTEGER NOT NULL DEFAULT 0,
         note TEXT,
         alert_message TEXT,
         checkin_date TEXT,
@@ -124,6 +126,7 @@ export const setupDatabase = async () => {
           photo_path TEXT,
           bus_type TEXT NOT NULL,
           passenger TEXT NOT NULL,
+          mileage TEXT,
           sticker_no TEXT,
           note TEXT,
           comp_id INTEGER NOT NULL,
@@ -160,10 +163,61 @@ export const setupDatabase = async () => {
         page_name TEXT,
         action_name TEXT,
         user_id INTEGER,
-        created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
       );
       `);
       user_version = 2;
+    }
+
+    // ✅ Migration to version 3: Add mileage columns
+    if (user_version < 3) {
+      console.log("Migrating to version 3: Adding mileage columns to registers and check_ins...");
+      try {
+        // Check and add registers.activity1_checkmile and activity2_checkmile
+        const regCols = await db.getAllAsync(`PRAGMA table_info('registers');`);
+        const hasActivity1CheckMile = Array.isArray(regCols) && regCols.some(col => col.name === 'activity1_checkmile');
+        const hasActivity2CheckMile = Array.isArray(regCols) && regCols.some(col => col.name === 'activity2_checkmile');
+
+        if (!hasActivity1CheckMile) {
+          await db.runAsync(`ALTER TABLE registers ADD COLUMN activity1_checkmile INTEGER NOT NULL DEFAULT 0;`);
+          console.log("✅ Added column registers.activity1_checkmile");
+        }
+
+        if (!hasActivity2CheckMile) {
+          await db.runAsync(`ALTER TABLE registers ADD COLUMN activity2_checkmile INTEGER NOT NULL DEFAULT 0;`);
+          console.log("✅ Added column registers.activity2_checkmile");
+        }
+
+        // Check and add check_ins.mileage
+        const ciCols = await db.getAllAsync(`PRAGMA table_info('check_ins');`);
+        const hasMileage = Array.isArray(ciCols) && ciCols.some(col => col.name === 'mileage');
+        if (!hasMileage) {
+          await db.runAsync(`ALTER TABLE check_ins ADD COLUMN mileage TEXT;`);
+          console.log("✅ Added column check_ins.mileage");
+        }
+
+        user_version = 3;
+      } catch (e) {
+        console.error('❌ Error during version 3 migration:', e);
+        throw e;
+      }
+    }
+
+    // ✅ Migration to version 4: Add bus_types column to projects (JSON string)
+    if (user_version < 4) {
+      console.log("Migrating to version 4: Adding bus_types column to projects...");
+      try {
+        const projCols = await db.getAllAsync(`PRAGMA table_info('projects');`);
+        const hasBusTypes = Array.isArray(projCols) && projCols.some(col => col.name === 'bus_types');
+        if (!hasBusTypes) {
+          await db.runAsync(`ALTER TABLE projects ADD COLUMN bus_types TEXT;`);
+          console.log("✅ Added column projects.bus_types");
+        }
+        user_version = 4;
+      } catch (e) {
+        console.error('❌ Error during version 4 migration:', e);
+        throw e;
+      }
     }
 
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
@@ -185,7 +239,7 @@ export const setupDatabase = async () => {
           page_name TEXT,
           action_name TEXT,
           user_id INTEGER,
-          created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+          created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
         );
         `);
         console.log("✅ error_logs table created successfully.");
@@ -215,24 +269,22 @@ export const saveSession = async (loginData) => {
   const { id, username, first_name, last_name, note, lpr_token } = loginData;
 
   try {
-    // withTransactionAsync จะจัดการ commit และ rollback ให้อัตโนมัติ
-    await db.withTransactionAsync(async () => {
-      // 1. ลบ session เก่าทั้งหมด
-      await db.runAsync('DELETE FROM sessions;');
+    // 1. ลบ session เก่าทั้งหมด
+    await db.runAsync('DELETE FROM sessions;');
 
-      // 2. เพิ่มหรืออัปเดตข้อมูล user (ใช้ runAsync)
-      // REPLACE INTO = INSERT or REPLACE
-      await db.runAsync(
-        'REPLACE INTO users (id, username, first_name, last_name, note) VALUES (?, ?, ?, ?, ?);',
-        [id, username, first_name, last_name, note]
-      );
+    // 2. เพิ่มหรืออัปเดตข้อมูล user (ใช้ runAsync)
+    // REPLACE INTO = INSERT or REPLACE
+    await db.runAsync(
+      'REPLACE INTO users (id, username, first_name, last_name, note) VALUES (?, ?, ?, ?, ?);',
+      [id, username, first_name, last_name, note]
+    );
 
-      // 3. เพิ่มข้อมูล session ใหม่
-      await db.runAsync(
-        'INSERT INTO sessions (user_id, lpr_token) VALUES (?, ?);',
-        [id, lpr_token]
-      );
-    });
+    // 3. เพิ่มข้อมูล session ใหม่
+    await db.runAsync(
+      'INSERT INTO sessions (user_id, lpr_token) VALUES (?, ?);',
+      [id, lpr_token]
+    );
+
     console.log("Session saved successfully for user:", username);
   } catch (error) {
     console.error("Error saving session:", error);
@@ -426,18 +478,23 @@ export const saveProjects = async (projectsData) => {
 
         console.log(`Inserting project: ${project.project_id} - ${project.name}`);
 
+        const busTypesJson = Array.isArray(project.bus_types)
+          ? JSON.stringify(project.bus_types)
+          : null;
+
         await db.runAsync(
           `INSERT INTO projects
-            (project_id, activity_id, name, start_time, end_time, seq_no) 
-           VALUES 
-            (?, ?, ?, ?, ?, ?);`,
+            (project_id, activity_id, name, start_time, end_time, seq_no, bus_types)
+           VALUES
+            (?, ?, ?, ?, ?, ?, ?);`,
           [
             project.project_id,
             project.activity_id,
             project.name,
             startTime,
             endTime,
-            project.seq_no
+            project.seq_no,
+            busTypesJson
           ]
         );
       }
@@ -464,6 +521,16 @@ export const getCurrentProject = async () => {
 
     if (project) {
       console.log("Found project:", project.name);
+      if (typeof project.bus_types === 'string' && project.bus_types.length > 0) {
+        try {
+          project.bus_types = JSON.parse(project.bus_types);
+        } catch (e) {
+          console.warn("Failed to parse project.bus_types JSON; defaulting to []", e);
+          project.bus_types = [];
+        }
+      } else {
+        project.bus_types = [];
+      }
     } else {
       console.log("No active project found.");
     }
@@ -487,11 +554,11 @@ export const saveRegisters = async (registersData) => {
         await db.runAsync(
           `REPLACE INTO registers ( uid,
             register_id, project_id, short_code, plate_no, plate_province,
-            bus_type, station_name, station_province, passenger, note,
+            bus_type, station_name, station_province, passenger, activity1_checkmile, activity2_checkmile, note,
             alert_message, checkin_date, activity1_date, activity2_date,
             activity1_user, activity1_name, activity2_user, checkin_printno, activity1_printno,
             activity2_printno, show_activity2, updated_at, deleted_at
-          ) VALUES (?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          ) VALUES (?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
           [
             reg.uid,
             reg.reg_id,          // จาก JSON
@@ -503,6 +570,8 @@ export const saveRegisters = async (registersData) => {
             reg.station,         // จาก JSON
             reg.province,        // จาก JSON
             reg.passenger,
+            reg.act1_mile || 0,
+            reg.act2_mile || 0,
             reg.note,
             reg.alert_msg,       // จาก JSON
             reg.chk_date,        // จาก JSON
@@ -618,9 +687,9 @@ export const insertCheckIn = async (checkInData) => {
       `INSERT INTO check_ins (
          uid, project_id, register_id, activity_id, seq_no, detect_plate_no, detect_plate_province,
          plate_no, plate_province, is_plate_manual, photo_path, bus_type,
-         passenger, sticker_no, note, comp_id, printed, error_msg, ocr_connected,
+         passenger, mileage, sticker_no, note, comp_id, printed, error_msg, ocr_connected,
          created_by 
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         newId, // ลบขีดกลางออกจาก ULID
         checkInData.project_id,
@@ -635,6 +704,7 @@ export const insertCheckIn = async (checkInData) => {
         checkInData.photo_path,
         checkInData.bus_type,
         checkInData.passenger,
+        (checkInData && (checkInData.chk_mile ?? checkInData.mileage)) ?? null,
         checkInData.sticker_no || null,
         checkInData.note || null,
         checkInData.comp_id,

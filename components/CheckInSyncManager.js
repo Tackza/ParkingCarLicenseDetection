@@ -10,6 +10,7 @@ import {
   markCheckInAsSynced,
   markCheckInAsSyncedError
 } from '@/constants/Database';
+import { useAuth } from '@/contexts/AuthContext';
 import { useEnvironment } from '@/contexts/EnvironmentContext';
 import { useProject } from '@/contexts/ProjectContext';
 import axios from 'axios';
@@ -39,6 +40,7 @@ const CheckInSyncManager = () => {
 
   // ✅ Use a ref to keep track of activeProject without forcing re-renders or re-creating callbacks
   const activeProjectRef = useRef(activeProject);
+  const { user } = useAuth();
 
   useEffect(() => {
     activeProjectRef.current = activeProject;
@@ -123,7 +125,7 @@ const CheckInSyncManager = () => {
     try {
       const currentProject = await getCurrentProject();
       const session = await getActiveSession();
-      console.log('currentProject :>> ', currentProject);
+      console.log('currentProject checksyns :>> ', currentProject);
       // ✅ ถ้าไม่มี token (เช่นตอน logout) ให้หยุดอย่างสงบ ไม่ throw error
       if (!session?.lpr_token) {
         console.log("Check-in Sync skipped: No LprToken (user logged out).");
@@ -201,6 +203,7 @@ const CheckInSyncManager = () => {
           formData.append('is_manual', checkIn.is_plate_manual ? '1' : '0'); // แปลง boolean/integer เป็น string '1'/'0'
           formData.append('bus_type', checkIn.bus_type || '');
           formData.append('passenger', checkIn.passenger || '');
+          formData.append('mileage', checkIn.mileage || '');
           formData.append('sticker_no', checkIn.sticker_no === null ? "" : checkIn.sticker_no);
           formData.append('note', checkIn.note || '');
           formData.append('comp_id', checkIn.comp_id || '');
@@ -285,7 +288,6 @@ const CheckInSyncManager = () => {
 
           // ✅ Log error to database
           try {
-            const session = await getActiveSession();
             await insertErrorLog({
               comp_id: checkIn.comp_id || null,
               error_type: 'SYNC_ERROR',
@@ -293,7 +295,7 @@ const CheckInSyncManager = () => {
               error_code: itemError.response?.status || itemError.status || itemError.code || 'CHECKIN_UPLOAD_ERROR',
               page_name: 'CheckInSyncManager.js',
               action_name: 'syncCheckInsToServer - itemError',
-              user_id: session?.user_id || null
+              user_id: user?.id || null
             });
           } catch (logError) {
             console.error('Failed to log error:', logError);
@@ -352,7 +354,6 @@ const CheckInSyncManager = () => {
 
       // ✅ Log error to database
       try {
-        const session = await getActiveSession();
         await insertErrorLog({
           comp_id: null,
           error_type: 'SYNC_ERROR',
@@ -360,7 +361,7 @@ const CheckInSyncManager = () => {
           error_code: fullSyncError.code || 'FULL_SYNC_ERROR',
           page_name: 'CheckInSyncManager.js',
           action_name: 'syncCheckInsToServer - fullSyncError',
-          user_id: session?.user_id || null
+          user_id: user?.id || null
         });
       } catch (logError) {
         console.error('Failed to log error:', logError);

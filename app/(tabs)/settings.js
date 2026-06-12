@@ -7,6 +7,7 @@ import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
 import { clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
 import { exportDatabaseFile } from '../../utils/exportUtils';
@@ -56,6 +57,7 @@ export default function SettingsScreen() {
   const [syncErrorCount, setSyncErrorCount] = useState(0); // พบปัญหา (sync_status 4)
   const [successCount, setSuccessCount] = useState(0); // สำเร็จ (sync_status 2)
   const [currentId, setCurrentId] = useState(null); // project_id or activity_id depending on mode
+  const [currentProject, setCurrentProject] = useState(null); // Store current project info
 
   // Clear Registers Modal States
   const [isClearRegistersModalVisible, setClearRegistersModalVisible] = useState(false);
@@ -75,6 +77,7 @@ export default function SettingsScreen() {
   const updateId = Updates.updateId || null;
   const updateChannel = Updates.channel || '-';
   const updateCreatedAt = Updates.createdAt || null;
+  const { user } = useAuth();
 
   // สร้าง OTA Version จากวันที่ update (เช่น 2025.12.06.1713)
   const getOtaVersion = () => {
@@ -114,17 +117,18 @@ export default function SettingsScreen() {
         }
 
         // ดึง current project (ใช้เพื่อหาค่า project_id/activity_id)
-        const currentProject = await getCurrentProject();
+        const projectData = await getCurrentProject();
+        setCurrentProject(projectData); // Store project data for display
         let idForFilter = null;
-        if (currentProject) {
+        if (projectData) {
           // default use project_id
-          idForFilter = currentProject.project_id;
+          idForFilter = projectData.project_id;
           const appMode = await getSetting('appMode');
 
           // app mode is false to dharmmakaya mode
           // app mode is true to general mode
           if (appMode == "false") {
-            idForFilter = currentProject.activity_id;
+            idForFilter = projectData.activity_id;
           }
         }
         setCurrentId(idForFilter);
@@ -149,7 +153,6 @@ export default function SettingsScreen() {
 
         // Log error to database
         try {
-          const session = await getActiveSession();
           await insertErrorLog({
             comp_id: null,
             error_type: 'DATABASE_ERROR',
@@ -157,7 +160,7 @@ export default function SettingsScreen() {
             error_code: e.code || 'FETCH_DATA_ERROR',
             page_name: 'settings.js',
             action_name: 'fetchDataFromDB',
-            user_id: session?.user_id || null
+            user_id: user?.id || null
           });
         } catch (logError) {
           console.error('Failed to log error:', logError);
@@ -191,7 +194,6 @@ export default function SettingsScreen() {
 
       // Log error to database
       try {
-        const session = await getActiveSession();
         await insertErrorLog({
           comp_id: null,
           error_type: 'DATABASE_ERROR',
@@ -199,7 +201,7 @@ export default function SettingsScreen() {
           error_code: e.code || 'REFRESH_COUNTS_ERROR',
           page_name: 'settings.js',
           action_name: 'refreshCounts',
-          user_id: session?.user_id || null
+          user_id: user?.id || null
         });
       } catch (logError) {
         console.error('Failed to log error:', logError);
@@ -212,14 +214,15 @@ export default function SettingsScreen() {
     (async () => {
       // recompute currentId based on current project and mode
       try {
-        const currentProject = await getCurrentProject();
+        const projectData = await getCurrentProject();
+        setCurrentProject(projectData); // Update project data
         let idForFilter = null;
-        if (currentProject) {
-          idForFilter = currentProject.project_id;
+        if (projectData) {
+          idForFilter = projectData.project_id;
           const appMode = await getSetting('appMode');
           const isModeOneLocal = appMode === null ? true : appMode === 'true';
           if (!isModeOneLocal) {
-            idForFilter = currentProject.activity_id;
+            idForFilter = projectData.activity_id;
           }
         }
         setCurrentId(idForFilter);
@@ -283,7 +286,6 @@ export default function SettingsScreen() {
 
               // Log error to database
               try {
-                const session = await getActiveSession();
                 await insertErrorLog({
                   comp_id: null,
                   error_type: 'API_ERROR',
@@ -291,7 +293,8 @@ export default function SettingsScreen() {
                   error_code: e.response?.status || e.code || 'LOGOUT_ERROR',
                   page_name: 'settings.js',
                   action_name: 'handleLogout',
-                  user_id: session?.user_id || null
+                  user_id: user?.id || null
+
                 });
               } catch (logError) {
                 console.error('Failed to log error:', logError);
@@ -354,7 +357,6 @@ export default function SettingsScreen() {
     } catch (error) {
       // Log error to database
       try {
-        const session = await getActiveSession();
         await insertErrorLog({
           comp_id: null,
           error_type: 'API_ERROR',
@@ -362,7 +364,7 @@ export default function SettingsScreen() {
           error_code: error.response?.status || error.code || 'GET_PROJECT_ERROR',
           page_name: 'settings.js',
           action_name: 'getProject',
-          user_id: session?.user_id || null
+          user_id: user?.id || null
         });
       } catch (logError) {
         console.error('Failed to log error:', logError);
@@ -397,7 +399,6 @@ export default function SettingsScreen() {
 
       // Log error to database
       try {
-        const session = await getActiveSession();
         await insertErrorLog({
           comp_id: null,
           error_type: 'DATABASE_ERROR',
@@ -405,7 +406,7 @@ export default function SettingsScreen() {
           error_code: e.code || 'CLEAR_REGISTERS_ERROR',
           page_name: 'settings.js',
           action_name: 'handleClearRegisters',
-          user_id: session?.user_id || null
+          user_id: user?.id || null
         });
       } catch (logError) {
         console.error('Failed to log error:', logError);
@@ -820,6 +821,7 @@ export default function SettingsScreen() {
       {renderVersionModal()}
       {renderClearRegistersModal()}
       <View style={styles.profileHeader}>
+
         <View style={styles.profileContent}>
           {/* Avatar */}
           <View style={[styles.avatarTextContainer, { backgroundColor: '#007AFF' }]}>
@@ -828,12 +830,23 @@ export default function SettingsScreen() {
 
           {/* Info */}
           <View style={styles.profileInfo}>
-            <Text style={styles.username}>{first_name} {last_name}</Text>
-            <View style={[styles.envBadge, environment === 'prod' ? styles.envProdBadge : styles.envTestBadge]}>
-              <Text style={[styles.envText, environment === 'prod' ? styles.envProdText : styles.envTestText]}>
-                Env: {environment === 'prod' ? 'Prod' : 'Test'}
-              </Text>
-            </View>
+            <Text style={styles.username}>{first_name} {last_name}
+              {<View style={[styles.envBadge, environment === 'prod' ? styles.envProdBadge : styles.envTestBadge]}>
+                <Text style={[styles.envText, environment === 'prod' ? styles.envProdText : styles.envTestText]}>
+                  Env: {environment === 'prod' ? 'Prod' : 'Test'}
+                </Text>
+              </View>}
+            </Text>
+
+            {/* Current Project Display */}
+            {currentProject && (
+              <View style={styles.projectBanner}>
+
+                <Text style={styles.projectName} numberOfLines={1} ellipsizeMode="tail">
+                  {currentProject.name}
+                </Text>
+              </View>
+            )}
           </View>
         </View>
       </View>
@@ -942,18 +955,32 @@ const styles = StyleSheet.create({
   },
   profileHeader: {
     backgroundColor: '#fff',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
   },
+  projectBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+
+    borderBottomColor: '#ffffffff',
+  },
+  projectName: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0D47A1',
+  },
   profileContent: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
   },
   profileInfo: {
     flex: 1,
-    justifyContent: 'center',
+    justifyContent: 'space-around',
   },
   username: {
     fontSize: 18,

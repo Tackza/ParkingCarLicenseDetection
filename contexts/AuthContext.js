@@ -1,7 +1,7 @@
 import axios from 'axios';
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import { getActiveSession, insertErrorLog } from '../constants/Database';
+import { getActiveSession, insertErrorLog, saveSession } from '../constants/Database';
 import { useEnvironment } from './EnvironmentContext';
 
 const AuthContext = createContext(null);
@@ -10,6 +10,14 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const { environment, isLoading: isEnvLoading } = useEnvironment();
+
+  // Save session to DB when user changes
+  useEffect(() => {
+    console.log('user :>> ', user);
+    if (user) {
+      saveSession(user.id, user.username);
+    }
+  }, [user]);
 
 
   if (isEnvLoading) {
@@ -84,7 +92,7 @@ export const AuthProvider = ({ children }) => {
         console.error('Failed to log error:', logError);
       }
 
-      return { success: false, message: error.message };
+      return { status: 'error', message: error.message };
       // ให้ดูข้อมูลใน console ว่า error บอกอะไรเพิ่มเติมบ้าง
     }
 

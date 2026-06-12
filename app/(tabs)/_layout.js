@@ -18,6 +18,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, LogBox } from "react-native";
 import BackgroundTimer from 'react-native-background-timer';
 import SyncStatus from "../../components/SyncStatus";
+import { useAuth } from "@/contexts/AuthContext";
 
 
 LogBox.ignoreLogs([
@@ -40,6 +41,7 @@ function TabLogic() {
   const isSyncInProgress = useRef(false);
   const [isOpeningCamera, setIsOpeningCamera] = useState(false);
   const { environment } = useEnvironment();
+  const { user } = useAuth();
 
 
   // ✅ Ref for tracking the current unique session of the effect/timer
@@ -117,7 +119,7 @@ function TabLogic() {
         error_code: error.response?.status?.toString() || error.code || null,
         page_name: '_layout',
         action_name: 'syncRegistersData',
-        user_id: null
+        user_id: user?.id || null
       }).catch(e => console.error('Failed to log error:', e));
 
       if (error.response && error.response.status === 401) {
@@ -239,7 +241,7 @@ function TabLogic() {
         error_code: error.code || null,
         page_name: '_layout',
         action_name: 'handleScanTabPress',
-        user_id: null
+        user_id: user?.id || null
       }).catch(e => console.error('Failed to log error:', e));
       Alert.alert("ข้อผิดพลาด", "ไม่สามารถเปิดกล้องได้");
       // ✅ คืนสถานะเมื่อมี error

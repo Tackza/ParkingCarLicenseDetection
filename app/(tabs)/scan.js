@@ -9,7 +9,7 @@ import {
   useRouter
 } from 'expo-router';
 import * as Speech from 'expo-speech';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -31,17 +31,19 @@ import LicensePlateDisplay from '../../components/LicensePlateDisplay';
 import Receipt from '../../components/Receipt';
 import { findRegisterByPlate, getActiveSession, getSetting, insertCheckIn, insertErrorLog } from '../../constants/Database';
 import { THAI_PROVINCES } from '../../constants/provinces';
+import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useProject } from '../../contexts/ProjectContext';
 
 const IMAGE_PROCESSING_TIMEOUT = 15000;
 
-const vehicleTypes = [
+// Fallback ใช้เฉพาะกรณี activeProject ยังไม่มี bus_types (เช่น session เก่าก่อนอัปเดต API)
+const FALLBACK_VEHICLE_TYPES = [
   { label: 'รถตู้', value: 'ตู้' },
   { label: 'รถบัสพัดลม', value: 'พัดลม' },
   { label: 'รถบัสแอร์ 1 ชั้น', value: 'แอร์ 1 ชั้น' },
   { label: 'รถบัสแอร์ 2 ชั้น', value: 'แอร์ 2 ชั้น' },
-  { label: 'อื่น ๆ (โปรดระบุ)', value: 'Other' }, // <-- เพิ่มตัวเลือกนี้
+  { label: 'อื่น ๆ (โปรดระบุ)', value: 'Other' },
 ];
 
 
@@ -58,6 +60,7 @@ export default function ScanScreen() {
   const [province, setProvince] = useState('');
   const [vehicleType, setVehicleType] = useState('');
   const [stickerNumber, setStickerNumber] = useState('');
+  const [mileage, setMileage] = useState('');
 
   const [provinceOpen, setProvinceOpen] = useState(false);
   const [vehicleTypeOpen, setVehicleTypeOpen] = useState(false);
@@ -84,10 +87,22 @@ export default function ScanScreen() {
   const { isModeOne } = useMode();
   const { environment } = useEnvironment();
   const [ocrConnected, setOcrConnected] = useState(1); // ✅ เพิ่ม state สำหรับเก็บสถานะ OCR
+  const { user } = useAuth();
 
   const API_URL = environment === 'prod' ?
     "https://mbus.dhammakaya.network/api" :
     "https://mbus-test.dhammakaya.network/api";
+
+  // ประเภทรถดึงจาก activeProject.bus_types (API /lpr/projects)
+  // map: name -> label, short_name -> value, is_other -> 'Other' sentinel
+  const vehicleTypes = useMemo(() => {
+    const apiList = Array.isArray(activeProject?.bus_types) ? activeProject.bus_types : [];
+    if (apiList.length === 0) return FALLBACK_VEHICLE_TYPES;
+    return apiList.map(bt => ({
+      label: bt.name,
+      value: bt.is_other ? 'Other' : bt.short_name,
+    }));
+  }, [activeProject]);
 
 
   // --- เพิ่ม useEffect นี้: เพื่อจัดการกับ imageUri ที่ได้รับ และดึง session + machineCode ---
@@ -122,7 +137,7 @@ export default function ScanScreen() {
           error_code: error.code || null,
           page_name: 'scan',
           action_name: 'fetchDataAndProcessImage',
-          user_id: null
+          user_id: user?.id || null
         });
       }
     };
@@ -181,22 +196,17 @@ export default function ScanScreen() {
       const provinceExists = checkProvinceExists(detectedProvince)
       setProvince(provinceExists);
 
-      // พูดเลขทะเบียนทันที
-      speakPlateNo(detectedPlate, provinceExists);
+      const checkResult = await checkWithRegisterList(detectedPlate, provinceExists);
 
-      const isFound = await checkWithRegisterList(detectedPlate, provinceExists);
+      // พูดเลขทะเบียนพร้อมสถานะ duplicate
+      speakPlateNo(detectedPlate, provinceExists, checkResult.hasDuplicate);
 
       if (!detectedPlate || !provinceExists) {
         openEditModal(detectedPlate, provinceExists);
       }
 
       // พูดผลลัพธ์การตรวจสอบ
-      speakVerificationResult(isFound);
-
-
-
-
-
+      speakVerificationResult(checkResult.found);
 
 
     } catch (error) {
@@ -212,7 +222,7 @@ export default function ScanScreen() {
           error_code: error.code || null,
           page_name: 'scan',
           action_name: 'processImage',
-          user_id: sessionData?.user_id || null
+          user_id: user?.id || null
         }).catch(e => console.error('Failed to log error:', e));
         Alert.alert(
           'การเชื่อมต่อถูกยกเลิก',
@@ -230,7 +240,7 @@ export default function ScanScreen() {
           error_code: 'ECONNABORTED',
           page_name: 'scan',
           action_name: 'processImage',
-          user_id: sessionData?.user_id || null
+          user_id: user?.id || null
         }).catch(e => console.error('Failed to log error:', e));
         Alert.alert(
           'การเชื่อมต่อหมดเวลา',
@@ -248,7 +258,7 @@ export default function ScanScreen() {
           error_code: error.response.status?.toString() || null,
           page_name: 'scan',
           action_name: 'processImage',
-          user_id: sessionData?.user_id || null
+          user_id: user?.id || null
         }).catch(e => console.error('Failed to log error:', e));
         // Alert.alert('ข้อผิดพลาดจากเซิร์ฟเวอร์', error.response.data.message || 'ไม่สามารถตรวจจับทะเบียนรถได้');
       } else if (error.request) {
@@ -262,7 +272,7 @@ export default function ScanScreen() {
           error_code: null,
           page_name: 'scan',
           action_name: 'processImage',
-          user_id: sessionData?.user_id || null
+          user_id: user?.id || null
         }).catch(e => console.error('Failed to log error:', e));
         // Alert.alert(
         //   'ไม่มีการเชื่อมต่ออินเทอร์เน็ต',
@@ -281,7 +291,7 @@ export default function ScanScreen() {
           error_code: error.code || null,
           page_name: 'scan',
           action_name: 'processImage',
-          user_id: sessionData?.user_id || null
+          user_id: user?.id || null
         }).catch(e => console.error('Failed to log error:', e));
         Alert.alert('ข้อผิดพลาด', error.message || 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ');
         setOcrConnected(0); // ✅ Set OCR status to 0 (Disconnected) for other errors too just in case
@@ -292,9 +302,13 @@ export default function ScanScreen() {
     }
   };
 
-  const speakPlateNo = (detectedPlate, provinceExists) => {
+  const speakPlateNo = (detectedPlate, provinceExists, hasDuplicate = false) => {
     const spokenPlate = createSpokenPlate(detectedPlate);
-    const text = `ทะเบียน, ${spokenPlate || 'ไม่พบทะเบียน'}, ${provinceExists || 'ไม่พบจังหวัด'}`;
+    let text = `ทะเบียน, ${spokenPlate || 'ไม่พบทะเบียน'}, ${provinceExists || 'ไม่พบจังหวัด'}`;
+
+    if (hasDuplicate) {
+      text += ', ลงทะเบียนแล้ว';
+    }
 
     Speech.stop();
     Speech.speak(text, {
@@ -363,6 +377,12 @@ export default function ScanScreen() {
       console.log('activeProject :>> ', activeProject);
       console.log('foundRegisterData :>> ', foundRegisterData);
 
+      // ✅ คำนวณว่าควรเก็บค่า mileage หรือไม่
+      const shouldShowMileage = !isModeOne && (
+        (activeProject?.seq_no === 1 && foundRegisterData?.activity1_checkmile === 1) ||
+        (activeProject?.seq_no === 2 && foundRegisterData?.activity2_checkmile === 1)
+      );
+
       // ✅ สร้าง Object newCheckInData ตามโครงสร้างที่ต้องการ
       let newCheckInData = {
         uid: foundRegisterData?.uid || null,
@@ -380,6 +400,7 @@ export default function ScanScreen() {
         passenger: foundRegisterData?.passenger || '0|0|0|0', // ✅ passenger มาจาก foundRegisterData
         note: '', // ✅ ตรวจสอบว่ามี source สำหรับ note หรือไม่
         sticker_no: isModeOne ? "" : stickerNumber, // ✅ เพิ่ม sticker_no จาก state
+        chk_mile: shouldShowMileage ? mileage : null,
         comp_id: machineCode, // ✅ comp_id ควรมาจาก machineCode ที่คุณดึงมา
         seq_no: activeProject?.seq_no || null, // ✅ seq_no มาจาก activeProject
         printed: shouldPrint ? 1 : 0, // ✅ ใช้ shouldPrint แทน isVerified
@@ -439,7 +460,7 @@ export default function ScanScreen() {
         error_code: error.code || null,
         page_name: 'scan',
         action_name: 'executeSave',
-        user_id: sessionData?.user_id || null
+        user_id: user?.id || null
       }).catch(e => console.error('Failed to log error:', e));
       Alert.alert('ข้อผิดพลาด', error.message || 'ไม่สามารถบันทึกข้อมูลได้');
       setIsSubmitting(false);
@@ -469,6 +490,16 @@ export default function ScanScreen() {
       return;
     }
     console.log('handlePrintAndSave3');
+
+    // --- Validation เพิ่มเติมสำหรับเลขไมล์เมื่อระบบกำหนดให้กรอก ---
+    const shouldShowMileage = !isModeOne && (
+      (activeProject?.seq_no === 1 && foundRegisterData?.activity1_checkmile === 1) ||
+      (activeProject?.seq_no === 2 && foundRegisterData?.activity2_checkmile === 1)
+    );
+    if (shouldShowMileage && !mileage.trim()) {
+      Alert.alert('ข้อมูลไม่ครบ', 'กรุณากรอกเลขไมล์');
+      return;
+    }
 
     // ✅ Logic ใหม่: ถ้าเป็นโหมดธุดงค์ (!isModeOne) และเจอ C7 ให้แสดง Modal เลือก
     if (!isModeOne && foundRegisterData) {
@@ -513,7 +544,7 @@ export default function ScanScreen() {
         error_code: error.code || null,
         page_name: 'scan',
         action_name: 'generateAndPrint',
-        user_id: sessionData?.user_id || null
+        user_id: user?.id || null
       }).catch(e => console.error('Failed to log error:', e));
       setIsSubmitting(false);
     }
@@ -526,6 +557,7 @@ export default function ScanScreen() {
     setProvince(null);
     // setVehicleType(null); // Make sure to reset this too
     setCustomVehicleType('');
+    setMileage('');
     // Don't reset stickerNumber here, handle it separately
     setShowReceipt(false);
     setIsVerified(false);
@@ -585,11 +617,11 @@ export default function ScanScreen() {
 
     // 3. ✅ เรียกใช้ฟังก์ชันค้นหา C7 ใหม่อีกครั้งด้วยข้อมูลที่ผู้ใช้เพิ่งกรอก
     // เราใช้ค่าจาก temp state เพราะเป็นค่าล่าสุดที่ผู้ใช้ยืนยัน
-    const isFound = await checkWithRegisterList(tempLicensePlate, tempProvince);
+    const checkResult = await checkWithRegisterList(tempLicensePlate, tempProvince);
 
     // Speak again
-    speakPlateNo(tempLicensePlate, tempProvince);
-    speakVerificationResult(isFound);
+    speakPlateNo(tempLicensePlate, tempProvince, checkResult.hasDuplicate);
+    speakVerificationResult(checkResult.found);
 
     // 4. ปิด Modal แก้ไข
     setIsEditModalVisible(false);
@@ -598,7 +630,7 @@ export default function ScanScreen() {
   const checkWithRegisterList = async (plate, prov) => {
     if (!plate || !prov || !activeProject) {
       setIsVerified(false);
-      return false;
+      return { found: false, hasDuplicate: false };
     }
 
     try {
@@ -654,7 +686,7 @@ export default function ScanScreen() {
             { cancelable: false } // บังคับให้ผู้ใช้กดยืนยัน
           );
 
-          return false; // ‼️ สำคัญมาก: หยุดการทำงาน ไม่ต้อง setIsVerified
+          return { found: true, hasDuplicate: true }; // ‼️ สำคัญมาก: หยุดการทำงาน ไม่ต้อง setIsVerified
         }
         setIsVerified(true); // ตั้งสถานะเป็น "ตรวจสอบแล้ว"
         setFoundRegisterData(foundRegister); // เก็บข้อมูล C7 ทั้งหมดไว้ใน state
@@ -671,13 +703,13 @@ export default function ScanScreen() {
           setVehicleType('Other');
           setCustomVehicleType(foundRegister.bus_type);
         }
-        return true;
+        return { found: true, hasDuplicate: false };
 
       } else {
         console.log('❌ C7 Record Not Found.');
         setIsVerified(false);
         setFoundRegisterData(null); // เคลียร์ข้อมูลเก่า
-        return false;
+        return { found: false, hasDuplicate: false };
       }
     } catch (error) {
       console.error('Failed to check with register list', error);
@@ -689,10 +721,10 @@ export default function ScanScreen() {
         error_code: error.code || null,
         page_name: 'scan',
         action_name: 'checkWithRegisterList',
-        user_id: sessionData?.user_id || null
+        user_id: user?.id || null
       }).catch(e => console.error('Failed to log error:', e));
       setIsVerified(false);
-      return false;
+      return { found: false, hasDuplicate: false };
     }
   };
 
@@ -787,6 +819,21 @@ export default function ScanScreen() {
                   />
                 </View>
               )}
+              {!isModeOne && (
+                (activeProject?.seq_no === 1 && foundRegisterData?.activity1_checkmile === 1) ||
+                (activeProject?.seq_no === 2 && foundRegisterData?.activity2_checkmile === 1)
+              ) && (
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.label}>เลขไมล์</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="เลขไมล์"
+                      value={mileage}
+                      onChangeText={setMileage}
+                      keyboardType="number-pad"
+                    />
+                  </View>
+                )}
               <View style={styles.menuFooter} >
 
                 <TouchableOpacity style={styles.cancelButton} onPress={cancelProcess}>
