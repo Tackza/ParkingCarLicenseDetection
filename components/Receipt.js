@@ -10,7 +10,7 @@ const formatPassengerInfo = (passengerString) => {
     return '-- คน';
   }
 
-  let textCount = '';
+  const segments = [];
 
   const people = parseInt(parts[0] || 0) + parseInt(parts[1] || 0); // รวมผู้ใหญ่กับเด็ก
   const monks = parseInt(parts[2] || 0);
@@ -18,15 +18,16 @@ const formatPassengerInfo = (passengerString) => {
 
 
   if (people > 0) {
-    textCount += `${people}คน`;
+    segments.push(`${people}คน`);
   }
   if (monks > 0) {
-    textCount += `/${monks}รูป`;
+    segments.push(`${monks}รูป`);
   }
   if (novices > 0) {
-    textCount += `/สณ${novices}รูป`;
+    segments.push(`สณ${novices}รูป`);
   }
-  return textCount || '-- คน';
+  // join('/') เพื่อไม่ให้มี slash นำหน้าเมื่อมีแต่พระ/สามเณร
+  return segments.join('/') || '-- คน';
 };
 
 const Receipt = React.forwardRef(({

@@ -58,22 +58,23 @@ export default function PassengerCountScreen() {
   };
 
   const formatPassengerInfo = (passengerCount, childCount, monkCount, noviceCount) => {
-    let textCount = '';
+    const segments = [];
 
     const people = parseInt(passengerCount || 0) + parseInt(childCount || 0); // รวมผู้ใหญ่กับเด็ก
     const monks = parseInt(monkCount || 0);
     const novices = parseInt(noviceCount || 0);
 
     if (people > 0) {
-      textCount += `${people} คน`;
+      segments.push(`${people} คน`);
     }
     if (monks > 0) {
-      textCount += `/${monks} รูป`;
+      segments.push(`${monks} รูป`);
     }
     if (novices > 0) {
-      textCount += `/สณ${novices} รูป`;
+      segments.push(`สณ${novices} รูป`);
     }
-    return textCount || '-- คน';
+    // join('/') เพื่อไม่ให้มี slash นำหน้าเมื่อมีแต่พระ/สามเณร
+    return segments.join('/') || '-- คน';
 
   };
 
