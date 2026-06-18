@@ -36,6 +36,8 @@ export default function PassengerCountScreen() {
   // Flags จาก /lpr/projects — โปรเจกต์ที่ไม่ต้องนับเด็ก/สามเณร
   const hideChildQty = activeProject?.not_show_child_qty === true;
   const hideNoviceQty = activeProject?.not_show_novice_qty === true;
+  // สลิปส่วนที่ 2 (เบิกอาหาร) — แสดงเป็นค่าเริ่มต้น ซ่อนเฉพาะเมื่อโปรเจกต์ตั้งค่า show_slip_section_2 = false
+  const showSlipSection2 = activeProject?.show_slip_section_2 !== false;
 
   // ค่าที่ใช้ทั้งใน receipt และตอนบันทึก — ถูกบีบเป็น '0' ถ้าซ่อน
   // ป้องกันค่าค้างจาก params.passenger ปะปนไปบนใบเสร็จและในฐานข้อมูล
@@ -316,6 +318,8 @@ export default function PassengerCountScreen() {
               </Text>
             </View>
 
+            {showSlipSection2 && (
+              <>
             <View style={styles.sectionDivider} />
             <View style={styles.sectionHeaderRow}>
               <Text style={[styles.receiptMetaText, styles.sectionHeaderSide, { textAlign: 'right' }]}>
@@ -354,6 +358,8 @@ export default function PassengerCountScreen() {
                 <View style={styles.signatureLongLine} />
               </View>
             </View>
+              </>
+            )}
           </ViewShot>
         </View>
       </ScrollView>

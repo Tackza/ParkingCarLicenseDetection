@@ -242,6 +242,24 @@ export const setupDatabase = async () => {
       }
     }
 
+    // ✅ Migration to version 6: Add show_slip_section_2 flag to projects
+    // Default 1 = show (รักษาพฤติกรรมเดิม) ซ่อนเฉพาะเมื่อ API ส่ง false มา
+    if (user_version < 6) {
+      console.log("Migrating to version 6: Adding show_slip_section_2 to projects...");
+      try {
+        const projCols = await db.getAllAsync(`PRAGMA table_info('projects');`);
+        const hasShowSlipSection2 = Array.isArray(projCols) && projCols.some(col => col.name === 'show_slip_section_2');
+        if (!hasShowSlipSection2) {
+          await db.runAsync(`ALTER TABLE projects ADD COLUMN show_slip_section_2 INTEGER NOT NULL DEFAULT 1;`);
+          console.log("✅ Added column projects.show_slip_section_2");
+        }
+        user_version = 6;
+      } catch (e) {
+        console.error('❌ Error during version 6 migration:', e);
+        throw e;
+      }
+    }
+
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
     // This handles cases where the database was created before version tracking was added
     try {
@@ -505,12 +523,14 @@ export const saveProjects = async (projectsData) => {
           : null;
         const notShowChildQty = project.not_show_child_qty ? 1 : 0;
         const notShowNoviceQty = project.not_show_novice_qty ? 1 : 0;
+        // แสดงสลิปส่วนที่ 2 เป็นค่าเริ่มต้น ซ่อนเฉพาะเมื่อ API ส่ง false มาชัดเจน
+        const showSlipSection2 = project.show_slip_section_2 === false ? 0 : 1;
 
         await db.runAsync(
           `INSERT INTO projects
-            (project_id, activity_id, name, start_time, end_time, seq_no, bus_types, not_show_child_qty, not_show_novice_qty)
+            (project_id, activity_id, name, start_time, end_time, seq_no, bus_types, not_show_child_qty, not_show_novice_qty, show_slip_section_2)
            VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
           [
             project.project_id,
             project.activity_id,
@@ -520,7 +540,8 @@ export const saveProjects = async (projectsData) => {
             project.seq_no,
             busTypesJson,
             notShowChildQty,
-            notShowNoviceQty
+            notShowNoviceQty,
+            showSlipSection2
           ]
         );
       }
@@ -559,6 +580,7 @@ export const getCurrentProject = async () => {
       }
       project.not_show_child_qty = project.not_show_child_qty === 1;
       project.not_show_novice_qty = project.not_show_novice_qty === 1;
+      project.show_slip_section_2 = project.show_slip_section_2 === 1;
     } else {
       console.log("No active project found.");
     }

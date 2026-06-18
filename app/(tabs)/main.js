@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   Dimensions,
   FlatList,
   Image,
@@ -11,6 +12,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  ToastAndroid,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -68,12 +70,14 @@ export default function HistoryScreen() {
       Alert.alert('ข้อมูลไม่ครบ', 'กรุณาตรวจสอบข้อมูลทะเบียนและจังหวัด');
       return;
     }
+    // check-in เก็บ กทม. แบบย่อ แต่ dropdown/THAI_PROVINCES ใช้ชื่อเต็ม จึงต้องแปลงให้ตรงกัน
+    const normalizedProvince = province === 'กทม.' ? 'กรุงเทพมหานคร' : province;
     setSearchPlateNo(plateNo);
-    setSearchProvince(province);
+    setSearchProvince(normalizedProvince);
     setSearchModalVisible(true);
     // ค้นหาอัตโนมัติหลังจาก modal เปิด
     setTimeout(() => {
-      handleOnlineSearchInternal(plateNo, province);
+      handleOnlineSearchInternal(plateNo, normalizedProvince);
     }, 300);
   };
 
@@ -285,6 +289,33 @@ export default function HistoryScreen() {
       // ถ้า CheckInSyncManager อัปเดต isOnline ด้วย, บางทีคุณอาจจะต้องดึงค่า isOnline ล่าสุดอีกครั้ง
       // แต่ปกติ useSync() จะดึงค่าล่าสุดให้เองเมื่อ context มีการเปลี่ยนแปลง
     }, [refreshCurrentProject]) // Dependency: refreshCurrentProject เท่านั้น
+  );
+
+  // ปุ่ม back ของ Android บนหน้า home: ไม่ให้ย้อนกลับไปหน้า bluetooth-setup / passenger_count
+  // กดครั้งแรกเตือน กดอีกครั้งภายใน 2 วินาทีจึงปิดโปรแกรม
+  const backPressedOnceRef = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      let backTimer = null;
+      const onBackPress = () => {
+        if (backPressedOnceRef.current) {
+          BackHandler.exitApp();
+          return true;
+        }
+        backPressedOnceRef.current = true;
+        ToastAndroid.show('กดย้อนกลับอีกครั้งเพื่อปิดโปรแกรม', ToastAndroid.SHORT);
+        backTimer = setTimeout(() => {
+          backPressedOnceRef.current = false;
+        }, 2000);
+        return true; // บล็อกการย้อนกลับ default
+      };
+      const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => {
+        sub.remove();
+        if (backTimer) clearTimeout(backTimer);
+        backPressedOnceRef.current = false;
+      };
+    }, [])
   );
 
 
