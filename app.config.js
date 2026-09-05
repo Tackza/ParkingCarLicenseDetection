@@ -8,7 +8,7 @@ export default () => {
     "expo": {
       "name": "Mbus Scan", // <-- ชื่อสำหรับ Production
       "slug": "tackpongsatorn",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "orientation": "portrait",
       "icon": "./assets/images/c7.png",
       "backgroundColor": "#ffffff",
