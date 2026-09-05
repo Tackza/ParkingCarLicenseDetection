@@ -137,9 +137,19 @@ FP16 conversion uses `onnxruntime.transformers.float16`, **not**
 `Resize` nodes and the model fails to load (`Type (tensor(float)) ... does not
 match expected type (tensor(float16))`).
 
+## Measured on the real tablet — see [`android/DEVICE_RESULTS.md`](android/DEVICE_RESULTS.md)
+
+Answered 2026-09-05 on a **SUNMI V3** (Qualcomm QCM4325, 2×A73 2.4 GHz + 4×1.9 GHz,
+2.7 GB RAM, Android 13): **~725 ms for both stages, 5/5 reference plates correct.**
+Faster than the warm Cloud Run round trip we have today.
+
+FP16 turned out to buy **file size, not speed** on that CPU (ARMv8.0 has no native
+FP16 arithmetic, so ORT widens back to FP32) — ship it anyway for the 11.5 MB APK
+saving. NNAPI made FP32 **3.5× slower**; use the CPU provider with 4 threads.
+
 ## Not answered by Phase 0
 
-- speed and memory on the real checkpoint tablet (the number that decides this)
+- pre/post-processing cost in Kotlin (inference is measured, the glue is not)
 - whether ONNX Runtime or TFLite is the better Android runtime — note
   `react-native-fast-tflite@3.x` needs `react-native-nitro-modules`, i.e. the New
   Architecture, and this app runs `newArchEnabled=false`; pin `1.6.1` if TFLite wins
