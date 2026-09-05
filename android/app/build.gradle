@@ -114,7 +114,7 @@ android {
         applicationId 'com.donnytang.myapp'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
+        versionCode 2
         versionName "1.0.0"
         // for :app:connectedDebugAndroidTest — see app/src/androidTest/.../LprOcrInstrumentedTest.kt.
         // Custom runner because the stock one boots MainApplication, and expo-dev-launcher

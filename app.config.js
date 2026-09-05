@@ -14,7 +14,7 @@ export default () => {
       "backgroundColor": "#ffffff",
 
       // --- ⬇️ นี่คือ 2 ส่วนที่ต้องเพิ่มเข้ามา ⬇️ ---
-      "runtimeVersion": "1.0.0",
+      "runtimeVersion": "2.0.0",
       "updates": {
         "enabled": true,
         "checkAutomatically": "ON_LOAD",
