@@ -160,11 +160,26 @@ tablet will ever load**, carried only so the app still runs on an emulator.
 Trimming it is an ABI-filter or ABI-split decision for the whole app, not just
 this feature, so it is left alone here.
 
+## Confirmed in the app, on real camera photos (2026-09-06)
+
+A release APK was installed on the SUNMI V3 and driven by hand through the real
+flow — log in, scan, read the plate. Reported as **fast and accurate, with no
+internet connection**.
+
+This is the part no automated test here could reach. Everything above feeds the
+models JPEGs from the detector's dataset; the app feeds them photos this tablet's
+own camera just took, which differ in resolution and, more importantly, carry a
+real EXIF orientation tag. `BitmapFactory` ignores that tag, so the rotation
+handling in `LprOcr.loadBitmap` had never actually run against a camera file
+until now — and a wrong rotation there fails silently by simply finding no plate.
+
 ## What is still unmeasured
 
 - thermal behaviour over a long queue of vehicles
 - memory pressure when the ~200 MB inference peak lands on top of the React
   Native heap on a 2.7 GB device — watch for `onTrimMemory` / background kills
+- accuracy across a wide spread of real plates, angles and lighting; one
+  successful session is not an accuracy measurement
 - accuracy across the full 33-image set on-device (the desktop run covers those;
   the instrumented test covers the 5 with hand-verified answers)
 
