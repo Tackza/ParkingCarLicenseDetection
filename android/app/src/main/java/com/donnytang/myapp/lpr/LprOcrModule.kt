@@ -41,7 +41,9 @@ class LprOcrModule(reactContext: ReactApplicationContext) :
             try {
                 val t0 = System.currentTimeMillis()
                 engine.ensureLoaded()
-                promise.resolve(System.currentTimeMillis() - t0)
+                // .toDouble(): the bridge cannot marshal java.lang.Long and fails the promise
+                // with "Cannot convert argument of type class java.lang.Long".
+                promise.resolve((System.currentTimeMillis() - t0).toDouble())
             } catch (e: Throwable) {
                 promise.reject("LPR_WARMUP_FAILED", e.message, e)
             }
