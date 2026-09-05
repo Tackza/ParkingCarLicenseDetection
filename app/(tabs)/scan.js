@@ -317,13 +317,6 @@ export default function ScanScreen() {
   };
 
 
-  const convertBusTypeToLabel = (value) => {
-    const found = vehicleTypes.find(item => item.value === value);
-    return found ? found.label : value;
-  }
-
-
-
   // ✅ ฟังก์ชันสำหรับดำเนินการบันทึก (แยกออกมาเพื่อให้เรียกใช้ได้จากหลายจุด)
   const executeSave = async (shouldPrint) => {
     setIsSaveOptionModalVisible(false); // ปิด Modal ก่อน
@@ -343,21 +336,11 @@ export default function ScanScreen() {
         throw new Error("ไม่พบข้อมูลผู้ใช้งาน, กรุณาเข้าสู่ระบบใหม่");
       }
 
-      // กำหนดค่าประเภทรถสุดท้าย
-      // ถ้า vehicleType === 'Other' ใช้ customVehicleType
-      // ถ้า foundRegisterData.bus_type มีค่า แล้วไม่อยู่ใน vehicleTypes ใช้ค่านั้นแทน
-      // มิฉะนั้นใช้ convertBusTypeToLabel(vehicleType)
-      let finalVehicleType = customVehicleType;
-      console.log('finalVehicleType :>> ', finalVehicleType);
-      console.log('vehicleType :>> ', vehicleType);
-      if (vehicleType !== 'Other') {
-        finalVehicleType = convertBusTypeToLabel(vehicleType);
-      }
-      // ถ้า foundRegisterData มี bus_type ให้ใช้ค่านั้นแทน
-      if (foundRegisterData && foundRegisterData.bus_type) {
-        finalVehicleType = foundRegisterData.bus_type;
-      }
-      console.log('finalVehicleType2 :>> ', finalVehicleType);
+      // ประเภทรถสุดท้าย = ค่าที่ผู้ใช้เลือกล่าสุดจาก dropdown (ถ้าเป็น 'Other' ใช้ค่าที่พิมพ์เอง)
+      // เดิม override ด้วย foundRegisterData.bus_type ทำให้ผู้ใช้เปลี่ยนประเภทรถแล้วไม่มีผล (ทั้งหน้าผู้โดยสารและสลิป)
+      // ค่านี้ตรงกับที่ใบเสร็จ (Receipt) ใช้ จึงทำให้ค่าที่บันทึก/พิมพ์ตรงกัน
+      const finalVehicleType = vehicleType === 'Other' ? customVehicleType : vehicleType;
+      console.log('finalVehicleType :>> ', finalVehicleType, '| vehicleType:', vehicleType);
 
       console.log('activeProject :>> ', activeProject);
       console.log('foundRegisterData :>> ', foundRegisterData);
