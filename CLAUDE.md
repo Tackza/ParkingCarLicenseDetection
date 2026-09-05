@@ -32,9 +32,11 @@ There is also a **third** party neither repo owns: the **Mbus backend API** at `
  └──────────────────┘
 ```
 
-### The `/detect` contract (the only coupling point)
+### The `/detect` contract (now the fallback, not the primary path)
 
-Called from [app/(tabs)/scan.js](app/(tabs)/scan.js) `processImage()` — **the URL is hardcoded there, it is not affected by the `environment` setting**, so test builds hit the production OCR service too.
+⚠️ **Android reads plates on the device first.** Since the `lpr` native module landed, the service is only reached when the module cannot answer — see [On-device OCR](#on-device-ocr-android). Everything below still describes the fallback exactly, and [utils/lprOcr.js](utils/lprOcr.js) makes both engines return the same shape so callers never branch on which one answered.
+
+Called from [utils/lprOcr.js](utils/lprOcr.js) `detectPlate()` — **the URL is hardcoded there, it is not affected by the `environment` setting**, so test builds hit the production OCR service too.
 
 `POST https://license-plate-service-833646348122.asia-southeast1.run.app/detect`
 `multipart/form-data`, single field **`image`** (jpeg/png/gif/bmp/tiff, ≤16 MB), axios `timeout: 15000`.
@@ -115,6 +117,34 @@ EnvironmentProvider → AuthProvider → SyncProvider → ProjectProvider → Mo
 ```
 
 `setupDatabase()` from [constants/Database.js](constants/Database.js) runs once on root mount and applies SQLite migrations via `PRAGMA user_version` (**currently v6**; v4 added `projects.bus_types`, v5 `not_show_child_qty`/`not_show_novice_qty`, v6 `show_slip_section_2`). Migrations are additive and guarded by `PRAGMA table_info` checks, so adding a column means appending a new `if (user_version < N)` block, never editing an old one. [`CheckInSyncManager`](components/CheckInSyncManager.js) is a headless component mounted at the root that polls every 10 s and uploads pending check-ins — there is no separate worker process.
+
+### On-device OCR (Android)
+
+The same two YOLO models the Cloud Run service runs are embedded in the APK and executed by ONNX Runtime, so a checkpoint scans with no network at all.
+
+| | |
+|---|---|
+| engine | [android/app/src/main/java/com/donnytang/myapp/lpr/LprOcr.kt](android/app/src/main/java/com/donnytang/myapp/lpr/LprOcr.kt) |
+| bridge | `LprOcrModule.kt` → `NativeModules.LprOcr`, registered by hand in `MainApplication.kt` (it is not in `node_modules`, so autolinking never sees it) |
+| JS entry | [utils/lprOcr.js](utils/lprOcr.js) — `detectPlate(uri)`, `warmUpOnDeviceOcr()` |
+| weights | `android/app/src/main/assets/plate_{region,ocr}.fp16.onnx` + `labels.json` (11.7 MB total) |
+| runtime | `onnxruntime-android:1.20.0`, **CPU provider, 4 intra-op threads** |
+
+- **`lpr_onnx.py` is the specification.** [tools/ondevice-ocr/lpr_onnx.py](tools/ondevice-ocr/lpr_onnx.py) and `LprOcr.kt` are the same algorithm written twice — letterbox, output decode, per-class NMS, box rescaling, left-to-right character ordering, single highest-confidence province, split at the last digit. Change one, change the other, then re-run `tools/ondevice-ocr/compare_accuracy.py` and the instrumented test.
+- **The ORT version is pinned at 1.20.0 for a reason.** 1.21.0+ declare `minSdkVersion 24`; this app declares 23, and taking a newer ORT would silently drop Android 6.0 devices. Don't bump it without deciding that on purpose.
+- **Do not enable NNAPI.** Measured on the checkpoint's SUNMI V3 it made FP32 3.5× slower and did nothing for FP16.
+- **FP16 is shipped for size, not speed.** That tablet's Cortex-A73 is ARMv8.0 with no native FP16 arithmetic, so ORT widens back to FP32 anyway; FP16 just halves the APK cost. Full numbers in [tools/ondevice-ocr/android/DEVICE_RESULTS.md](tools/ondevice-ocr/android/DEVICE_RESULTS.md).
+- **Models are warmed up at root mount** in [app/_layout.tsx](app/_layout.tsx) so the first scan of the day does not pay the ~0.4 s load.
+- **Kill switch:** set `ON_DEVICE_OCR_ENABLED = false` in [utils/lprOcr.js](utils/lprOcr.js) to force every scan back through the service.
+- **"No plate found" is not a fallback trigger.** Both engines run identical weights, so falling back would only cost the operator a 15 s wait before the same manual-entry prompt.
+
+Verify a change with the instrumented test — it runs the real engine on the real device against plates whose correct reading is known, and needs no login:
+
+```bash
+adb shell mkdir -p /data/local/tmp/lprtest
+adb push <detector>/license-car/338111_0.jpg /data/local/tmp/lprtest/   # and the other four
+cd android && ./gradlew :app:connectedDebugAndroidTest
+```
 
 ### Routing (Expo Router, file-based)
 

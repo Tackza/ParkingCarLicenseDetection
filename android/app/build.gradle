@@ -116,6 +116,10 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0.0"
+        // for :app:connectedDebugAndroidTest — see app/src/androidTest/.../LprOcrInstrumentedTest.kt.
+        // Custom runner because the stock one boots MainApplication, and expo-dev-launcher
+        // aborts the process when it is initialized under instrumentation.
+        testInstrumentationRunner "com.donnytang.myapp.lpr.LprTestRunner"
     }
     signingConfigs {
         debug {
@@ -144,6 +148,12 @@ android {
             useLegacyPackaging (findProperty('expo.useLegacyPackaging')?.toBoolean() ?: false)
         }
     }
+
+    androidResources {
+        // The two .onnx models are already compact FP16 weights; letting aapt deflate them only
+        // costs time at every model load and saves almost nothing in the APK.
+        noCompress += ["onnx"]
+    }
 }
 
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
@@ -169,6 +179,19 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+
+    // On-device licence-plate OCR (see android/.../lpr/ and tools/ondevice-ocr/).
+    //
+    // Pinned to 1.20.0 on purpose: 1.21.0 and later declare minSdkVersion 24, which would force
+    // this app's minSdk up from 23 and silently drop Android 6.0 devices. 1.20.0 is the last
+    // release that still declares 21. The on-device parity check was re-run against 1.20.0 —
+    // see tools/ondevice-ocr/android/DEVICE_RESULTS.md.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    // BitmapFactory ignores EXIF; camera photos need the orientation tag applied by hand.
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

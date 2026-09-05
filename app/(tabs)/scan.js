@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 // import * as ImagePicker from 'expo-image-picker';
 import { useMode } from "@/contexts/ModeContext";
+import { detectPlate } from '@/utils/lprOcr';
 import { createSpokenPlate } from '@/utils/speechUtils';
 import axios from 'axios';
 import {
@@ -35,7 +36,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useProject } from '../../contexts/ProjectContext';
 
-const IMAGE_PROCESSING_TIMEOUT = 15000;
+// การอ่านทะเบียนย้ายไป utils/lprOcr.js แล้ว (บนเครื่องก่อน แล้ว fallback ไป Cloud Run)
+// timeout ของฝั่ง server อยู่ที่ OCR_SERVER_TIMEOUT ในไฟล์นั้น
 
 // Fallback ใช้เฉพาะกรณี activeProject ยังไม่มี bus_types (เช่น session เก่าก่อนอัปเดต API)
 const FALLBACK_VEHICLE_TYPES = [
@@ -155,28 +157,11 @@ export default function ScanScreen() {
     setOcrConnected(1); // ✅ รีเซ็ตสถานะ OCR เป็น 1 (Connected) ก่อนเริ่ม
 
     try {
-      const formData = new FormData();
-      formData.append('image', {
-        uri: uri,
-        type: 'image/jpeg',
-        name: `image_${Date.now()}.jpg`,
-      });
-
-      const response = await axios.post(
-        "https://license-plate-service-833646348122.asia-southeast1.run.app/detect",
-        formData,
-        {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-            // 'Content-Type' ไม่จำเป็นต้องเซ็ตเองสำหรับ FormData ใน Axios
-          },
-          timeout: IMAGE_PROCESSING_TIMEOUT, // ✅ กำหนด timeout ตรงนี้
-        }
-      );
-
-      // Axios จะโยน error ให้เองถ้า response.status ไม่อยู่ในช่วง 2xx
-      // ไม่ต้องเช็ค if (!response.ok) แล้ว
-      const { data } = response.data; // ✅ ข้อมูลจะอยู่ใน response.data.data
+      // อ่านทะเบียนบนเครื่องก่อน (~0.9 วิ ไม่ต้องใช้เน็ต) แล้วค่อย fallback ไป Cloud Run
+      // เฉพาะกรณีที่โมดูลบนเครื่องใช้งานไม่ได้ — รายละเอียดใน utils/lprOcr.js
+      // ถ้า fallback ทำงาน error ของ axios จะถูกโยนต่อมาตามเดิม catch ด้านล่างจึงยังใช้ได้ทั้งหมด
+      const { data, engine } = await detectPlate(uri);
+      console.log('ocr engine :>> ', engine);
 
       const detectedPlate = data.license_plate || '';
       const detectedProvince = data.province || '';

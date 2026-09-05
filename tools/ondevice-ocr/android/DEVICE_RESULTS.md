@@ -94,21 +94,79 @@ decoded with the same code:
 exactly one FP16 ulp at coordinate magnitudes near 512. None of it changes a
 single detected class or box.
 
-## What is still missing before this ships
+## Phase 1: the real Kotlin module, end to end on the device
 
-These measurements cover **inference only** — the part that dominates, but not
-all of it. Phase 1 proper still has to add, in Kotlin:
+The numbers above are inference only. These are the shipped `LprOcr.kt` doing
+everything — JPEG decode, EXIF, letterbox, tensor fill, both models, decode, NMS,
+crop, character ordering, province pick, split — measured by
+`:app:connectedDebugAndroidTest` on the same SUNMI V3:
 
-1. JPEG decode + letterbox + tensor fill (~1108×1477 source images here)
-2. output decode + per-class NMS + box rescaling
-3. the crop between the two stages
+| image | on-device reading | expected | total | decode | stage 1 | stage 2 |
+|---|---|---|---|---|---|---|
+| `338111_0.jpg` | นข2628 สิงห์บุรี | ✅ | 1075 ms | 57 | 491 | 503 |
+| `338089_0.jpg` | 2กท5518 กรุงเทพมหานคร | ✅ | 961 ms | 31 | 481 | 439 |
+| `338092_0.jpg` | นข7039 พิษณุโลก | ✅ | 863 ms | 26 | 426 | 402 |
+| `338095_0.jpg` | ฮพ2078 กรุงเทพมหานคร | ✅ | 898 ms | 31 | 399 | 459 |
+| `338120_0.jpg` | 321527 กรุงเทพมหานคร | ✅ | 925 ms | 26 | 405 | 485 |
 
-`lpr_onnx.py` in the parent folder is the reference for all of it. Budget
-~100–200 ms on this CPU, so plan on **~0.85–0.95 s end to end**.
+**5/5**, model load 315 ms, median **925 ms** end to end — inside the 0.85–0.95 s
+that was budgeted from the inference-only numbers.
 
-Also unmeasured: thermal behaviour over a long queue of vehicles, and memory
-pressure when the ~200 MB inference peak lands on top of the React Native heap
-on a 2.7 GB device. Watch for `onTrimMemory` / background kills.
+The Kotlin port is not merely close, it is exact: for `338111_0.jpg` the module
+emitted the raw classes `A25 A02 2 6 2 8 SBR`, character for character the
+sequence recorded for that image in the detector's own CLAUDE.md.
+
+That also settles the one risk flagged in Phase 0 — Android's `Canvas` bilinear
+resize is not `cv2.INTER_LINEAR`, and it turned out not to matter for any of
+these images.
+
+Inference is slower here than the 725 ms C++ figure because the module uses
+4 intra-op threads rather than 6, and because letterbox and tensor fill are
+inside the timed region. Both are deliberate: the UI thread needs the big cores.
+
+### Running it again
+
+```bash
+adb shell mkdir -p /data/local/tmp/lprtest
+adb push <detector>/license-car/338111_0.jpg /data/local/tmp/lprtest/   # and the other four
+cd android && ./gradlew :app:connectedDebugAndroidTest
+adb logcat -d -s LprOcrTest:I
+```
+
+Two gotchas cost a build cycle each and are now handled in the repo:
+
+- **`expo-dev-launcher` aborts the process under instrumentation**
+  (`IllegalStateException: DevelopmentClientController was initialized.` from
+  `MainApplication.onCreate`). `LprTestRunner` boots a plain `Application`
+  instead — the engine needs a Context, not React Native.
+- **A debug build cannot install over a production APK**
+  (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`, different signing key). Uninstall first,
+  or give the debug build type an `applicationIdSuffix`.
+
+## APK cost
+
+From the debug APK, uncompressed:
+
+| | |
+|---|---|
+| models + labels (`assets/`) | **11.1 MB** |
+| `libonnxruntime.so` arm64-v8a | 16.8 MB |
+| armeabi-v7a | 11.8 MB |
+| x86 + x86_64 | **38.8 MB** |
+| total added | **78.6 MB** |
+
+The checkpoint fleet is arm64-v8a. Roughly **39 MB of that is x86 libraries no
+tablet will ever load**, carried only so the app still runs on an emulator.
+Trimming it is an ABI-filter or ABI-split decision for the whole app, not just
+this feature, so it is left alone here.
+
+## What is still unmeasured
+
+- thermal behaviour over a long queue of vehicles
+- memory pressure when the ~200 MB inference peak lands on top of the React
+  Native heap on a 2.7 GB device — watch for `onTrimMemory` / background kills
+- accuracy across the full 33-image set on-device (the desktop run covers those;
+  the instrumented test covers the 5 with hand-verified answers)
 
 ## Reproducing
 
@@ -128,3 +186,27 @@ Needs USB debugging on, the Android NDK, and the exports from
 
 Pinning ONNX Runtime **1.23.2** on both sides is deliberate — the desktop
 validation in Phase 0 used exactly that version.
+
+## Note: the app ships ONNX Runtime 1.20.0, not 1.23.2
+
+These measurements were taken with 1.23.2, but the app depends on **1.20.0**.
+
+`onnxruntime-android` **1.21.0 and later declare `minSdkVersion 24`**. This app
+declares 23, and the manifest merger refuses to build:
+
+```
+uses-sdk:minSdkVersion 23 cannot be smaller than version 24 declared in library
+[com.microsoft.onnxruntime:onnxruntime-android:1.23.2]
+```
+
+Raising the app's floor to 24 would quietly drop Android 6.0 devices from the
+supported fleet — a product decision, not a dependency-resolution one. **1.20.0
+is the last release that still declares 21**, so it is the pin. The instrumented
+test (`:app:connectedDebugAndroidTest`) re-checks the reference plates through
+whatever version gradle actually resolves, so the app's real dependency stays
+verified regardless of what this file was measured with.
+
+| ORT version | declared minSdk |
+|---|---|
+| ≤ 1.20.0 | 21 |
+| ≥ 1.21.0 | **24** |

@@ -1,0 +1,627 @@
+{
+  "0": {
+    "code": "0",
+    "thai": "0",
+    "is_province": false
+  },
+  "1": {
+    "code": "1",
+    "thai": "1",
+    "is_province": false
+  },
+  "2": {
+    "code": "2",
+    "thai": "2",
+    "is_province": false
+  },
+  "3": {
+    "code": "3",
+    "thai": "3",
+    "is_province": false
+  },
+  "4": {
+    "code": "4",
+    "thai": "4",
+    "is_province": false
+  },
+  "5": {
+    "code": "5",
+    "thai": "5",
+    "is_province": false
+  },
+  "6": {
+    "code": "6",
+    "thai": "6",
+    "is_province": false
+  },
+  "7": {
+    "code": "7",
+    "thai": "7",
+    "is_province": false
+  },
+  "8": {
+    "code": "8",
+    "thai": "8",
+    "is_province": false
+  },
+  "9": {
+    "code": "9",
+    "thai": "9",
+    "is_province": false
+  },
+  "10": {
+    "code": "A01",
+    "thai": "ก",
+    "is_province": false
+  },
+  "11": {
+    "code": "A02",
+    "thai": "ข",
+    "is_province": false
+  },
+  "12": {
+    "code": "A04",
+    "thai": "ค",
+    "is_province": false
+  },
+  "13": {
+    "code": "A06",
+    "thai": "ฆ",
+    "is_province": false
+  },
+  "14": {
+    "code": "A07",
+    "thai": "ง",
+    "is_province": false
+  },
+  "15": {
+    "code": "A08",
+    "thai": "จ",
+    "is_province": false
+  },
+  "16": {
+    "code": "A09",
+    "thai": "ฉ",
+    "is_province": false
+  },
+  "17": {
+    "code": "A10",
+    "thai": "ช",
+    "is_province": false
+  },
+  "18": {
+    "code": "A12",
+    "thai": "ฌ",
+    "is_province": false
+  },
+  "19": {
+    "code": "A13",
+    "thai": "ญ",
+    "is_province": false
+  },
+  "20": {
+    "code": "A14",
+    "thai": "ฎ",
+    "is_province": false
+  },
+  "21": {
+    "code": "A16",
+    "thai": "ฐ",
+    "is_province": false
+  },
+  "22": {
+    "code": "A18",
+    "thai": "ฒ",
+    "is_province": false
+  },
+  "23": {
+    "code": "A19",
+    "thai": "ณ",
+    "is_province": false
+  },
+  "24": {
+    "code": "A20",
+    "thai": "ด",
+    "is_province": false
+  },
+  "25": {
+    "code": "A21",
+    "thai": "ต",
+    "is_province": false
+  },
+  "26": {
+    "code": "A22",
+    "thai": "ถ",
+    "is_province": false
+  },
+  "27": {
+    "code": "A23",
+    "thai": "ท",
+    "is_province": false
+  },
+  "28": {
+    "code": "A24",
+    "thai": "ธ",
+    "is_province": false
+  },
+  "29": {
+    "code": "A25",
+    "thai": "น",
+    "is_province": false
+  },
+  "30": {
+    "code": "A26",
+    "thai": "บ",
+    "is_province": false
+  },
+  "31": {
+    "code": "A28",
+    "thai": "ผ",
+    "is_province": false
+  },
+  "32": {
+    "code": "A30",
+    "thai": "พ",
+    "is_province": false
+  },
+  "33": {
+    "code": "A31",
+    "thai": "ฟ",
+    "is_province": false
+  },
+  "34": {
+    "code": "A32",
+    "thai": "ภ",
+    "is_province": false
+  },
+  "35": {
+    "code": "A33",
+    "thai": "ม",
+    "is_province": false
+  },
+  "36": {
+    "code": "A34",
+    "thai": "ย",
+    "is_province": false
+  },
+  "37": {
+    "code": "A35",
+    "thai": "ร",
+    "is_province": false
+  },
+  "38": {
+    "code": "A36",
+    "thai": "ล",
+    "is_province": false
+  },
+  "39": {
+    "code": "A37",
+    "thai": "ว",
+    "is_province": false
+  },
+  "40": {
+    "code": "A38",
+    "thai": "ศ",
+    "is_province": false
+  },
+  "41": {
+    "code": "A39",
+    "thai": "ษ",
+    "is_province": false
+  },
+  "42": {
+    "code": "A40",
+    "thai": "ส",
+    "is_province": false
+  },
+  "43": {
+    "code": "A41",
+    "thai": "ห",
+    "is_province": false
+  },
+  "44": {
+    "code": "A42",
+    "thai": "ฬ",
+    "is_province": false
+  },
+  "45": {
+    "code": "A43",
+    "thai": "อ",
+    "is_province": false
+  },
+  "46": {
+    "code": "A44",
+    "thai": "ฮ",
+    "is_province": false
+  },
+  "47": {
+    "code": "A45",
+    "thai": "ฝ",
+    "is_province": false
+  },
+  "48": {
+    "code": "ACR",
+    "thai": "อำนาจเจริญ",
+    "is_province": true
+  },
+  "49": {
+    "code": "ATG",
+    "thai": "อ่างทอง",
+    "is_province": true
+  },
+  "50": {
+    "code": "AYA",
+    "thai": "พระนครศรีอยุธยา",
+    "is_province": true
+  },
+  "51": {
+    "code": "BKK",
+    "thai": "กรุงเทพมหานคร",
+    "is_province": true
+  },
+  "52": {
+    "code": "BKN",
+    "thai": "บึงกาฬ",
+    "is_province": true
+  },
+  "53": {
+    "code": "BRM",
+    "thai": "บุรีรัมย์",
+    "is_province": true
+  },
+  "54": {
+    "code": "BTG",
+    "thai": "เบตง",
+    "is_province": true
+  },
+  "55": {
+    "code": "CBI",
+    "thai": "ชลบุรี",
+    "is_province": true
+  },
+  "56": {
+    "code": "CCO",
+    "thai": "ฉะเชิงเทรา",
+    "is_province": true
+  },
+  "57": {
+    "code": "CMI",
+    "thai": "เชียงใหม่",
+    "is_province": true
+  },
+  "58": {
+    "code": "CNT",
+    "thai": "ชัยนาท",
+    "is_province": true
+  },
+  "59": {
+    "code": "CPM",
+    "thai": "ชัยภูมิ",
+    "is_province": true
+  },
+  "60": {
+    "code": "CPN",
+    "thai": "ชุมพร",
+    "is_province": true
+  },
+  "61": {
+    "code": "CRI",
+    "thai": "เชียงราย",
+    "is_province": true
+  },
+  "62": {
+    "code": "CTI",
+    "thai": "จันทบุรี",
+    "is_province": true
+  },
+  "63": {
+    "code": "KBI",
+    "thai": "กระบี่",
+    "is_province": true
+  },
+  "64": {
+    "code": "KKN",
+    "thai": "ขอนแก่น",
+    "is_province": true
+  },
+  "65": {
+    "code": "KPT",
+    "thai": "กำแพงเพชร",
+    "is_province": true
+  },
+  "66": {
+    "code": "KRI",
+    "thai": "กาญจนบุรี",
+    "is_province": true
+  },
+  "67": {
+    "code": "KSN",
+    "thai": "กาฬสินธุ์",
+    "is_province": true
+  },
+  "68": {
+    "code": "LEI",
+    "thai": "เลย",
+    "is_province": true
+  },
+  "69": {
+    "code": "LPG",
+    "thai": "ลำปาง",
+    "is_province": true
+  },
+  "70": {
+    "code": "LPN",
+    "thai": "ลำพูน",
+    "is_province": true
+  },
+  "71": {
+    "code": "LRI",
+    "thai": "ลพบุรี",
+    "is_province": true
+  },
+  "72": {
+    "code": "MDH",
+    "thai": "มุกดาหาร",
+    "is_province": true
+  },
+  "73": {
+    "code": "MKM",
+    "thai": "มหาสารคาม",
+    "is_province": true
+  },
+  "74": {
+    "code": "MSN",
+    "thai": "แม่ฮ่องสอน",
+    "is_province": true
+  },
+  "75": {
+    "code": "NAN",
+    "thai": "น่าน",
+    "is_province": true
+  },
+  "76": {
+    "code": "NBI",
+    "thai": "นนทบุรี",
+    "is_province": true
+  },
+  "77": {
+    "code": "NBL",
+    "thai": "หนองบัวลำภู",
+    "is_province": true
+  },
+  "78": {
+    "code": "NKI",
+    "thai": "หนองคาย",
+    "is_province": true
+  },
+  "79": {
+    "code": "NMA",
+    "thai": "นครราชสีมา",
+    "is_province": true
+  },
+  "80": {
+    "code": "NPM",
+    "thai": "นครพนม",
+    "is_province": true
+  },
+  "81": {
+    "code": "NPT",
+    "thai": "นครปฐม",
+    "is_province": true
+  },
+  "82": {
+    "code": "NSN",
+    "thai": "นครสวรรค์",
+    "is_province": true
+  },
+  "83": {
+    "code": "NST",
+    "thai": "นครศรีธรรมราช",
+    "is_province": true
+  },
+  "84": {
+    "code": "NYK",
+    "thai": "นครนายก",
+    "is_province": true
+  },
+  "85": {
+    "code": "PBI",
+    "thai": "เพชรบุรี",
+    "is_province": true
+  },
+  "86": {
+    "code": "PCT",
+    "thai": "พิจิตร",
+    "is_province": true
+  },
+  "87": {
+    "code": "PKN",
+    "thai": "ประจวบคีรีขันธ์",
+    "is_province": true
+  },
+  "88": {
+    "code": "PKT",
+    "thai": "ภูเก็ต",
+    "is_province": true
+  },
+  "89": {
+    "code": "PLG",
+    "thai": "พัทลุง",
+    "is_province": true
+  },
+  "90": {
+    "code": "PLK",
+    "thai": "พิษณุโลก",
+    "is_province": true
+  },
+  "91": {
+    "code": "PNA",
+    "thai": "พังงา",
+    "is_province": true
+  },
+  "92": {
+    "code": "PNB",
+    "thai": "เพชรบูรณ์",
+    "is_province": true
+  },
+  "93": {
+    "code": "PRE",
+    "thai": "แพร่",
+    "is_province": true
+  },
+  "94": {
+    "code": "PRI",
+    "thai": "ปราจีนบุรี",
+    "is_province": true
+  },
+  "95": {
+    "code": "PTE",
+    "thai": "ปทุมธานี",
+    "is_province": true
+  },
+  "96": {
+    "code": "PTN",
+    "thai": "ปัตตานี",
+    "is_province": true
+  },
+  "97": {
+    "code": "PYO",
+    "thai": "พะเยา",
+    "is_province": true
+  },
+  "98": {
+    "code": "RBR",
+    "thai": "ราชบุรี",
+    "is_province": true
+  },
+  "99": {
+    "code": "RET",
+    "thai": "ร้อยเอ็ด",
+    "is_province": true
+  },
+  "100": {
+    "code": "RNG",
+    "thai": "ระนอง",
+    "is_province": true
+  },
+  "101": {
+    "code": "RYG",
+    "thai": "ระยอง",
+    "is_province": true
+  },
+  "102": {
+    "code": "SBR",
+    "thai": "สิงห์บุรี",
+    "is_province": true
+  },
+  "103": {
+    "code": "SKA",
+    "thai": "สงขลา",
+    "is_province": true
+  },
+  "104": {
+    "code": "SKM",
+    "thai": "สมุทรสงคราม",
+    "is_province": true
+  },
+  "105": {
+    "code": "SKN",
+    "thai": "สมุทรสาคร",
+    "is_province": true
+  },
+  "106": {
+    "code": "SKW",
+    "thai": "สระแก้ว",
+    "is_province": true
+  },
+  "107": {
+    "code": "SNI",
+    "thai": "สุราษฎร์ธานี",
+    "is_province": true
+  },
+  "108": {
+    "code": "SNK",
+    "thai": "สกลนคร",
+    "is_province": true
+  },
+  "109": {
+    "code": "SPB",
+    "thai": "สุพรรณบุรี",
+    "is_province": true
+  },
+  "110": {
+    "code": "SPK",
+    "thai": "สมุทรปราการ",
+    "is_province": true
+  },
+  "111": {
+    "code": "SRI",
+    "thai": "สระบุรี",
+    "is_province": true
+  },
+  "112": {
+    "code": "SRN",
+    "thai": "สุรินทร์",
+    "is_province": true
+  },
+  "113": {
+    "code": "SSK",
+    "thai": "ศรีสะเกษ",
+    "is_province": true
+  },
+  "114": {
+    "code": "STI",
+    "thai": "สุโขทัย",
+    "is_province": true
+  },
+  "115": {
+    "code": "STU",
+    "thai": "สตูล",
+    "is_province": true
+  },
+  "116": {
+    "code": "TAK",
+    "thai": "ตาก",
+    "is_province": true
+  },
+  "117": {
+    "code": "TRG",
+    "thai": "ตรัง",
+    "is_province": true
+  },
+  "118": {
+    "code": "TRT",
+    "thai": "ตราด",
+    "is_province": true
+  },
+  "119": {
+    "code": "UBN",
+    "thai": "อุบลราชธานี",
+    "is_province": true
+  },
+  "120": {
+    "code": "UDN",
+    "thai": "อุดรธานี",
+    "is_province": true
+  },
+  "121": {
+    "code": "UTD",
+    "thai": "อุตรดิตถ์",
+    "is_province": true
+  },
+  "122": {
+    "code": "UTI",
+    "thai": "อุทัยธานี",
+    "is_province": true
+  },
+  "123": {
+    "code": "YLA",
+    "thai": "ยะลา",
+    "is_province": true
+  },
+  "124": {
+    "code": "YST",
+    "thai": "ยโสธร",
+    "is_province": true
+  }
+}

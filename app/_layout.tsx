@@ -5,6 +5,7 @@ import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
+import { warmUpOnDeviceOcr } from "../utils/lprOcr";
 import { setupDatabase } from "../constants/Database";
 import { AuthProvider } from "../contexts/AuthContext";
 import { ModeProvider } from "../contexts/ModeContext";
@@ -31,6 +32,9 @@ export default function RootLayout() {
     // โค้ดส่วนนี้จะทำงานแค่ครั้งเดียวตอนแอปเริ่ม
     console.log("Initializing database...");
     setupDatabase();
+    // โหลดโมเดล OCR บนเครื่องล่วงหน้า (~0.4 วิ) เพื่อไม่ให้สแกนครั้งแรกต้องรอ
+    // ไม่ throw — ถ้าโหลดไม่สำเร็จจะไป fallback ที่ Cloud Run เอง
+    warmUpOnDeviceOcr();
   }, []);
 
   if (!loaded) {
