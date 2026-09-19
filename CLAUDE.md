@@ -112,6 +112,8 @@ High-water marks are derived from the table itself (`getLastRegisterSyncState()`
 | Mileage | n/a | required when `activeProject.seq_no` is 1 or 2 and the register's matching `activity{1,2}_checkmile` is 1 |
 | History / count queries | filtered by `project_id` | filtered by `activity_id` |
 
+Every query that scopes by mode goes through **`getScopeField()`** in [constants/Database.js](constants/Database.js), which returns `activity_id` only for the explicit string `'false'` and `project_id` for everything else. Never inline the `appMode` comparison again: the old `appMode == "true" ? 'project_id' : 'activity_id'` fell back the *opposite* way from `ModeContext` (which defaults `isModeOne = true`), so on a device that had never toggled the mode the UI said mode one while every count and the history list filtered on `activity_id` using a `project_id` value. Migration v8 additionally seeds `appMode` so the setting is never absent.
+
 The mode also keys the `<Tabs>` element (`key={isModeOne ? ... }`), so toggling it remounts the whole tab navigator.
 
 `passenger` is a pipe-delimited string, `adults|children|monks|novices` (default `'0|0|0|0'`), written by `passenger_count.js` and re-parsed by each receipt's `formatPassengerInfo`. Per-project flags `not_show_child_qty` / `not_show_novice_qty` hide counters, and `show_slip_section_2` (default **on**, hidden only when the API explicitly sends `false`) gates the second slip section.
@@ -156,7 +158,7 @@ All under the environment base URL, `Authorization: Bearer <lpr_token>` from `ge
 
 [constants/Database.js](constants/Database.js) is a ~1070-line monolith — schema, migrations, and every query live here as plain exported async functions. `LicensePlateReader.db` is opened once into a module-level promise; every function starts with `await getDb()`.
 
-Migrations run in `setupDatabase()` and are gated on `PRAGMA user_version`, **currently v7**: v1 initial schema, v2 `error_logs`, v3 mileage columns, v4 `projects.bus_types`, v5 `not_show_child_qty` / `not_show_novice_qty`, v6 `show_slip_section_2`, v7 `check_ins.retry_count` / `next_retry_at`. Each block must set `user_version = N` itself; the single `PRAGMA user_version = ...` write at the end only fires when the value is `> 0`. Post-v1 migrations check `PRAGMA table_info(...)` before each `ALTER TABLE` so they are re-runnable.
+Migrations run in `setupDatabase()` and are gated on `PRAGMA user_version`, **currently v8**: v1 initial schema, v2 `error_logs`, v3 mileage columns, v4 `projects.bus_types`, v5 `not_show_child_qty` / `not_show_novice_qty`, v6 `show_slip_section_2`, v7 `check_ins.retry_count` / `next_retry_at`, v8 seeds the `appMode` setting. Each block must set `user_version = N` itself; the single `PRAGMA user_version = ...` write at the end only fires when the value is `> 0`. Post-v1 migrations check `PRAGMA table_info(...)` before each `ALTER TABLE` so they are re-runnable.
 
 Key tables:
 
@@ -202,3 +204,11 @@ Several files look live but aren't — check before editing:
 - A row stuck in backoff is only visible as a number in the Settings "พบปัญหา" counter — there is no screen listing *which* rows are failing or why, and no way to force an immediate retry. `next_retry_at` would need to be cleared by hand (or by a new Settings action) to flush them early.
 - `photo_path` points into the ImagePicker cache, which Android may evict, and the photo is never copied anywhere durable. A long-queued row can still lose its image; the upload now logs `PHOTO_MISSING` and proceeds without it rather than failing silently, but the photo is gone. Preventing it means copying the capture into `documentDirectory` at scan time and taking on the cleanup that implies.
 - `CheckInSyncManager` reads `useAuth()` for `user?.id` on its error logs, but it is mounted above the login screen, so early-startup logs can carry a null user.
+- **`AuthContext.logout()` is never called.** The Settings logout only does `clearSession()` on the database, so the context keeps the previous `user` until the app restarts — later error logs carry the stale id, and logging in as a different account hits the broken `saveSession(user.id, user.username)` call above.
+- The Settings screen has **no `useFocusEffect`**: the counters load once at mount and on a mode change, so they are stale after scanning. Tapping a dashboard card calls `refreshCounts()`, but nothing tells the user that.
+- Logging out does not warn when check-ins are still queued, even though the count is displayed directly above the button. Nothing is lost (the rows keep `sync_status` 0/3) but they stay stuck until someone logs back in. `getTotalUnsyncedCheckInsCount()` exists for exactly this warning — the environment switch already uses it.
+- `handleSaveCode` does not validate the machine code, so it can be saved empty, and `comp_id` then goes into an `INTEGER NOT NULL` column as `""`.
+- The master approval code `8989` is hardcoded at four separate call sites in `settings.js`.
+- `handleClearRegisters` does not refresh the counters, so "ใบ C7" keeps showing the pre-delete number.
+- `exportStartDate` / `exportEndDate` are dead state — the export modal never renders date inputs and `exportDatabaseFile()` takes no range. `exportDatabaseToJSON(start, end)` in [utils/exportUtils.js](utils/exportUtils.js) would accept one but is not imported.
+- The destructive "clear registers" action is hidden behind a **long-press on the version row** in Settings.

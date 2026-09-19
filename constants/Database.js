@@ -286,6 +286,23 @@ export const setupDatabase = async () => {
       }
     }
 
+    // ✅ Migration to version 8: Seed appMode
+    // ModeContext default isModeOne = true แต่ไม่เคยเขียนค่าลง settings จนกว่าจะกดสลับโหมดครั้งแรก
+    // เครื่องที่ยังไม่เคยสลับจึงมี appMode = null ซึ่งทำให้ query ที่อ่านค่านี้เลือกคอลัมน์ผิด
+    // INSERT OR IGNORE จึงเติมเฉพาะเครื่องที่ยังไม่มีค่า ไม่แตะเครื่องที่ตั้งเป็น 'false' อยู่
+    if (user_version < 8) {
+      console.log("Migrating to version 8: Seeding appMode setting...");
+      try {
+        await db.runAsync(
+          `INSERT OR IGNORE INTO settings (key, value) VALUES ('appMode', 'true');`
+        );
+        user_version = 8;
+      } catch (e) {
+        console.error('❌ Error during version 8 migration:', e);
+        throw e;
+      }
+    }
+
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
     // This handles cases where the database was created before version tracking was added
     try {
@@ -560,6 +577,22 @@ export const pruneErrorLogs = async ({ maxAgeDays = 14, maxRows = 5000 } = {}) =
 };
 
 
+/**
+ * 🚀 คอลัมน์ที่ใช้จำกัดขอบเขตข้อมูลตามโหมดที่ใช้งานอยู่
+ * appMode 'true' = โหมดงานบุญ (อิง project_id), 'false' = โหมดธรรมยาตรา (อิง activity_id)
+ *
+ * ค่าที่ไม่รู้จัก (รวมถึง null) ต้อง fallback เป็น project_id ให้ตรงกับ ModeContext ที่ default
+ * isModeOne = true เดิมทุกจุดเขียนว่า `appMode == "true" ? project_id : activity_id`
+ * ซึ่ง fallback ไปทาง activity_id — เครื่องที่ยังไม่เคยกดสลับโหมดจะมี appMode = null
+ * แล้ว UI บอกว่าโหมด 1 แต่ query กลับ filter ด้วย activity_id โดยรับค่า project_id เข้ามา
+ * ผลคือตัวนับในหน้า Settings และประวัติในหน้าหลักผิดทั้งหมด
+ * @returns {Promise<'project_id'|'activity_id'>}
+ */
+const getScopeField = async () => {
+  const appMode = await getSetting('appMode');
+  return appMode === 'false' ? 'activity_id' : 'project_id';
+};
+
 export const saveSetting = async (key, value) => {
   const db = await getDb();;
   try {
@@ -819,10 +852,8 @@ export const getScanHistory = async (id, searchQuery = '') => {
 
   const db = await getDb();
   try {
-    // อ่าน appMode จาก settings
-    const appMode = await getSetting('appMode');
-    // เลือก field ที่จะใช้ใน WHERE
-    const field = appMode == "true" ? 'project_id' : 'activity_id';
+    // เลือก field ที่จะใช้ใน WHERE ตามโหมดที่ใช้งานอยู่
+    const field = await getScopeField();
     let sql = `SELECT * FROM check_ins WHERE ${field} = ?`;
     const params = [id];
 
@@ -1109,6 +1140,40 @@ export const clearRegistersTable = async () => {
   }
 };
 
+/**
+ * 🚀 จำนวน check_ins ที่ยังส่งไม่สำเร็จ "ทั้งเครื่อง" (ไม่จำกัดโปรเจกต์/กิจกรรม)
+ * ตัวนับในหน้า Settings จำกัดขอบเขตตามโปรเจกต์ที่ active อยู่ จึงใช้เตือนตอนสลับ
+ * environment หรือ logout ไม่ได้ — ต้องรู้ยอดค้างทั้งหมดจริงๆ
+ */
+export const getTotalUnsyncedCheckInsCount = async () => {
+  const db = await getDb();
+  try {
+    const res = await db.getFirstAsync(
+      'SELECT COUNT(*) as count FROM check_ins WHERE sync_status IN (0, 3, 4);'
+    );
+    return res?.count || 0;
+  } catch (error) {
+    console.error('Error getting total unsynced check-ins count:', error);
+    return 0;
+  }
+};
+
+/**
+ * 🚀 ล้างตาราง projects
+ * ใช้ตอนสลับ environment: project_id / activity_id ของ prod กับ test เป็นคนละชุด
+ * ถ้าไม่ล้าง getCurrentProject() จะคืนโปรเจกต์ของอีก server มาใช้กับ token ใหม่
+ */
+export const clearProjectsTable = async () => {
+  const db = await getDb();
+  try {
+    await db.runAsync('DELETE FROM projects;');
+    console.log("All data in projects table cleared.");
+  } catch (error) {
+    console.error("Error clearing projects table:", error);
+    throw error;
+  }
+};
+
 export const getRegistersCount = async () => {
   const db = await getDb();
   try {
@@ -1130,8 +1195,7 @@ export const getCheckInsCountForId = async (id) => {
   if (id === undefined || id === null) return 0;
   const db = await getDb();
   try {
-    const appMode = await getSetting('appMode');
-    const field = appMode == "true" ? 'project_id' : 'activity_id';
+    const field = await getScopeField();
     // Build SQL safely by using selected field name and parameterized id
     const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ?`;
     const res = await db.getFirstAsync(sql, [id]);
@@ -1151,11 +1215,11 @@ export const getRegistersCountForId = async (currentId) => {
   if (!currentId && currentId !== 0) return 0;
   const db = await getDb();
   try {
-    const appMode = await getSetting('appMode');
     // app mode is false to dharmmakaya mode
     // app mode is true to general mode
     // registers table only stores project_id; when in activity mode we need to join projects to filter by activity_id
-    if (appMode === 'true') {
+    const field = await getScopeField();
+    if (field === 'project_id') {
       const res = await db.getFirstAsync('SELECT COUNT(*) as count FROM registers WHERE project_id = ? AND deleted_at IS NULL', [currentId]);
       return res?.count || 0;
     } else {
@@ -1183,8 +1247,7 @@ export const getUnsyncedCheckInsCountForId = async (id) => {
   if (id === undefined || id === null) return 0;
   const db = await getDb();
   try {
-    const appMode = await getSetting('appMode');
-    const field = appMode == "true" ? 'project_id' : 'activity_id';
+    const field = await getScopeField();
     // Count where sync_status is 0 (pending) or 3 (error)
     const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 3`;
     const res = await db.getFirstAsync(sql, [id]);
@@ -1203,8 +1266,7 @@ export const getPendingSyncCheckInsCountForId = async (id) => {
   if (id === undefined || id === null) return 0;
   const db = await getDb();
   try {
-    const appMode = await getSetting('appMode');
-    const field = appMode == "true" ? 'project_id' : 'activity_id';
+    const field = await getScopeField();
     // Count where sync_status is 0 (pending) or 3 (error)
     const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status IN (0, 3)`;
     const res = await db.getFirstAsync(sql, [id]);
@@ -1223,8 +1285,7 @@ export const getSyncErrorCheckInsCountForId = async (id) => {
   if (id === undefined || id === null) return 0;
   const db = await getDb();
   try {
-    const appMode = await getSetting('appMode');
-    const field = appMode == "true" ? 'project_id' : 'activity_id';
+    const field = await getScopeField();
     // Count where sync_status is 4 (error/problem)
     const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 4`;
     const res = await db.getFirstAsync(sql, [id]);
@@ -1243,8 +1304,7 @@ export const getSuccessCheckInsCountForId = async (id) => {
   if (id === undefined || id === null) return 0;
   const db = await getDb();
   try {
-    const appMode = await getSetting('appMode');
-    const field = appMode == "true" ? 'project_id' : 'activity_id';
+    const field = await getScopeField();
     // Count where sync_status is 2 (success)
     const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 2`;
     const res = await db.getFirstAsync(sql, [id]);
