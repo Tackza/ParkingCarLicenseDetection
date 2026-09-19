@@ -153,7 +153,7 @@ Key tables:
 - **`projects`** — composite identity `(project_id, activity_id)`, plus the per-project feature flags and `bus_types`.
 - **`registers`** — master plate records; `register_id` is the server PK and the `REPLACE INTO` key. `findRegisterByPlate()` ignores soft-deleted rows.
 - **`check_ins`** — local-first, `uid` is a client-generated ULID, indexed on `sync_status`. `comp_id` is the `machineCode` setting.
-- **`error_logs`** — every API/DB/camera/print/sync error funnels here via `insertErrorLog()`; Settings exports it.
+- **`error_logs`** — every API/DB/camera/print/sync error funnels here; Settings exports it. Use `insertErrorLog()` for one-shot, user-triggered errors and **`insertErrorLogThrottled()` for anything inside a polling loop** — the latter collapses identical errors (same type/code/page/action/message prefix) into one row per 5 minutes and records how many were folded in. `pruneErrorLogs()` runs once from `setupDatabase()` and keeps 14 days / 5000 rows.
 
 Always wrap DB ops in `try/catch` and log to `error_logs` — that's the pattern throughout, and Settings is the only field-debugging channel. `insertErrorLog()` accepts a string, `Error`, or object for `error_message` and truncates at 5000 chars. Before exporting the DB, call `checkpointDatabase()` (`PRAGMA wal_checkpoint(TRUNCATE)`) to flush WAL — [utils/exportUtils.js](utils/exportUtils.js) already does.
 
@@ -187,7 +187,7 @@ Several files look live but aren't — check before editing:
 - **Root [index.js](index.js)** imports `./app-default`, which does not exist. It's inert because `package.json` sets `main: expo-router/entry`.
 - `components/.scan.js.swp`, `components/Untitled-1.ipynb`, and `eas-build-error-log.text` are stray artifacts checked into the repo.
 - `contexts/AuthContext.js` calls `saveSession(user.id, user.username)` in a `useEffect`, but `saveSession(loginData)` takes a single object — that call rejects unhandled. The session is actually saved by `login.js` calling `saveSession(result.data)` correctly. Fix the `AuthContext` call rather than changing `saveSession`'s signature.
-- `CheckInSyncManager.js` calls `insertErrorLog()` for **every failed row on every cycle**, with no throttling, and nothing ever prunes `error_logs`. A checkpoint left offline with a large queue writes thousands of rows an hour. Now that `sync_status = 4` is retried too, a permanently-rejected row does the same thing indefinitely — a retry cap (needs a schema column) or log de-duplication is the next thing to fix here.
+- There is **no retry cap** on the upload queue. A row the server rejects permanently (say a 422 on malformed data) is re-attempted every 10 s forever. Error-log volume is contained by `insertErrorLogThrottled()`, but the wasted requests are not — a real fix needs a `retry_count` column (schema v7) and a backoff.
 - `printed` is written at insert time in both `scan.js` and `passenger_count.js`, **before** the print actually runs, and nothing updates it afterwards. A failed print still reports `printed = 1` to the server.
 - The print block in [app/passenger_count.js](app/passenger_count.js) runs inside a `setTimeout` with no `try/catch`, so the surrounding handler can't catch it: a print failure leaves no alert, no navigation, and `isSubmitting` stuck `true`, which deadlocks the confirm button.
 - `passenger_count.js` does not forward `activity_id` or `ocr_connected` from its route params into `insertCheckIn`, so every mode-one check-in uploads with an empty activity and `ocr_connected = 1`.

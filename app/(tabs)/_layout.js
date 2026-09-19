@@ -4,6 +4,7 @@ import {
   getActiveSession,
   getLastRegisterSyncState,
   insertErrorLog,
+  insertErrorLogThrottled,
   saveRegisters
 } from "@/constants/Database";
 import { useEnvironment } from "@/contexts/EnvironmentContext";
@@ -112,8 +113,8 @@ function TabLogic() {
       }
     } catch (error) {
       console.log('Data sync failed :>> ', error);
-      // บันทึก error log
-      insertErrorLog({
+      // บันทึก error log (throttled — ลูปนี้วนทุก 30 วิ ตอนออฟไลน์จะพ่น error เดิมซ้ำไม่จบ)
+      insertErrorLogThrottled({
         error_type: 'REGISTER_SYNC_ERROR',
         error_message: error.message || 'Failed to sync registers',
         error_code: error.response?.status?.toString() || error.code || null,

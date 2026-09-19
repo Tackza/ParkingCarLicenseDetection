@@ -8,7 +8,7 @@ import {
   getActiveSession,
   getCurrentProject,
   getUnsyncedCheckIns,
-  insertErrorLog,
+  insertErrorLogThrottled,
   markCheckInAsSynced,
   markCheckInAsSyncedError
 } from '@/constants/Database';
@@ -299,9 +299,9 @@ const CheckInSyncManager = () => {
           console.log('itemError message :>> ', itemError);
           console.log('isDuplicateError(errorMessage) :>> ', isDuplicateError(errorMsg));
 
-          // ✅ Log error to database
+          // ✅ Log error to database (throttled — ทุกแถวที่ล้มจะให้ error เดียวกันตอนออฟไลน์)
           try {
-            await insertErrorLog({
+            await insertErrorLogThrottled({
               comp_id: checkIn.comp_id || null,
               error_type: 'SYNC_ERROR',
               error_message: errorMsg,
@@ -387,9 +387,9 @@ const CheckInSyncManager = () => {
       setSyncError(fullSyncError.message);
       console.error("Check-ins full sync failed:", fullSyncError);
 
-      // ✅ Log error to database
+      // ✅ Log error to database (throttled — ลูปนี้วนทุก 10 วิ)
       try {
-        await insertErrorLog({
+        await insertErrorLogThrottled({
           comp_id: null,
           error_type: 'SYNC_ERROR',
           error_message: fullSyncError.message || 'Check-ins full sync failed',
