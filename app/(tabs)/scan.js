@@ -1042,7 +1042,12 @@ export default function ScanScreen() {
         visible={isSuccessModalVisible}
         transparent={true}
         animationType="fade"
-        onRequestClose={() => setIsSuccessModalVisible(false)}
+        // ปุ่ม back ของ Android ต้องทำแบบเดียวกับปุ่ม "ตกลง"
+        // เดิมแค่ซ่อน modal ทำให้ isSubmitting ค้าง true แล้วปุ่มบันทึกตาย
+        onRequestClose={() => {
+          setIsSuccessModalVisible(false);
+          resetForm();
+        }}
       >
         <View style={styles.successModalContainer}>
           <View style={styles.successModalContent}>

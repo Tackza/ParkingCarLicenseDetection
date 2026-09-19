@@ -163,11 +163,13 @@ const CheckInSyncManager = () => {
         }
 
         console.log('checkIn :>> ', checkIn);
-        try {
 
-          // ✅ ต้องประกาศใหม่ทุกรอบ ไม่งั้นค่าเดิมจะค้างข้าม iteration (และข้ามรอบ sync)
-          //    ทำให้รายการที่ไม่มีรูป/รูปหายจาก cache ถูกแนบรูปของคันก่อนหน้าไปแทน
-          let processedPhotoUri = null;
+        // ✅ ต้องประกาศใหม่ทุกรอบ ไม่งั้นค่าเดิมจะค้างข้าม iteration (และข้ามรอบ sync)
+        //    ทำให้รายการที่ไม่มีรูป/รูปหายจาก cache ถูกแนบรูปของคันก่อนหน้าไปแทน
+        //    ประกาศนอก try เพื่อให้ finally ลบไฟล์ชั่วคราวได้
+        let processedPhotoUri = null;
+
+        try {
 
           if (checkIn.photo_path) {
             const fileInfo = await FileSystem.getInfoAsync(checkIn.photo_path);
@@ -185,7 +187,18 @@ const CheckInSyncManager = () => {
               processedPhotoUri = manipulateResult.uri;
 
             } else {
+              // ✅ photo_path ชี้ไป cache ของ ImagePicker ซึ่ง Android เก็บกวาดได้
+              //    คิวที่ค้างนานจึงเสียรูปแบบเงียบๆ — ต้องเห็นใน error log ที่ export ไปตรวจ
               console.log(`Original photo file not found for check-in uid ${checkIn.uid}: ${checkIn.photo_path}`);
+              insertErrorLogThrottled({
+                comp_id: checkIn.comp_id || null,
+                error_type: 'PHOTO_MISSING',
+                error_message: `Photo file gone before upload: ${checkIn.photo_path}`,
+                error_code: 'PHOTO_NOT_FOUND',
+                page_name: 'CheckInSyncManager.js',
+                action_name: 'syncCheckInsToServer - photo',
+                user_id: user?.id || null
+              }).catch(e => console.error('Failed to log error:', e));
             }
           }
 
@@ -256,10 +269,14 @@ const CheckInSyncManager = () => {
             timeout: UPLOAD_TIMEOUT, // ✅ กันลูป sync ค้างยาวเมื่อเน็ตติดๆ ดับๆ
           });
 
+          // axios โยน error เองเมื่อ status ไม่ใช่ 2xx บล็อกนี้จึงเข้าเฉพาะ 2xx ที่ไม่ใช่ 200 (เช่น 201/204)
+          // เดิมเรียก response.text() ซึ่งเป็นเมธอดของ fetch ไม่ใช่ axios จึงได้ TypeError
+          // แล้วถูกบันทึกเป็น error คนละสาเหตุกับที่เกิดจริง
           if (response.status !== 200) {
-            const errorText = await response.text();
-            // throw new Error(`Server response for uid ${checkIn.uid} not ok, status: ${response.status}, message: ${errorText}`);
-            const err = new Error(errorText);
+            const body = typeof response.data === 'string'
+              ? response.data
+              : JSON.stringify(response.data ?? '');
+            const err = new Error(`Unexpected status ${response.status}: ${body}`);
             err.status = response.status;
             throw err;
           }
@@ -354,6 +371,14 @@ const CheckInSyncManager = () => {
             setSyncError(`บางรายการมีปัญหา: ${errorMsg.substring(0, 50)}...`);
             await markCheckInAsSyncedError(checkIn.id, errorMsg, syncStatus);
             // setIsOnline(false);
+          }
+        } finally {
+          // ✅ ลบไฟล์ย่อขนาดที่ ImageManipulator สร้างไว้ ไม่งั้น cache โตขึ้นเรื่อยๆ ทุกครั้งที่ retry
+          //    ห้ามแตะ checkIn.photo_path (ต้นฉบับ) เพราะยังต้องใช้ตอนส่งรอบถัดไป
+          //    finally ทำงานก่อน break ของเคส 401 ด้วย จึงไม่มีไฟล์ตกค้าง
+          if (processedPhotoUri && processedPhotoUri !== checkIn.photo_path) {
+            await FileSystem.deleteAsync(processedPhotoUri, { idempotent: true })
+              .catch(e => console.log('Failed to delete temp photo:', e?.message));
           }
         }
       } // สิ้นสุด for-loop

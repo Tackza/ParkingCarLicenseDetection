@@ -901,12 +901,19 @@ export const insertCheckIn = async (checkInData) => {
 // ✅ ฟังก์ชัน: ดึง Check-in ที่ยังไม่ได้ Sync
 // รวม sync_status = 4 ด้วย: เดิม 4 ถูกตัดออกจากคิวถาวร ทำให้ error ที่แก้ได้เอง
 // (เช่น 401 token หมดอายุ, 4xx ชั่วคราว) กลายเป็นข้อมูลสูญหายโดยไม่มีทางส่งซ้ำ
-// เรียงตาม created_at เพื่อส่งตามลำดับที่ลงทะเบียนจริง
-export const getUnsyncedCheckIns = async () => { // ต้องเป็น async
+// จำกัดจำนวนต่อรอบเพื่อไม่ให้คิวที่ค้างมานาน (ออฟไลน์ทั้งวัน) ดึงมาทำทีเดียวเป็นพันแถว
+// เรียงแถวที่ยังไม่เคยลองส่ง (sync_status = 0) ขึ้นก่อนเสมอ แล้วค่อยตามด้วยแถวที่เคยล้มเหลว
+// ถ้าเรียงตาม created_at อย่างเดียว แถวเก่าที่ server ปฏิเสธถาวรจะกินโควตาทั้ง batch
+// จนการลงทะเบียนใหม่ไม่มีวันถูกส่งขึ้นไป
+export const getUnsyncedCheckIns = async (limit = 50) => { // ต้องเป็น async
   const db = await getDb(); // เรียก getDb()
   try {
     const rows = await db.getAllAsync( // ใช้ getAllAsync โดยตรง
-      `SELECT * FROM check_ins WHERE sync_status IN (0, 3, 4) ORDER BY created_at ASC;`
+      `SELECT * FROM check_ins
+         WHERE sync_status IN (0, 3, 4)
+         ORDER BY (sync_status != 0), created_at ASC
+         LIMIT ?;`,
+      [limit]
     );
     return rows;
   } catch (error) {
@@ -920,7 +927,8 @@ export const markCheckInAsSynced = async (checkInId, status = 2) => { // ✅ ต
   const db = await getDb(); // ✅ ใช้ getDb()
   try {
     const result = await db.runAsync( // ✅ ใช้ runAsync แทน db.transaction
-      `UPDATE check_ins SET sync_status = ?, sync_at = datetime('now', 'localtime') WHERE id = ?;`,
+      // ล้าง error_msg ด้วย ไม่งั้นแถวที่เคยล้มเหลวแล้วส่งสำเร็จจะยังพก error เก่าติดไปใน export
+      `UPDATE check_ins SET sync_status = ?, sync_at = datetime('now', 'localtime'), error_msg = NULL WHERE id = ?;`,
       [status, checkInId]
     );
     return result;
