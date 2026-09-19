@@ -6,7 +6,6 @@ import {
   clearSession,
   deleteSetting,
   getActiveSession,
-  getCurrentProject,
   getUnsyncedCheckIns,
   insertErrorLogThrottled,
   markCheckInAsSynced,
@@ -91,13 +90,6 @@ const CheckInSyncManager = () => {
   const timeoutIdRef = useRef(null); // ✅ Use a single ref for the timeout
 
 
-  const checkOCRConnection = (data) => {
-    if (!data.detect_plate_no && !data.detect_plate_no) {
-      return "0"
-    }
-    return "1"
-  }
-
   const syncCheckInsToServer = useCallback(async (sessionId) => {
     // console.log('syncCheckInsToServer called');
     const currentProject = activeProjectRef.current; // ✅ Access via ref
@@ -131,9 +123,7 @@ const CheckInSyncManager = () => {
     console.log("Starting check-ins sync for project:", currentProject?.project_id);
 
     try {
-      const currentProject = await getCurrentProject();
       const session = await getActiveSession();
-      console.log('currentProject checksyns :>> ', currentProject);
       // ✅ ถ้าไม่มี token (เช่นตอน logout) ให้หยุดอย่างสงบ ไม่ throw error
       if (!session?.lpr_token) {
         console.log("Check-in Sync skipped: No LprToken (user logged out).");
@@ -199,8 +189,6 @@ const CheckInSyncManager = () => {
             }
           }
 
-          const ocrConnected = checkOCRConnection(checkIn) ? '1' : '0';
-
           const formData = new FormData();
 
           formData.append('uid', checkIn.uid);
@@ -219,10 +207,16 @@ const CheckInSyncManager = () => {
           formData.append('sticker_no', checkIn.sticker_no === null ? "" : checkIn.sticker_no);
           formData.append('note', checkIn.note || '');
           formData.append('comp_id', checkIn.comp_id || '');
-          formData.append('ocr_connected', ocrConnected);
+          // ✅ ส่งค่าที่บันทึกไว้ตอนสแกน ไม่ใช่ค่าที่คำนวณใหม่ตอนอัปโหลด
+          //    เดิมใช้ checkOCRConnection() ซึ่งคืน string "0"/"1" แล้วเช็คด้วย ternary
+          //    ทั้งสองค่าเป็น truthy จึงส่ง '1' เสมอ สถิติ OCR ล่มจึงว่างเปล่ามาตลอด
+          formData.append('ocr_connected', checkIn.ocr_connected ? '1' : '0');
           formData.append('lat', 0);
           formData.append('long', 0);
-          formData.append('seq_no', currentProject.seq_no === null ? "" : currentProject.seq_no);
+          // ✅ seq_no ต้องมาจากแถวนั้น ไม่ใช่โปรเจกต์ที่ active ตอนอัปโหลด
+          //    ค้างออฟไลน์ข้ามคืนแล้วส่งตอนเช้าจะได้ seq_no ของกิจกรรมใหม่ติดไปกับข้อมูลเก่า
+          //    (และถ้าตอนนั้นไม่มีโปรเจกต์ที่ active เลย โค้ดเดิมจะ TypeError ทุกแถว)
+          formData.append('seq_no', checkIn.seq_no ?? "");
           formData.append('printed', checkIn.printed ? '1' : '0');
           formData.append('created_at', checkIn.created_at || new Date().toISOString()); // ใช้ ISO string หรือรูปแบบที่ server ต้องการ
           formData.append('created_by', checkIn.created_by || '');
