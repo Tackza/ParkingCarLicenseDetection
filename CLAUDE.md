@@ -93,6 +93,18 @@ The difference between `3` and `4` is **who is at fault**, and it drives the ret
 
 Both counters reset on success.
 
+### How the registers pull stays (or fails to stay) in step with the server
+
+The cursor is **derived from the data, not stored**: `getLastRegisterSyncState()` takes `MAX(updated_at, register_id)` over the rows already held for that project and sends them as `last_update` / `last_id`. That self-heals after a failed batch (the transaction rolls back, the cursor does not move), but it makes the whole scheme depend on three things:
+
+1. **The server must use a compound cursor** — `updated_at > :last_update OR (updated_at = :last_update AND register_id > :last_id)`. If it compares `updated_at` alone, every row sharing the maximum timestamp is skipped forever, which is exactly what a bulk update on the server produces. **This has not been verified against the backend.**
+2. **`update_date` must sort correctly as text.** `saveRegisters()` stores it verbatim with no normalization (unlike `saveProjects()`, which runs `formatDateToLocalSqlite`), and the cursor query is a plain `ORDER BY updated_at DESC`. Changing or mixing the server's date format silently picks the wrong maximum.
+3. **Deletes must bump `update_date`.** Soft deletes ride the delta and `findRegisterByPlate()` filters `deleted_at IS NULL`, but a hard delete on the server can never reach the device.
+
+`saveRegisters()` isolates failures per row: it skips a row outright when `reg_id`, `proj_id` or `update_date` is missing (none can be substituted — the first two are keys, the third is the cursor), defaults the remaining `NOT NULL` columns, catches anything that still fails, and returns `{saved, skipped}` while logging skips as `REGISTER_SAVE_SKIPPED`. Do not restore all-or-nothing behavior here: a single bad row used to roll back the batch, leave the cursor in place, and re-fetch the same rows every 30 s forever, with "ใบ C7 ไม่เพิ่มขึ้น" as the only symptom. Note that a schema `DEFAULT` does not protect a column — it applies only when the column is left out of the INSERT, not when NULL is bound to it.
+
+**There is no reconciliation of any kind.** Nothing compares the local row count against the server, there is no checksum and no periodic full refresh, and `getRegistersCount()` is dead code. If rows are ever missed the device cannot detect or recover from it; the only repair is the hidden "clear registers" action followed by a full re-pull.
+
 ### The registers API uses short field names
 
 `saveRegisters()` in [constants/Database.js](constants/Database.js) renames every column on the way in: `reg_id`→`register_id`, `proj_id`→`project_id`, `code`→`short_code`, `station`→`station_name`, `province`→`station_province`, `alert_msg`→`alert_message`, `chk_date`→`checkin_date`, `act1_date`/`act1_user`/`act1_name`/`act1_mile`→`activity1_*`, `chk_pno`/`act1_pno`/`act2_pno`→`*_printno`, `show_act2`→`show_activity2`, `update_date`→`updated_at`, `delete_date`→`deleted_at`. Adding a field to the registers payload means touching both the `REPLACE INTO` column list and the value array, in order.
@@ -211,4 +223,7 @@ Several files look live but aren't — check before editing:
 - The master approval code `8989` is hardcoded at four separate call sites in `settings.js`.
 - `handleClearRegisters` does not refresh the counters, so "ใบ C7" keeps showing the pre-delete number.
 - `exportStartDate` / `exportEndDate` are dead state — the export modal never renders date inputs and `exportDatabaseFile()` takes no range. `exportDatabaseToJSON(start, end)` in [utils/exportUtils.js](utils/exportUtils.js) would accept one but is not imported.
-- The destructive "clear registers" action is hidden behind a **long-press on the version row** in Settings.
+- The destructive "clear registers" action is hidden behind a **long-press on the version row** in Settings. It also does not take `globalSyncLock`, so clearing while a register fetch is in flight lets `saveRegisters()` commit after the `DELETE` — leaving a partial set under a cursor that looks up to date, i.e. a permanent hole.
+- The registers pull makes **one request per 30 s cycle with no drain loop**. If the server paginates, a first sync of N pages takes N × 30 s before the device holds complete data, and during that window `findRegisterByPlate()` reports "ไม่พบซีเจ็ด" for vehicles that are in fact registered. If it does not paginate, the initial pull arrives as one huge payload that `saveRegisters()` walks one `runAsync` at a time.
+- Only the **currently active** project is pulled (`project_id=${activeProject.project_id}`), and `activeProject` is time-windowed, so nothing is pre-fetched for a project whose window has not opened. It starts from zero at the exact moment operators begin scanning.
+- The registers URL is built by string interpolation, so `last_update` (a timestamp that normally contains a space) is not percent-encoded. Pass it through axios `params` instead.
