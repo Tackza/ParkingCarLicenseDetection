@@ -644,12 +644,27 @@ const formatDateToLocalSqlite = (dateString) => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 };
 
+/**
+ * 🚀 แทนที่รายการกิจกรรมทั้งหมดด้วยชุดที่ดึงมาจาก server
+ * @returns {Promise<{saved: number, replaced: boolean}>} replaced = false แปลว่าไม่ได้แตะข้อมูลเดิม
+ */
 export const saveProjects = async (projectsData) => {
   const db = await getDb();
 
   if (!Array.isArray(projectsData)) {
     console.error("saveProjects: projectsData is not an array", projectsData);
-    return;
+    return { saved: 0, replaced: false };
+  }
+
+  // ✅ ห้ามลบของเดิมทิ้งเมื่อ API คืนมา 0 แถว
+  //    เดิม [] ผ่านด่าน isArray แล้ววิ่งไป DELETE FROM projects ต่อ ปุ่ม "อัพเดทข้อมูลกิจกรรม"
+  //    จึงลบกิจกรรมที่กำลังใช้งานอยู่ทิ้งทั้งหมดแล้วรายงานว่าสำเร็จ ผลคือ activeProject เป็น null
+  //    ทันที — สแกนไม่ได้ และลูป sync ทั้งสองตัวหยุดทำงาน
+  //    การคงข้อมูลเดิมไว้ปลอดภัยกว่ามาก เพราะ getCurrentProject() กรองด้วยช่วงเวลาอยู่แล้ว
+  //    กิจกรรมที่หมดอายุจึงไม่ถูกหยิบมาใช้เองอยู่ดี
+  if (projectsData.length === 0) {
+    console.warn("saveProjects: got an empty list — keeping existing projects untouched.");
+    return { saved: 0, replaced: false };
   }
 
   try {
@@ -700,9 +715,30 @@ export const saveProjects = async (projectsData) => {
     const allProjects = await db.getAllAsync('SELECT * FROM projects');
     console.log('📊 Current projects in DB:', JSON.stringify(allProjects, null, 2));
 
+    return { saved: projectsData.length, replaced: true };
   } catch (error) {
     console.error("Error saving projects:", error);
     throw error; // ส่ง error ออกไปให้ส่วนอื่นจัดการต่อ
+  }
+};
+
+/**
+ * 🚀 กิจกรรมถัดไปที่ยังมาไม่ถึง (เรียงตามเวลาเริ่ม)
+ * ใช้ตอบผู้ใช้ว่า "บันทึกแล้วแต่ยังไม่ถึงเวลา — กิจกรรมถัดไปเริ่มเมื่อไหร่"
+ * แทนที่จะบอกแค่ว่าสำเร็จแล้วปล่อยให้งงว่าทำไมยังสแกนไม่ได้
+ */
+export const getNextUpcomingProject = async () => {
+  const db = await getDb();
+  try {
+    const project = await db.getFirstAsync(
+      `SELECT name, start_time, end_time FROM projects
+        WHERE start_time > datetime('now', 'localtime')
+        ORDER BY start_time ASC LIMIT 1;`
+    );
+    return project || null;
+  } catch (error) {
+    console.error('Error getting next upcoming project:', error);
+    return null;
   }
 };
 

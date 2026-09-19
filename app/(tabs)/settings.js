@@ -6,7 +6,7 @@ import axios from 'axios';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
-import { clearProjectsTable, clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { clearProjectsTable, clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
@@ -366,7 +366,29 @@ export default function SettingsScreen() {
       }
       const data = await result.data;
       console.log('data :>> ', data);
-      await saveProjects(data.result);
+
+      // ✅ แยกให้ออกระหว่าง "server ไม่ส่งอะไรมา" กับ "ส่งมาแล้วแต่ยังไม่ถึงเวลา"
+      //    เดิมทั้งสองกรณี (รวมถึง response ผิดรูป) ขึ้น "สำเร็จ" เหมือนกันหมด
+      //    เลยแยกไม่ออกว่าทำไมกดอัพเดทแล้วยังไม่มีข้อมูล
+      const projects = Array.isArray(data?.result) ? data.result : null;
+
+      if (!projects) {
+        Alert.alert(
+          'รูปแบบข้อมูลไม่ถูกต้อง',
+          'เซิร์ฟเวอร์ตอบกลับมาในรูปแบบที่ไม่รู้จัก\nไม่ได้แก้ไขข้อมูลในเครื่อง'
+        );
+        return;
+      }
+
+      if (projects.length === 0) {
+        Alert.alert(
+          'ไม่พบกิจกรรม',
+          'เซิร์ฟเวอร์ไม่ได้ส่งกิจกรรมใดกลับมา\nคงข้อมูลเดิมในเครื่องไว้ ไม่ได้ลบทิ้ง'
+        );
+        return;
+      }
+
+      const { saved } = await saveProjects(projects);
 
       // ✅ saveProjects ลบแล้วเขียนใหม่ทั้งตาราง โปรเจกต์ที่ active และตัวนับจึงต้องอ่านใหม่
       const projectData = await getCurrentProject();
@@ -377,7 +399,19 @@ export default function SettingsScreen() {
       setCurrentId(idForFilter);
       await refreshCounts(idForFilter);
 
-      Alert.alert('สำเร็จ', 'อัพเดทข้อมูลเรียบร้อย');
+      if (projectData) {
+        Alert.alert('สำเร็จ', `อัพเดท ${saved} กิจกรรมเรียบร้อย\nกิจกรรมปัจจุบัน: ${projectData.name}`);
+      } else {
+        // บันทึกสำเร็จ แต่ getCurrentProject() กรองด้วยช่วงเวลาแล้วไม่เหลืออะไร
+        // บอกให้ชัดว่าปัญหาอยู่ที่ช่วงเวลาของกิจกรรม ไม่ใช่การดึงข้อมูลล้มเหลว
+        const next = await getNextUpcomingProject();
+        Alert.alert(
+          'อัพเดทแล้ว แต่ยังใช้งานไม่ได้',
+          `บันทึก ${saved} กิจกรรมลงเครื่องเรียบร้อย\n` +
+          `แต่ยังไม่มีกิจกรรมใดที่ตรงกับเวลาปัจจุบัน จึงยังสแกนไม่ได้` +
+          (next ? `\n\nกิจกรรมถัดไป: ${next.name}\nเริ่ม ${next.start_time}` : '')
+        );
+      }
 
     } catch (error) {
       // Log error to database
