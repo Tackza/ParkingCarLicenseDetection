@@ -8,7 +8,7 @@ A working check-in at a checkpoint needs **two separate codebases** that talk to
 
 | | **Mbus Register** (this repo) | **Thai License Plate Recognition** (OCR service) |
 |---|---|---|
-| what | Expo / React Native tablet app | Python + Flask + YOLO (Ultralytics), two-stage detector |
+| what | Expo / React Native tablet app, shown to operators as **Mbus Scan** | Python + Flask + YOLO (Ultralytics), two-stage detector |
 | where | this repo / worktree | `/Users/pongsatornbheungnoi/Documents/project/yolo_17-3-25/7.licenseplate_detector` (**not a git repo**) |
 | its own docs | this file | that folder's own `CLAUDE.md` (~350 lines, Thai) — **read it before touching the detector**; it covers models, class maps, Cloud Run config, and cost |
 | deployed as | Android APK via EAS | Google Cloud Run `license-plate-service`, project `mbus-v2`, region `asia-southeast1` |
@@ -104,6 +104,52 @@ eas update --branch production --message "Updated text"
 EAS profiles in [eas.json](eas.json): `development` (debug APK, channel `development`, `APP_VARIANT=development`), `preview` (internal distribution), `production` (release APK, channel `production`, `APP_VARIANT=production`). The `APP_VARIANT` env var is read by [app.config.js](app.config.js) and switches the app name and Android/iOS bundle ID to `.dev` so dev and prod can coexist on one device.
 
 The OCR service is **not** deployed from here — it ships separately with `gcloud run deploy license-plate-service --source . --region=asia-southeast1 --project=mbus-v2` from the detector folder.
+
+### ⚠️ `android/` is committed, so `expo prebuild` never runs — and `app.config.js` does not reach Android
+
+This is the single most expensive thing to forget in this repo. It has produced three separate live bugs.
+
+`android/` is tracked in git (55 files), so EAS treats the project as **bare** and runs gradle on exactly these files. `expo prebuild` is what copies `app.config.js` into the native project, and it has not run since 29 Sep 2025. Anything it would have generated is frozen at whatever was committed that day.
+
+**Setting a value only in `app.config.js` changes nothing on Android.** What actually shipped, and where the real value lives:
+
+| what | `app.config.js` said | Android actually used | fix lives in |
+|---|---|---|---|
+| app name | "Mbus Register" | **`Packing_license_plate`** | `android/app/src/main/res/values/strings.xml` → `app_name` |
+| launcher icon | `assets/images/c7.png` | **Expo's blank placeholder grid** (`c7.png` arrived 18 Oct, after prebuild last ran) | `android/app/src/main/res/mipmap-*/ic_launcher{,_round,_foreground}.png` |
+| `runtimeVersion` | "1.0.0" | `1.0.0` from `strings.xml` — `AndroidManifest` points `EXPO_RUNTIME_VERSION` at `@string/expo_runtime_version` | `strings.xml` → `expo_runtime_version` |
+| `versionCode` / `versionName` | — | `android/app/build.gradle` (EAS warns `cli.appVersionSource` is unset, so it reads the native value) | `build.gradle` |
+
+Set **both** sides: the native file is what ships today, `app.config.js` covers iOS, EAS metadata and any future prebuild.
+
+**Do not "fix" this by running `expo prebuild`.** It rewrites the whole `android/` folder and would drop the hand-registered `LprOcrPackage`, the release `abiFilters`, the `settings.gradle` dev-client exclusion and the `noCompress` rule. Edit the native files directly, then confirm against a built APK rather than trusting the config:
+
+```bash
+cd android && ./gradlew :app:assembleRelease
+aapt2 dump badging app/build/outputs/apk/release/app-release.apk | grep -E "^package:|^application-label:"
+```
+
+### Release-build specifics
+
+- **expo-dev-client is excluded from release builds** in [android/settings.gradle](android/settings.gradle). Without it a release APK compiles, installs, then dies building React Native's module registry: `IllegalStateException: Native module ExpoDevMenuExtensions tried to override DevMenuExtension`. expo-dev-menu declares `debugOnly` for iOS but not Android, and its `DevMenuPackage` returns a `DevMenuExtension` in every variant. `settings.gradle` runs before variants exist, so the build type is inferred from the requested task names; override with `-Pmbus.excludeDevClient=true|false` when that guess is wrong (e.g. a bare `./gradlew assemble`, which builds both variants at once).
+- **Release ships only `arm64-v8a` and `armeabi-v7a`** (`abiFilters` in `build.gradle`). The x86/x86_64 slices were ~75 MB of native libraries no tablet will ever load — they exist for x86_64 emulators, which is a debug concern, so debug builds deliberately keep all four. Release APK is ~86 MB. Keep `armeabi-v7a`: the SUNMI V3 is arm64 but older fleet units may be 32-bit.
+- **Local release builds need a working `git`** — see the Xcode note under Conventions.
+
+### Versioning and getting a build onto fleet devices
+
+Current: `versionCode` 2, `versionName` 2.0.0, `runtimeVersion` 2.0.0. Everything before this shipped `versionCode` 1, so older devices cannot be told apart by number.
+
+All EAS production builds use the same managed keystore (`qnchy5_CNe`), so a new APK **installs over the existing one — no uninstall, and SQLite check-ins, session and paired printer survive**. The exception is a device that has a locally built debug APK on it: different signing key, so that one must be uninstalled first (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`).
+
+**OTA cannot deliver a native change.** The on-device OCR is a native module, so `eas update` will never ship it — devices need the APK. `runtimeVersion` 2.0.0 also cuts off the two updates already published on the `production` branch (newest 7 months old, runtime 1.0.0), which is deliberate: they predate the native module. The cost is that during a rollout there are two OTA lanes, 1.0.0 and 2.0.0, until every device has the new APK. **Bump `runtimeVersion` whenever native code changes.**
+
+Confirming a device actually updated:
+
+```bash
+adb shell dumpsys package com.donnytang.myapp | grep versionName   # expect 2.0.0
+```
+
+The decisive functional check is different: **turn the network off and scan.** If it reads the plate, the on-device path is live; if it falls back, it is not.
 
 ## Architecture
 
@@ -229,9 +275,13 @@ When sync code is wired into screens, callbacks are wrapped in `useCallback` and
 - **Thai TTS** for license-plate readback uses character → word mappings in [utils/speechUtils.js](utils/speechUtils.js) — don't replace with raw `Speech.speak()` of the plate string.
 - **Logo is base64-embedded** in [components/dummy-logo.js](components/dummy-logo.js) (not loaded from assets) because it's drawn into the receipt PNG.
 - **Background timers** use `react-native-background-timer`, not `setTimeout`/`setInterval` — required for the sync loops to keep running when the app is backgrounded.
+- **On this Mac, `/usr/bin/git` and `/usr/bin/python3` are broken.** Xcode 16.2 is too old for macOS 26.6, so its shims abort with `dlopen(@rpath/libxcodebuildLoader.dylib): Symbol not found: _XPCTypeBool`. It bites anything that shells out to git, including `eas build`. A `~/.local/bin/git` symlink to `/Library/Developer/CommandLineTools/usr/bin/git` covers interactive shells (that directory is already first on PATH); otherwise prefix the command with `DEVELOPER_DIR=/Library/Developer/CommandLineTools`, which fixes every shim at once. Do **not** reach for `EAS_NO_VCS=1` — it uploads the whole working directory, `node_modules` and build output included. The real fix is updating Xcode, which needs admin rights.
 
 ## Known cross-system gotchas
 
 - **`ocr_connected` is always uploaded as `1`.** [components/CheckInSyncManager.js:86](components/CheckInSyncManager.js:86) `checkOCRConnection()` returns the *strings* `"0"`/`"1"`, and the caller does `checkOCRConnection(checkIn) ? '1' : '0'` — `"0"` is truthy, so the branch can never yield `'0'`. Its guard also tests `!data.detect_plate_no && !data.detect_plate_no` (the same term twice; the second was presumably meant to be `detect_plate_province`). The value `scan.js` correctly computed and stored in `check_ins.ocr_connected` is never read. Server-side "was the OCR reachable?" reporting is therefore meaningless today.
 - **The OCR URL is hardcoded and environment-independent** — switching to the test environment in Settings does *not* point scans at a test OCR service. There is only one.
 - **The detector folder is not under version control.** Changes there have no history and no rollback; the deployed image in Artifact Registry is the only other copy. Its CLAUDE.md documents the models, class maps and Cloud Run/cost setup in detail — read it first rather than inferring from variable names (the detector's `vehicle_model` / `car_roi` are misnamed and detect **plates**, not vehicles).
+- **Only values that cross the RN bridge are type-checked by reality, not by tests.** `warmUp()` shipped resolving a Kotlin `Long`, which the bridge cannot marshal (`Cannot convert argument of type class java.lang.Long`), so it rejected on every launch. The instrumented test never caught it because it calls `LprOcr` directly and never crosses the bridge. Keep bridge payloads to Double/Int/String/Boolean/Map/Array, and verify native changes by launching an installed APK, not only by running the test.
+- **The dev variant shares `strings.xml` with production**, so both show the label "Mbus Scan" rather than "Mbus Scan (Dev)". They still install side by side — `applicationId` differs (`com.donnytang.myapp.dev`) — only the label collides.
+- **The icon artwork still reads "Register-Mbus"**, which no longer matches the app name. Cosmetic, and it needs a new source image in `assets/images/` plus regenerated mipmaps (see the prebuild section).
