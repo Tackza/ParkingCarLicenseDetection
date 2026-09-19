@@ -930,6 +930,30 @@ export const markCheckInAsSynced = async (checkInId, status = 2) => { // ✅ ต
   }
 };
 
+/**
+ * 🚀 อัปเดตสถานะการพิมพ์หลังพิมพ์จริงเสร็จ (หรือพิมพ์ไม่สำเร็จ)
+ * check_ins.printed ถูกเขียนตอน insert ซึ่งเกิดก่อนสั่งพิมพ์ ถ้ากระดาษหมดหรือเครื่องพิมพ์หลุด
+ * ค่าที่ส่งขึ้น server จะบอกว่าพิมพ์แล้วทั้งที่ผู้ใช้ไม่ได้รับสลิป
+ * หมายเหตุ: ถ้าแถวถูก sync ไปแล้ว การแก้ตรงนี้จะไม่ย้อนไปแก้ที่ server (server dedupe ด้วย uid)
+ * ในทางปฏิบัติการพิมพ์จบภายใน 1-2 วิ ขณะที่รอบ sync ห่าง 10 วิ จึงทันเกือบทุกครั้ง
+ * ไม่ throw เพราะถูกเรียกจาก error path — ห้ามกลบ error ต้นทาง
+ * @param {number} checkInId - check_ins.id
+ * @param {boolean|number} printed
+ */
+export const updateCheckInPrintedStatus = async (checkInId, printed) => {
+  if (!checkInId) return null;
+  const db = await getDb();
+  try {
+    return await db.runAsync(
+      `UPDATE check_ins SET printed = ? WHERE id = ?;`,
+      [printed ? 1 : 0, checkInId]
+    );
+  } catch (error) {
+    console.error(`Error updating printed status for check-in ${checkInId}:`, error);
+    return null;
+  }
+};
+
 export const markCheckInAsSyncedError = async (checkInId, errorMsg, status = 3) => {
   const db = await getDb(); // ✅ ใช้ getDb()
   try {

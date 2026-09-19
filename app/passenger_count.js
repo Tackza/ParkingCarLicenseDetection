@@ -15,8 +15,18 @@ import {
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BluetoothEscposPrinter } from 'react-native-bluetooth-escpos-printer';
 import ViewShot, { captureRef } from 'react-native-view-shot';
-import { insertCheckIn } from '../constants/Database';
+import { insertCheckIn, insertErrorLog, updateCheckInPrintedStatus } from '../constants/Database';
 import { useProject } from '../contexts/ProjectContext';
+
+// route params ของ expo-router เป็น string เสมอ และค่า null จะกลายเป็นข้อความ "null"
+// ถ้าปล่อยผ่านไปตรงๆ จะได้ register_id = "null" (truthy) ส่งขึ้น server
+const paramToIntOrNull = (value) => {
+  if (value === undefined || value === null || value === '' || value === 'null' || value === 'undefined') {
+    return null;
+  }
+  const parsed = parseInt(value, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+};
 
 export default function PassengerCountScreen() {
   const router = useRouter();
@@ -106,7 +116,9 @@ export default function PassengerCountScreen() {
       // ✅ 4. สร้าง Object ที่สมบูรณ์เพื่อบันทึกลง check_ins
       const finalCheckInData = {
         project_id: params.project_id,
-        register_id: params.register_id,
+        // ✅ activity_id เคยตกหล่นตรงนี้ ทำให้ check-in ของโหมด 1 ขึ้น server โดยไม่มีกิจกรรม
+        activity_id: paramToIntOrNull(params.activity_id),
+        register_id: paramToIntOrNull(params.register_id),
         detect_plate_no: params.detect_plate_no,
         detect_plate_province: params.detect_plate_province,
         plate_no: params.plate_no,
@@ -118,8 +130,10 @@ export default function PassengerCountScreen() {
         passenger: `${finalPassengerCount}|${finalChildCount}|${finalMonkCount}|${finalNoviceCount}`,
         note: '',
         comp_id: params.comp_id,
-        seq_no: params.seq_no,
-        printed: 1, // หน้านี้คือการพิมพ์
+        seq_no: paramToIntOrNull(params.seq_no),
+        printed: 1, // หน้านี้คือการพิมพ์ (แก้เป็น 0 ด้านล่างถ้าพิมพ์ไม่สำเร็จจริง)
+        // ✅ เคยตกหล่นเช่นกัน ทำให้ insertCheckIn ใส่ default 1 เสมอ สถิติ OCR ล่มของโหมด 1 จึงผิดทั้งหมด
+        ocr_connected: paramToIntOrNull(params.ocr_connected) ?? 1,
         created_by: params.created_by,
       };
 
@@ -133,19 +147,56 @@ export default function PassengerCountScreen() {
         throw new Error('ไม่สามารถบันทึกข้อมูลลงฐานข้อมูลได้');
       }
 
-      // ✅ 6. พิมพ์ใบเสร็จ
-      setTimeout(async () => {
-        const uri = await captureRef(receiptRef, {
-          format: 'png', quality: 1.0, result: 'base64',
-        });
-        await BluetoothEscposPrinter.printPic(uri, { width: 520, left: 0 });
-        await BluetoothEscposPrinter.printText('\r\n\r\n', {});
-        router.push('/main'); // กลับไปหน้าหลักหลังพิมพ์เสร็จ
+      // ✅ 6. พิมพ์ใบเสร็จ (รอให้ receipt render ค่าล่าสุดก่อน)
+      setTimeout(() => {
+        printSavedCheckIn(result.lastInsertRowId);
       }, 500);
 
     } catch (error) {
       Alert.alert('ข้อผิดพลาด', `ไม่สามารถบันทึกหรือพิมพ์ได้: ${error.message}`);
       setIsSubmitting(false);
+    }
+  };
+
+  // พิมพ์สลิปของ check-in ที่บันทึกลงเครื่องแล้ว
+  // แยกออกมาเพื่อให้ "ลองพิมพ์อีกครั้ง" ใช้แถวเดิมได้ ไม่ต้อง insert ซ้ำ
+  // เดิมโค้ดส่วนนี้อยู่ใน setTimeout ที่ไม่มี try/catch — try/catch ข้างนอกจับไม่ได้เพราะคนละ tick
+  // พิมพ์พังจึงเงียบสนิท ไม่ navigate และ isSubmitting ค้าง true จนปุ่มยืนยันตาย
+  const printSavedCheckIn = async (checkInId) => {
+    try {
+      const uri = await captureRef(receiptRef, {
+        format: 'png', quality: 1.0, result: 'base64',
+      });
+      await BluetoothEscposPrinter.printPic(uri, { width: 520, left: 0 });
+      await BluetoothEscposPrinter.printText('\r\n\r\n', {});
+
+      // ✅ ยืนยันว่าพิมพ์สำเร็จจริง (สำคัญกรณีกด "ลองพิมพ์อีกครั้ง" หลังเคยถูก mark เป็น 0)
+      await updateCheckInPrintedStatus(checkInId, 1);
+
+      router.push('/main'); // กลับไปหน้าหลักหลังพิมพ์เสร็จ
+    } catch (printError) {
+      console.error('Failed to print receipt:', printError);
+      // ✅ บันทึกตามความจริง: ข้อมูลถูกบันทึกแล้วแต่ยังไม่ได้พิมพ์
+      await updateCheckInPrintedStatus(checkInId, 0);
+      insertErrorLog({
+        comp_id: params.comp_id || null,
+        error_type: 'PRINT_ERROR',
+        error_message: printError?.message || 'Failed to print receipt',
+        error_code: printError?.code || null,
+        page_name: 'passenger_count',
+        action_name: 'printSavedCheckIn',
+        user_id: paramToIntOrNull(params.created_by),
+      }).catch(e => console.error('Failed to log error:', e));
+
+      Alert.alert(
+        'พิมพ์ไม่สำเร็จ',
+        'บันทึกข้อมูลลงเครื่องเรียบร้อยแล้ว แต่พิมพ์ใบลงทะเบียนไม่สำเร็จ\nตรวจสอบเครื่องพิมพ์แล้วลองอีกครั้งได้',
+        [
+          { text: 'ไม่พิมพ์', style: 'cancel', onPress: () => resetForm() },
+          { text: 'ลองพิมพ์อีกครั้ง', onPress: () => printSavedCheckIn(checkInId) },
+        ],
+        { cancelable: false }
+      );
     }
   };
 
