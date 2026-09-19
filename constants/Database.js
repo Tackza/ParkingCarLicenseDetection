@@ -740,55 +740,117 @@ export const getCurrentProject = async () => {
   }
 };
 
+/**
+ * 🚀 บันทึก/อัปเดตใบ C7 ที่ดึงมาจาก server
+ *
+ * ⚠️ กันแถวเสียแถวเดียวล้มทั้ง batch (poison pill)
+ * cursor ของการ sync คำนวณจาก MAX(updated_at, register_id) ในตารางนี้เอง ถ้าทั้ง transaction
+ * rollback เพราะแถวใดแถวหนึ่งผิด cursor จะไม่ขยับ แล้วดึงชุดเดิมซ้ำทุก 30 วินาทีตลอดไป
+ * อาการที่ผู้ใช้เห็นคือ "ใบ C7 ไม่เพิ่มขึ้น" เฉยๆ โดยไม่มีสัญญาณอะไรเลย
+ *
+ * จึงแยกเป็นสองชั้น:
+ *  1. ฟิลด์ NOT NULL ที่มีค่าแทนได้ → ใส่ค่าปริยายให้ (เดิมมี || 0 แค่ act1_mile/act2_mile/show_act2
+ *     แต่ตก chk_pno/act1_pno/act2_pno ซึ่งเป็น NOT NULL เหมือนกัน — DEFAULT 0 ใน schema ไม่ช่วย
+ *     เพราะ default ใช้เฉพาะตอนไม่ใส่คอลัมน์นั้นใน INSERT ไม่ใช่ตอน bind NULL เข้าไปตรงๆ)
+ *  2. ฟิลด์ที่แทนไม่ได้ (reg_id / proj_id / update_date) และแถวที่ยัง insert ไม่ผ่าน → ข้ามแล้ว log
+ *
+ * @returns {Promise<{saved: number, skipped: number}>}
+ */
 export const saveRegisters = async (registersData) => {
-  const db = await getDb();;
+  const db = await getDb();
+
+  if (!Array.isArray(registersData)) {
+    console.error("saveRegisters: registersData is not an array", registersData);
+    return { saved: 0, skipped: 0 };
+  }
+
+  let saved = 0;
+  const skipped = [];
 
   try {
     // ใช้ Transaction เพื่อให้การบันทึกข้อมูลทั้งหมดเกิดขึ้นพร้อมกัน
-    // หากมี Error ระหว่างทาง ข้อมูลทั้งหมดจะถูกยกเลิก (rollback)
     await db.withTransactionAsync(async () => {
       for (const reg of registersData) {
-        // REPLACE INTO จะทำงานโดยอิงจาก UNIQUE constraint (ในที่นี้คือ register_id)
-        await db.runAsync(
-          `REPLACE INTO registers ( uid,
+        // ✅ สามฟิลด์นี้ใส่ค่าปลอมแทนไม่ได้:
+        //    reg_id เป็นคีย์ของ REPLACE, proj_id ใช้จำกัดขอบเขต
+        //    และ update_date คือ cursor ของ sync — ค่าปลอมจะทำให้ cursor เพี้ยนถาวร
+        if (reg?.reg_id == null || reg?.proj_id == null || reg?.update_date == null) {
+          skipped.push({
+            reg_id: reg?.reg_id ?? null,
+            reason: 'missing reg_id / proj_id / update_date',
+          });
+          continue;
+        }
+
+        try {
+          // REPLACE INTO จะทำงานโดยอิงจาก UNIQUE constraint (ในที่นี้คือ register_id)
+          await db.runAsync(
+            `REPLACE INTO registers ( uid,
             register_id, project_id, short_code, plate_no, plate_province,
             bus_type, station_name, station_province, passenger, activity1_checkmile, activity2_checkmile, note,
             alert_message, checkin_date, activity1_date, activity2_date,
             activity1_user, activity1_name, activity2_user, checkin_printno, activity1_printno,
             activity2_printno, show_activity2, updated_at, deleted_at
           ) VALUES (?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-          [
-            reg.uid,
-            reg.reg_id,          // จาก JSON
-            reg.proj_id,         // จาก JSON
-            reg.code,            // จาก JSON
-            reg.plate_no,
-            reg.plate_province,
-            reg.bus_type,
-            reg.station,         // จาก JSON
-            reg.province,        // จาก JSON
-            reg.passenger,
-            reg.act1_mile || 0,
-            reg.act2_mile || 0,
-            reg.note,
-            reg.alert_msg,       // จาก JSON
-            reg.chk_date,        // จาก JSON
-            reg.act1_date,       // จาก JSON
-            reg.act2_date,       // จาก JSON
-            reg.act1_user,       // จาก JSON
-            reg.act1_name,       // จาก JSON
-            reg.act2_user,       // จาก JSON
-            reg.chk_pno,         // จาก JSON
-            reg.act1_pno,        // จาก JSON
-            reg.act2_pno,        // จาก JSON
-            reg.show_act2 || 0,  // จาก JSON
-            reg.update_date,      // จาก JSON
-            reg.delete_date,      // จาก JSON
-          ]
-        );
+            [
+              reg.uid ?? '',
+              reg.reg_id,          // จาก JSON
+              reg.proj_id,         // จาก JSON
+              reg.code ?? '',      // จาก JSON
+              reg.plate_no ?? '',
+              reg.plate_province ?? '',
+              reg.bus_type ?? '',
+              reg.station ?? '',   // จาก JSON
+              reg.province ?? '',  // จาก JSON
+              reg.passenger ?? '',
+              reg.act1_mile || 0,
+              reg.act2_mile || 0,
+              reg.note,
+              reg.alert_msg,       // จาก JSON
+              reg.chk_date,        // จาก JSON
+              reg.act1_date,       // จาก JSON
+              reg.act2_date,       // จาก JSON
+              reg.act1_user,       // จาก JSON
+              reg.act1_name,       // จาก JSON
+              reg.act2_user,       // จาก JSON
+              reg.chk_pno ?? 0,    // จาก JSON — NOT NULL
+              reg.act1_pno ?? 0,   // จาก JSON — NOT NULL
+              reg.act2_pno ?? 0,   // จาก JSON — NOT NULL
+              reg.show_act2 || 0,  // จาก JSON
+              reg.update_date,     // จาก JSON
+              reg.delete_date,     // จาก JSON
+            ]
+          );
+          saved++;
+        } catch (rowError) {
+          // ✅ ข้ามเฉพาะแถวที่มีปัญหา ที่เหลือใน batch ยังบันทึกต่อได้
+          skipped.push({
+            reg_id: reg.reg_id,
+            reason: rowError?.message || String(rowError),
+          });
+        }
       }
     });
-    console.log(`✅ Successfully saved/updated ${registersData.length} register records.`);
+
+    console.log(`✅ Registers saved/updated: ${saved}, skipped: ${skipped.length}`);
+
+    // บันทึกไว้ให้เห็นใน export เพราะไม่มี UI ไหนแสดงว่ามีใบ C7 ที่บันทึกไม่ได้
+    if (skipped.length > 0) {
+      console.warn('⚠️ Skipped registers:', skipped);
+      insertErrorLogThrottled({
+        comp_id: null,
+        error_type: 'REGISTER_SAVE_SKIPPED',
+        error_message:
+          `ข้ามใบ C7 ที่บันทึกไม่ได้ ${skipped.length} จาก ${registersData.length} แถว: ` +
+          JSON.stringify(skipped.slice(0, 10)),
+        error_code: 'REGISTER_ROW_INVALID',
+        page_name: 'Database.js',
+        action_name: 'saveRegisters',
+        user_id: null,
+      }).catch(e => console.error('Failed to log error:', e));
+    }
+
+    return { saved, skipped: skipped.length };
   } catch (error) {
     // console.error("❌ Error saving registers:", error);
     throw error; // ส่ง error ออกไปเพื่อให้ส่วนที่เรียกใช้จัดการต่อได้

@@ -96,17 +96,23 @@ function TabLogic() {
         headers: { Authorization: `Bearer ${session.lpr_token}` },
       });
 
-      if (!response.data.status === "success") {
-        throw new Error(`Network response was not ok, status: ${response.status}`);
+      // ✅ เดิมเขียน `!response.data.status === "success"` ซึ่ง ! ทำงานก่อน
+      //    กลายเป็น (boolean) === "success" → เป็น false เสมอ guard นี้จึงไม่เคยทำงานเลย
+      //    response ที่ผิดรูปหรือ server ตอบ error จึงเงียบหายไปโดยไม่มี log
+      if (response.data?.status !== "success") {
+        throw new Error(
+          `Register sync failed: HTTP ${response.status}, body status "${response.data?.status}"` +
+          (response.data?.message ? `, message: ${response.data.message}` : '')
+        );
       }
       setIsOnline(true);
 
       const data = response.data;
-      if (data.status === "success" && data.result?.length > 0) {
+      if (data.result?.length > 0) {
         console.log('data C7 :>> ', data);
-        await saveRegisters(data.result);
+        const { saved, skipped } = await saveRegisters(data.result);
         setLastSyncTime(new Date());
-        console.log("Sync successful. New records:", data.result.length);
+        console.log(`Sync successful. Received: ${data.result.length}, saved: ${saved}, skipped: ${skipped}`);
         return true;
       } else {
         return false;
