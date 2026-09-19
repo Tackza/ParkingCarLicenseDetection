@@ -84,7 +84,14 @@ Every field in the upload payload comes from the `check_ins` row itself — neve
 
 Unlike the registers loop, this effect has **no dependencies** — it starts one timer chain at mount and never restarts. That is deliberate: `getCurrentProject()` returns a fresh object every call and `main.js` calls `refreshCurrentProject()` on every focus, so depending on `activeProject` restarted the initial delay after every print and could starve the queue indefinitely. The sync function reads the project through `activeProjectRef` and reschedules itself even when there is no active project.
 
-**`sync_status` on `check_ins`:** `0` = pending, `2` = success, `3` = retryable failure (network error, timeout, 5xx, auth), `4` = failed on a 4xx or a `status != success` body. All of `0`, `3`, `4` are retried; the Settings counters still split them into "ยังไม่ได้ส่ง" (0, 3) and "พบปัญหา" (4). There is **no retry cap** — a row the server rejects permanently will be re-attempted every 10 s, and each attempt writes an `error_logs` row (see the warts list).
+**`sync_status` on `check_ins`:** `0` = pending, `2` = success, `3` = retryable failure (network error, timeout, 5xx, auth), `4` = server rejected it (4xx or a `status != success` body). All three are retried; the Settings counters split them into "ยังไม่ได้ส่ง" (0, 3) and "พบปัญหา" (4).
+
+The difference between `3` and `4` is **who is at fault**, and it drives the retry schedule:
+
+- **`3` never backs off.** The data is fine, the network (or the token) is not. `next_retry_at` is cleared so the row goes out on the very next cycle once connectivity returns. On top of that, the first unreachable-network error aborts the rest of the batch — 50 queued rows cost one failed request per cycle while offline, not 50.
+- **`4` backs off** through `SYNC_RETRY_BACKOFF_MINUTES` (1m → 5m → 15m → 1h → 3h → 6h, then held at 6h), tracked in `retry_count` / `next_retry_at`. Retrying a payload the server just rejected is pointless, so a permanently-rejected row costs ~5 requests a day instead of ~8,600. There is deliberately **no hard cap**: the row is never abandoned, in case the cause is fixed server-side later.
+
+Both counters reset on success.
 
 ### The registers API uses short field names
 
@@ -149,7 +156,7 @@ All under the environment base URL, `Authorization: Bearer <lpr_token>` from `ge
 
 [constants/Database.js](constants/Database.js) is a ~1070-line monolith — schema, migrations, and every query live here as plain exported async functions. `LicensePlateReader.db` is opened once into a module-level promise; every function starts with `await getDb()`.
 
-Migrations run in `setupDatabase()` and are gated on `PRAGMA user_version`, **currently v6**: v1 initial schema, v2 `error_logs`, v3 mileage columns, v4 `projects.bus_types`, v5 `not_show_child_qty` / `not_show_novice_qty`, v6 `show_slip_section_2`. Each block must set `user_version = N` itself; the single `PRAGMA user_version = ...` write at the end only fires when the value is `> 0`. Post-v1 migrations check `PRAGMA table_info(...)` before each `ALTER TABLE` so they are re-runnable.
+Migrations run in `setupDatabase()` and are gated on `PRAGMA user_version`, **currently v7**: v1 initial schema, v2 `error_logs`, v3 mileage columns, v4 `projects.bus_types`, v5 `not_show_child_qty` / `not_show_novice_qty`, v6 `show_slip_section_2`, v7 `check_ins.retry_count` / `next_retry_at`. Each block must set `user_version = N` itself; the single `PRAGMA user_version = ...` write at the end only fires when the value is `> 0`. Post-v1 migrations check `PRAGMA table_info(...)` before each `ALTER TABLE` so they are re-runnable.
 
 Key tables:
 
@@ -192,6 +199,6 @@ Several files look live but aren't — check before editing:
 - **Root [index.js](index.js)** imports `./app-default`, which does not exist. It's inert because `package.json` sets `main: expo-router/entry`.
 - `components/.scan.js.swp`, `components/Untitled-1.ipynb`, and `eas-build-error-log.text` are stray artifacts checked into the repo.
 - `contexts/AuthContext.js` calls `saveSession(user.id, user.username)` in a `useEffect`, but `saveSession(loginData)` takes a single object — that call rejects unhandled. The session is actually saved by `login.js` calling `saveSession(result.data)` correctly. Fix the `AuthContext` call rather than changing `saveSession`'s signature.
-- There is **no retry cap** on the upload queue. A row the server rejects permanently (say a 422 on malformed data) is re-attempted every 10 s forever. Error-log volume is contained by `insertErrorLogThrottled()` and new scans can no longer be starved by it (the queue sorts unattempted rows first), but the wasted requests remain — a real fix needs a `retry_count` column (schema v7) and a backoff.
+- A row stuck in backoff is only visible as a number in the Settings "พบปัญหา" counter — there is no screen listing *which* rows are failing or why, and no way to force an immediate retry. `next_retry_at` would need to be cleared by hand (or by a new Settings action) to flush them early.
 - `photo_path` points into the ImagePicker cache, which Android may evict, and the photo is never copied anywhere durable. A long-queued row can still lose its image; the upload now logs `PHOTO_MISSING` and proceeds without it rather than failing silently, but the photo is gone. Preventing it means copying the capture into `documentDirectory` at scan time and taking on the cleanup that implies.
 - `CheckInSyncManager` reads `useAuth()` for `user?.id` on its error logs, but it is mounted above the login screen, so early-startup logs can carry a null user.
