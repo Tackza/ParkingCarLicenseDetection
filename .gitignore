@@ -54,3 +54,6 @@ yarn-error.*
 
 expo-env.d.ts
 # @end expo-cli
+# Python tooling under tools/
+__pycache__/
+*.pyc
