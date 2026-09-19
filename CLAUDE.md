@@ -275,7 +275,14 @@ When sync code is wired into screens, callbacks are wrapped in `useCallback` and
 - **Thai TTS** for license-plate readback uses character → word mappings in [utils/speechUtils.js](utils/speechUtils.js) — don't replace with raw `Speech.speak()` of the plate string.
 - **Logo is base64-embedded** in [components/dummy-logo.js](components/dummy-logo.js) (not loaded from assets) because it's drawn into the receipt PNG.
 - **Background timers** use `react-native-background-timer`, not `setTimeout`/`setInterval` — required for the sync loops to keep running when the app is backgrounded.
-- **On this Mac, `/usr/bin/git` and `/usr/bin/python3` are broken.** Xcode 16.2 is too old for macOS 26.6, so its shims abort with `dlopen(@rpath/libxcodebuildLoader.dylib): Symbol not found: _XPCTypeBool`. It bites anything that shells out to git, including `eas build`. A `~/.local/bin/git` symlink to `/Library/Developer/CommandLineTools/usr/bin/git` covers interactive shells (that directory is already first on PATH); otherwise prefix the command with `DEVELOPER_DIR=/Library/Developer/CommandLineTools`, which fixes every shim at once. Do **not** reach for `EAS_NO_VCS=1` — it uploads the whole working directory, `node_modules` and build output included. The real fix is updating Xcode, which needs admin rights.
+- **On this Mac, `/usr/bin/git` and `/usr/bin/python3` are broken.** Xcode 16.2 is too old for macOS 26.6, so its shims abort with `dlopen(@rpath/libxcodebuildLoader.dylib): Symbol not found: _XPCTypeBool`. It bites anything that shells out to git, including `eas build`. Interactive shells are covered by `~/.local/bin/git` (already first on PATH), which is a **wrapper script**, not a symlink:
+
+  ```sh
+  #!/bin/sh
+  exec /Library/Developer/CommandLineTools/usr/bin/git "$@"
+  ```
+
+  A symlink there looks like it works and then breaks `push`/`fetch`: git derives `--exec-path` from the path it was invoked through, so it hunts for `git-remote-https` in `~/.local/libexec/git-core` and fails with `git: 'remote-https' is not a git command`. Built-ins like `status` and `commit` keep working, which makes it easy to miss. For one-off commands, `DEVELOPER_DIR=/Library/Developer/CommandLineTools` fixes every shim at once. Do **not** reach for `EAS_NO_VCS=1` — it uploads the whole working directory, `node_modules` and build output included. The real fix is updating Xcode, which needs admin rights.
 
 ## Known cross-system gotchas
 
