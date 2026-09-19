@@ -29,7 +29,7 @@ import ImageZoom from 'react-native-image-pan-zoom';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import LicensePlateDisplay from '../../components/LicensePlateDisplay';
 import Receipt from '../../components/Receipt';
-import { findRegisterByPlate, getActiveSession, getSetting, insertCheckIn, insertErrorLog } from '../../constants/Database';
+import { findRegisterByPlate, getActiveSession, getSetting, insertCheckIn, insertErrorLog, updateCheckInPrintedStatus } from '../../constants/Database';
 import { THAI_PROVINCES } from '../../constants/provinces';
 import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
@@ -429,8 +429,9 @@ export default function ScanScreen() {
       }
 
       // ✅ เรียกใช้ฟังก์ชัน insertCheckIn เพื่อบันทึกลง SQLite
-      const newId = await insertCheckIn(newCheckInData);
-      console.log(`✅ Check-in record saved with local ID: ${newId}`);
+      const insertResult = await insertCheckIn(newCheckInData);
+      const newCheckInId = insertResult?.lastInsertRowId;
+      console.log(`✅ Check-in record saved with local ID: ${newCheckInId}`);
 
       // แสดง Success Modal หากไม่ได้พิมพ์
       if (!shouldPrint) {
@@ -443,7 +444,7 @@ export default function ScanScreen() {
 
       if (shouldPrint) {
         setTimeout(async () => {
-          await generateAndPrint();
+          await generateAndPrint(newCheckInId);
         }, 500);
         return;
       }
@@ -513,7 +514,8 @@ export default function ScanScreen() {
 
 
 
-  const generateAndPrint = async () => {
+  // รับ checkInId เพื่อให้ check_ins.printed สะท้อนผลการพิมพ์จริง ไม่ใช่แค่ความตั้งใจตอน insert
+  const generateAndPrint = async (checkInId) => {
     try {
       // Capture receipt as image
       const uri = await captureRef(receiptRef, {
@@ -531,11 +533,14 @@ export default function ScanScreen() {
 
       await BluetoothEscposPrinter.printText('\r\n\r\n', {});
 
+      // ✅ ยืนยันว่าพิมพ์สำเร็จจริง (สำคัญกรณีกด "ลองพิมพ์อีกครั้ง" หลังเคยถูก mark เป็น 0)
+      await updateCheckInPrintedStatus(checkInId, 1);
 
       resetForm();
     } catch (error) {
-      Alert.alert('ข้อผิดพลาด', 'ไม่สามารถพิมพ์ใบทะเบียนได้');
       console.error(error);
+      // ✅ บันทึกตามความจริง: ข้อมูลถูกบันทึกแล้วแต่ยังไม่ได้พิมพ์
+      await updateCheckInPrintedStatus(checkInId, 0);
       // บันทึก error log
       insertErrorLog({
         comp_id: machineCode || null,
@@ -546,7 +551,18 @@ export default function ScanScreen() {
         action_name: 'generateAndPrint',
         user_id: user?.id || null
       }).catch(e => console.error('Failed to log error:', e));
-      setIsSubmitting(false);
+
+      // ✅ ต้องไม่ปล่อยให้ผู้ใช้กดบันทึกซ้ำ เพราะจะได้ check-in ซ้ำอีกแถว (คนละ uid, server dedupe ไม่ได้)
+      //    ให้ลองพิมพ์ใหม่จากแถวเดิม หรือจบงานแล้วกลับหน้าหลัก
+      Alert.alert(
+        'พิมพ์ไม่สำเร็จ',
+        'บันทึกข้อมูลลงเครื่องเรียบร้อยแล้ว แต่พิมพ์ใบลงทะเบียนไม่สำเร็จ\nตรวจสอบเครื่องพิมพ์แล้วลองอีกครั้งได้',
+        [
+          { text: 'ไม่พิมพ์', style: 'cancel', onPress: () => resetForm() },
+          { text: 'ลองพิมพ์อีกครั้ง', onPress: () => generateAndPrint(checkInId) },
+        ],
+        { cancelable: false }
+      );
     }
   };
 

@@ -98,6 +98,7 @@ High-water marks are derived from the table itself (`getLastRegisterSyncState()`
 |---|---|---|
 | After scan.js validation | `router.push('/passenger_count', params)` — **scan.js does not insert** | inserts + prints in place |
 | Insert + print site | [app/passenger_count.js](app/passenger_count.js) | [app/(tabs)/scan.js](app/(tabs)/scan.js) `executeSave` / `generateAndPrint` |
+| Field source | route params (**all strings**; `null` arrives as `"null"` — normalize with `paramToIntOrNull`) | component state |
 | Sticker number | forced `""` | required |
 | Mileage | n/a | required when `activeProject.seq_no` is 1 or 2 and the register's matching `activity{1,2}_checkmile` is 1 |
 | History / count queries | filtered by `project_id` | filtered by `activity_id` |
@@ -113,6 +114,8 @@ Uses [`react-native-bluetooth-escpos-printer`](https://github.com/detanx/react-n
 1. The receipt is rendered as a React Native view inside a `<ViewShot>` parked off-screen (`position: 'absolute', left: -10000`), mounted only while a print is pending.
 2. A short `setTimeout` (~500 ms) lets React commit the new props — capturing too early prints stale data.
 3. `captureRef(ref, { format: 'png', result: 'base64' })` → `BluetoothEscposPrinter.printPic(uri, { width: 520, left: 0 })` → a couple of `\r\n` to feed the paper.
+
+`printed` is written optimistically at insert time, then reconciled with `updateCheckInPrintedStatus()` — set to `1` after the print resolves, or back to `0` if it throws. A failed print raises a retry/give-up alert that re-prints **the same row** rather than re-running the save, because a second `insertCheckIn` would create a new `uid` that the server cannot dedupe. Keep that shape when touching either print path: never re-enter the save handler to retry a print. (If the row happens to sync in the gap, the correction does not reach the server — printing resolves in ~1–2 s against a 10 s sync interval, so this is rare rather than impossible.)
 
 There are **three print sites and two receipt renderers**:
 - [components/Receipt.js](components/Receipt.js) (`React.forwardRef`, 300 px wide) — used by `scan.js` (mode two) and by `main.js` reprint.
@@ -188,8 +191,5 @@ Several files look live but aren't — check before editing:
 - `components/.scan.js.swp`, `components/Untitled-1.ipynb`, and `eas-build-error-log.text` are stray artifacts checked into the repo.
 - `contexts/AuthContext.js` calls `saveSession(user.id, user.username)` in a `useEffect`, but `saveSession(loginData)` takes a single object — that call rejects unhandled. The session is actually saved by `login.js` calling `saveSession(result.data)` correctly. Fix the `AuthContext` call rather than changing `saveSession`'s signature.
 - There is **no retry cap** on the upload queue. A row the server rejects permanently (say a 422 on malformed data) is re-attempted every 10 s forever. Error-log volume is contained by `insertErrorLogThrottled()`, but the wasted requests are not — a real fix needs a `retry_count` column (schema v7) and a backoff.
-- `printed` is written at insert time in both `scan.js` and `passenger_count.js`, **before** the print actually runs, and nothing updates it afterwards. A failed print still reports `printed = 1` to the server.
-- The print block in [app/passenger_count.js](app/passenger_count.js) runs inside a `setTimeout` with no `try/catch`, so the surrounding handler can't catch it: a print failure leaves no alert, no navigation, and `isSubmitting` stuck `true`, which deadlocks the confirm button.
-- `passenger_count.js` does not forward `activity_id` or `ocr_connected` from its route params into `insertCheckIn`, so every mode-one check-in uploads with an empty activity and `ocr_connected = 1`.
 - `CheckInSyncManager.js` sends `seq_no` from the *currently active* project rather than from the row (`checkIn.seq_no`), so a check-in synced after the activity rolls over carries the wrong value.
 - `checkOCRConnection()` returns the strings `"0"`/`"1"`, and the call site does `checkOCRConnection(checkIn) ? '1' : '0'` — both strings are truthy, so the uploaded `ocr_connected` is always `1`. Its inner condition also tests `detect_plate_no` twice, where the second was presumably meant to be `detect_plate_province`.
