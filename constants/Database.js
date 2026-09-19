@@ -294,6 +294,9 @@ export const setupDatabase = async () => {
     }
 
     console.log(`✅ Database version ${user_version} is ready.`);
+
+    // ✅ เก็บกวาด error_logs ตอนเปิดแอป (ฟังก์ชันกลืน error เองแล้ว ไม่ทำให้ startup ล้ม)
+    await pruneErrorLogs();
   } catch (error) {
     console.error("Error setting up database:", error);
   }
@@ -380,32 +383,33 @@ export const clearSession = async () => {
  * @param {string} errorData.action_name - action ที่เกิด error
  * @param {number} errorData.user_id - user_id ที่เกิด error (optional)
  */
+// ✅ แปลง error_message ทุกรูปแบบ (string / Error / object) ให้เป็น string
+const normalizeErrorMessage = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (value instanceof Error) {
+    // ถ้าเป็น Error object ให้เอา message และ stack
+    let message = value.message || value.toString();
+    if (value.stack) message += `\n${value.stack}`;
+    return message;
+  }
+  if (typeof value === 'object') {
+    // ถ้าเป็น object ให้แปลงเป็น JSON string
+    try {
+      return JSON.stringify(value);
+    } catch (e) {
+      return String(value);
+    }
+  }
+  // กรณีอื่นๆ ให้แปลงเป็น string
+  return String(value);
+};
+
 export const insertErrorLog = async (errorData) => {
   const db = await getDb();
   try {
     // ✅ แปลง error_message ให้เป็น string เสมอ
-    let errorMessage = '';
-    if (errorData.error_message) {
-      if (typeof errorData.error_message === 'string') {
-        errorMessage = errorData.error_message;
-      } else if (errorData.error_message instanceof Error) {
-        // ถ้าเป็น Error object ให้เอา message และ stack
-        errorMessage = errorData.error_message.message || errorData.error_message.toString();
-        if (errorData.error_message.stack) {
-          errorMessage += `\n${errorData.error_message.stack}`;
-        }
-      } else if (typeof errorData.error_message === 'object') {
-        // ถ้าเป็น object ให้แปลงเป็น JSON string
-        try {
-          errorMessage = JSON.stringify(errorData.error_message);
-        } catch (e) {
-          errorMessage = String(errorData.error_message);
-        }
-      } else {
-        // กรณีอื่นๆ ให้แปลงเป็น string
-        errorMessage = String(errorData.error_message);
-      }
-    }
+    let errorMessage = normalizeErrorMessage(errorData.error_message);
 
     // ✅ จำกัดความยาวของ error_message ไม่ให้เกิน 5000 ตัวอักษร (ป้องกัน overflow)
     if (errorMessage.length > 5000) {
@@ -441,6 +445,91 @@ export const insertErrorLog = async (errorData) => {
   } catch (error) {
     console.error('❌ Error saving error log:', error);
     throw error;
+  }
+};
+
+// ─── Error log throttling ────────────────────────────────────────────────────
+// ลูป sync เขียน error ทุกแถวทุกรอบ (ทุก 10 วิ สำหรับ check-ins, 30 วิ สำหรับ registers)
+// ออฟไลน์ค้างคิว 100 แถวคือหลายหมื่นแถวต่อชั่วโมง ทำให้ DB บวมและ log ที่มีประโยชน์จมหาย
+// จึงยุบ error ที่ "เหมือนเดิม" ให้เหลือรอบละครั้งต่อช่วง cooldown แล้วแนบจำนวนที่ยุบไปด้วย
+const ERROR_LOG_THROTTLE_MS = 5 * 60 * 1000; // 5 นาที
+const ERROR_LOG_THROTTLE_MAX_KEYS = 200;     // กัน Map โตไม่จำกัดถ้าข้อความต่างกันทุกครั้ง
+const errorLogThrottleState = new Map();
+
+const buildErrorLogKey = (errorData) => {
+  const message = normalizeErrorMessage(errorData?.error_message);
+  return [
+    errorData?.error_type || 'UNKNOWN_ERROR',
+    errorData?.error_code ?? '',
+    errorData?.page_name || '',
+    errorData?.action_name || '',
+    message.slice(0, 120),
+  ].join('|');
+};
+
+/**
+ * 🚀 บันทึก Error Log แบบจำกัดความถี่
+ * ใช้กับ error ที่เกิดซ้ำได้ไม่จำกัด (ลูป sync / timer) เท่านั้น
+ * error ที่เกิดจากการกระทำของผู้ใช้ครั้งเดียว ให้ใช้ insertErrorLog ตามปกติ
+ * @param {object} errorData - รูปแบบเดียวกับ insertErrorLog
+ * @param {number} throttleMs - ช่วง cooldown ของ error ที่เหมือนกัน (default 5 นาที)
+ * @returns {Promise<object|null>} - null ถ้าถูกยุบรวม (ไม่ได้เขียนลง DB)
+ */
+export const insertErrorLogThrottled = async (errorData, throttleMs = ERROR_LOG_THROTTLE_MS) => {
+  const key = buildErrorLogKey(errorData);
+  const now = Date.now();
+  const entry = errorLogThrottleState.get(key);
+
+  if (entry && now - entry.lastLoggedAt < throttleMs) {
+    entry.suppressedCount += 1;
+    return null; // ยังอยู่ในช่วง cooldown — นับไว้เฉยๆ ไม่เขียนซ้ำ
+  }
+
+  const suppressedCount = entry?.suppressedCount || 0;
+
+  if (!entry && errorLogThrottleState.size >= ERROR_LOG_THROTTLE_MAX_KEYS) {
+    errorLogThrottleState.clear();
+  }
+  errorLogThrottleState.set(key, { lastLoggedAt: now, suppressedCount: 0 });
+
+  // แนบจำนวนครั้งที่ถูกยุบไปตั้งแต่ log ล่าสุด เพื่อให้ยังประเมินความรุนแรงได้จาก log ที่ export
+  const payload = suppressedCount > 0
+    ? {
+      ...errorData,
+      error_message: `${normalizeErrorMessage(errorData?.error_message)}\n[ยุบรวม: เกิดซ้ำอีก ${suppressedCount} ครั้งตั้งแต่บันทึกครั้งก่อน]`,
+    }
+    : errorData;
+
+  return insertErrorLog(payload);
+};
+
+/**
+ * 🚀 ลบ Error Log เก่าทิ้ง (ไม่มีที่ไหนลบมาก่อน ตารางจึงโตไม่มีเพดาน)
+ * เรียกครั้งเดียวตอนเปิดแอปจาก setupDatabase()
+ * @param {number} maxAgeDays - เก็บย้อนหลังกี่วัน
+ * @param {number} maxRows - เพดานจำนวนแถว (เก็บแถวใหม่สุดไว้)
+ * @returns {Promise<number>} - จำนวนแถวที่ลบ
+ */
+export const pruneErrorLogs = async ({ maxAgeDays = 14, maxRows = 5000 } = {}) => {
+  const db = await getDb();
+  try {
+    const byAge = await db.runAsync(
+      `DELETE FROM error_logs WHERE created_at < datetime('now', 'localtime', ?);`,
+      [`-${maxAgeDays} days`]
+    );
+    // id เป็น AUTOINCREMENT จึงเรียงตามเวลาอยู่แล้ว ใช้ PK index ได้เลย
+    const byCount = await db.runAsync(
+      `DELETE FROM error_logs WHERE id <= COALESCE((SELECT MAX(id) FROM error_logs), 0) - ?;`,
+      [maxRows]
+    );
+    const removed = (byAge.changes || 0) + (byCount.changes || 0);
+    if (removed > 0) {
+      console.log(`🧹 Pruned ${removed} old error_logs rows.`);
+    }
+    return removed;
+  } catch (error) {
+    console.error('Error pruning error_logs:', error);
+    return 0; // งานบำรุงรักษา ห้ามทำให้ startup ล้ม
   }
 };
 
