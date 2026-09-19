@@ -810,11 +810,14 @@ export const insertCheckIn = async (checkInData) => {
 };
 
 // ✅ ฟังก์ชัน: ดึง Check-in ที่ยังไม่ได้ Sync
+// รวม sync_status = 4 ด้วย: เดิม 4 ถูกตัดออกจากคิวถาวร ทำให้ error ที่แก้ได้เอง
+// (เช่น 401 token หมดอายุ, 4xx ชั่วคราว) กลายเป็นข้อมูลสูญหายโดยไม่มีทางส่งซ้ำ
+// เรียงตาม created_at เพื่อส่งตามลำดับที่ลงทะเบียนจริง
 export const getUnsyncedCheckIns = async () => { // ต้องเป็น async
   const db = await getDb(); // เรียก getDb()
   try {
     const rows = await db.getAllAsync( // ใช้ getAllAsync โดยตรง
-      `SELECT * FROM check_ins WHERE sync_status IN (0, 3);`
+      `SELECT * FROM check_ins WHERE sync_status IN (0, 3, 4) ORDER BY created_at ASC;`
     );
     return rows;
   } catch (error) {
