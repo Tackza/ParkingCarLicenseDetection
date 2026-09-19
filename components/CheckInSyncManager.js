@@ -147,6 +147,7 @@ const CheckInSyncManager = () => {
 
       let successfulUploads = 0;
       let authExpired = false; // ✅ ตั้งเมื่อเจอ 401/403 เพื่อหยุดลูปแล้วบังคับ login ใหม่
+      let networkDown = false; // ✅ ตั้งเมื่อยิงไม่ออกเลย — แถวที่เหลือก็จะพังเหมือนกัน ไม่ต้องลองต่อ
       for (const checkIn of unsyncedCheckIns) {
 
 
@@ -339,6 +340,7 @@ const CheckInSyncManager = () => {
 
           // ✅ ตรวจสอบ Network Error แลา HTTP Status Code อย่างละเอียด
           let syncStatus = 3; // ค่าเริ่มต้นสำหรับ Network/Server Error
+          let isNetworkFailure = false; // ยิงไม่ถึง server เลย (ไม่ใช่ server ตอบกลับมาว่าผิด)
 
           if (itemError.response?.status) {
             // ✅ ถ้ามี HTTP status code จาก axios response
@@ -348,10 +350,12 @@ const CheckInSyncManager = () => {
           } else if (itemError.code === 'ECONNABORTED' || errorMsg.includes('timeout')) {
             // ✅ Request timeout
             syncStatus = 3;
+            isNetworkFailure = true;
             console.log('Network timeout detected');
-          } else if (itemError.code === 'ENOTFOUND' || errorMsg.includes('Network')) {
+          } else if (itemError.code === 'ENOTFOUND' || itemError.code === 'ERR_NETWORK' || errorMsg.includes('Network')) {
             // ✅ Network Error (No Internet)
             syncStatus = 3;
+            isNetworkFailure = true;
             console.log('Network connection error detected');
           } else {
             console.log('itemError.status :>> ', itemError.status);
@@ -372,6 +376,15 @@ const CheckInSyncManager = () => {
             await markCheckInAsSyncedError(checkIn.id, errorMsg, syncStatus);
             // setIsOnline(false);
           }
+
+          // ✅ ยิงไม่ถึง server แปลว่าแถวที่เหลือใน batch ก็จะพังเหมือนกัน — หยุดแล้วรอรอบหน้า
+          //    ออฟไลน์คิว 50 แถวจึงเสีย request แค่ 1 ครั้งต่อรอบ แทนที่จะเป็น 50
+          //    แถวที่เหลือคงสถานะเดิมไว้ จึงถูกหยิบมาส่งทันทีที่เน็ตกลับมา (ไม่มีการถอยเวลา)
+          if (isNetworkFailure) {
+            console.log('🌐 Network unreachable — aborting rest of batch, will retry next cycle.');
+            networkDown = true;
+            break;
+          }
         } finally {
           // ✅ ลบไฟล์ย่อขนาดที่ ImageManipulator สร้างไว้ ไม่งั้น cache โตขึ้นเรื่อยๆ ทุกครั้งที่ retry
           //    ห้ามแตะ checkIn.photo_path (ต้นฉบับ) เพราะยังต้องใช้ตอนส่งรอบถัดไป
@@ -390,6 +403,13 @@ const CheckInSyncManager = () => {
         await clearSession();
         await deleteSetting('saved_printer');
         router.replace('/login');
+        return;
+      }
+
+      if (networkDown) {
+        // ไม่ใช่ "บางรายการมีปัญหา" — ข้อมูลไม่ได้ผิด แค่ยังส่งไม่ได้
+        setSyncError('ออฟไลน์ — ค้างไว้ในเครื่อง จะส่งอัตโนมัติเมื่อกลับมาออนไลน์');
+        setLastCheckInSyncTime(new Date());
         return;
       }
 

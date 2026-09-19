@@ -260,6 +260,32 @@ export const setupDatabase = async () => {
       }
     }
 
+    // ✅ Migration to version 7: Add retry_count / next_retry_at to check_ins
+    // ใช้ถอยเวลาการส่งซ้ำของแถวที่ server ปฏิเสธ แทนที่จะยิงซ้ำทุก 10 วินาทีไม่รู้จบ
+    // next_retry_at = NULL หมายถึงส่งได้ทันที (ค่าเริ่มต้นของแถวเดิมทั้งหมด)
+    if (user_version < 7) {
+      console.log("Migrating to version 7: Adding retry_count / next_retry_at to check_ins...");
+      try {
+        const ciCols = await db.getAllAsync(`PRAGMA table_info('check_ins');`);
+        const hasRetryCount = Array.isArray(ciCols) && ciCols.some(col => col.name === 'retry_count');
+        const hasNextRetryAt = Array.isArray(ciCols) && ciCols.some(col => col.name === 'next_retry_at');
+
+        if (!hasRetryCount) {
+          await db.runAsync(`ALTER TABLE check_ins ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;`);
+          console.log("✅ Added column check_ins.retry_count");
+        }
+        if (!hasNextRetryAt) {
+          await db.runAsync(`ALTER TABLE check_ins ADD COLUMN next_retry_at TEXT;`);
+          console.log("✅ Added column check_ins.next_retry_at");
+        }
+
+        user_version = 7;
+      } catch (e) {
+        console.error('❌ Error during version 7 migration:', e);
+        throw e;
+      }
+    }
+
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
     // This handles cases where the database was created before version tracking was added
     try {
@@ -902,6 +928,7 @@ export const insertCheckIn = async (checkInData) => {
 // รวม sync_status = 4 ด้วย: เดิม 4 ถูกตัดออกจากคิวถาวร ทำให้ error ที่แก้ได้เอง
 // (เช่น 401 token หมดอายุ, 4xx ชั่วคราว) กลายเป็นข้อมูลสูญหายโดยไม่มีทางส่งซ้ำ
 // จำกัดจำนวนต่อรอบเพื่อไม่ให้คิวที่ค้างมานาน (ออฟไลน์ทั้งวัน) ดึงมาทำทีเดียวเป็นพันแถว
+// ข้ามแถวที่ยังอยู่ในช่วงถอยเวลา (next_retry_at อยู่ในอนาคต) — ดู markCheckInAsSyncedError
 // เรียงแถวที่ยังไม่เคยลองส่ง (sync_status = 0) ขึ้นก่อนเสมอ แล้วค่อยตามด้วยแถวที่เคยล้มเหลว
 // ถ้าเรียงตาม created_at อย่างเดียว แถวเก่าที่ server ปฏิเสธถาวรจะกินโควตาทั้ง batch
 // จนการลงทะเบียนใหม่ไม่มีวันถูกส่งขึ้นไป
@@ -911,6 +938,7 @@ export const getUnsyncedCheckIns = async (limit = 50) => { // ต้องเป
     const rows = await db.getAllAsync( // ใช้ getAllAsync โดยตรง
       `SELECT * FROM check_ins
          WHERE sync_status IN (0, 3, 4)
+           AND (next_retry_at IS NULL OR next_retry_at <= datetime('now', 'localtime'))
          ORDER BY (sync_status != 0), created_at ASC
          LIMIT ?;`,
       [limit]
@@ -928,7 +956,11 @@ export const markCheckInAsSynced = async (checkInId, status = 2) => { // ✅ ต
   try {
     const result = await db.runAsync( // ✅ ใช้ runAsync แทน db.transaction
       // ล้าง error_msg ด้วย ไม่งั้นแถวที่เคยล้มเหลวแล้วส่งสำเร็จจะยังพก error เก่าติดไปใน export
-      `UPDATE check_ins SET sync_status = ?, sync_at = datetime('now', 'localtime'), error_msg = NULL WHERE id = ?;`,
+      // และล้างสถานะถอยเวลา เพื่อให้ตัวเลขใน export สะท้อนว่าแถวนี้จบแล้วจริง
+      `UPDATE check_ins
+          SET sync_status = ?, sync_at = datetime('now', 'localtime'),
+              error_msg = NULL, retry_count = 0, next_retry_at = NULL
+        WHERE id = ?;`,
       [status, checkInId]
     );
     return result;
@@ -962,13 +994,41 @@ export const updateCheckInPrintedStatus = async (checkInId, printed) => {
   }
 };
 
+// ตารางถอยเวลา (นาที) สำหรับการส่งซ้ำครั้งที่ 1, 2, 3, ... ครั้งหลังๆ ใช้ค่าสุดท้ายซ้ำไปเรื่อยๆ
+// ไม่มีเพดานจำนวนครั้งโดยตั้งใจ: แถวจะไม่ถูกทิ้งถาวร เผื่อปัญหาถูกแก้ที่ฝั่ง server ภายหลัง
+// แถวที่ค้างจึงเปลือง request จาก ~8,600 ครั้ง/วัน เหลือ ~5 ครั้ง/วัน
+const SYNC_RETRY_BACKOFF_MINUTES = [1, 5, 15, 60, 180, 360];
+
 export const markCheckInAsSyncedError = async (checkInId, errorMsg, status = 3) => {
   const db = await getDb(); // ✅ ใช้ getDb()
   try {
-    const result = await db.runAsync( // ✅ ใช้ runAsync แทน db.transaction
-      `UPDATE check_ins SET sync_status = ?, error_msg = ? WHERE id = ?;`,
-      [status, errorMsg, checkInId]
+    // ✅ error ระดับเครือข่าย (status 3: ออฟไลน์ / timeout / 5xx / token หมดอายุ) ต้องไม่ถอยเวลา
+    //    เพราะพอเน็ตกลับมาหรือ login ใหม่แล้วต้องส่งได้ทันทีในรอบถัดไป
+    if (status !== 4) {
+      return await db.runAsync(
+        `UPDATE check_ins SET sync_status = ?, error_msg = ?, next_retry_at = NULL WHERE id = ?;`,
+        [status, errorMsg, checkInId]
+      );
+    }
+
+    // ✅ server ปฏิเสธ (4xx หรือ body ตอบ error) — ส่งซ้ำทันทีไม่มีประโยชน์ ให้ถอยเวลาเพิ่มขึ้นเรื่อยๆ
+    const row = await db.getFirstAsync(
+      'SELECT retry_count FROM check_ins WHERE id = ?;',
+      [checkInId]
     );
+    const nextRetryCount = (row?.retry_count || 0) + 1;
+    const delayMinutes = SYNC_RETRY_BACKOFF_MINUTES[
+      Math.min(nextRetryCount - 1, SYNC_RETRY_BACKOFF_MINUTES.length - 1)
+    ];
+
+    const result = await db.runAsync(
+      `UPDATE check_ins
+          SET sync_status = ?, error_msg = ?, retry_count = ?,
+              next_retry_at = datetime('now', 'localtime', ?)
+        WHERE id = ?;`,
+      [status, errorMsg, nextRetryCount, `+${delayMinutes} minutes`, checkInId]
+    );
+    console.log(`⏳ Check-in ${checkInId} rejected (attempt ${nextRetryCount}); next retry in ${delayMinutes} min.`);
     return result;
   } catch (error) {
     console.error(`Error marking check-in ${checkInId} with sync error:`, error);
