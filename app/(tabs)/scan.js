@@ -210,6 +210,13 @@ export default function ScanScreen() {
 
 
     } catch (error) {
+      // ✅ ทุกทางที่หลุดมาถึงตรงนี้แปลว่า OCR ไม่ได้ส่งทะเบียนกลับมา เจ้าหน้าที่ต้องพิมพ์เอง
+      //    จึงตั้งค่าที่จุดเดียวตรงนี้ ไม่แยกตั้งรายสาขา
+      //    เดิมตั้งเฉพาะสาขา error.request กับสาขาท้ายสุด ทำให้ timeout (ซึ่งเป็นเคสที่เจอบ่อยที่สุด
+      //    ตอนสัญญาณอ่อน) และ 4xx/5xx ถูกบันทึกว่า OCR ต่อติด ทั้งที่กรอกเองทั้งหมด
+      //    สถิติ OCR ล่มจึงต่ำกว่าความจริงมาตลอด
+      setOcrConnected(0);
+
       // ✅ การจัดการ Error ของ Axios
       if (axios.isCancel(error)) { // ไม่น่าจะเกิดขึ้นในกรณี timeout, แต่เผื่อไว้
         console.log('Request cancelled:', error.message);
@@ -278,7 +285,6 @@ export default function ScanScreen() {
         //   'ไม่มีการเชื่อมต่ออินเทอร์เน็ต',
         //   'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ตรวจจับทะเบียนรถได้ กรุณาตรวจสอบการเชื่อมต่อ หรือกรอกข้อมูลเอง'
         // );
-        setOcrConnected(0); // ✅ Set OCR status to 0 (Disconnected)
         openEditModal(null, null);
       } else {
         // Error อื่นๆ
@@ -294,7 +300,6 @@ export default function ScanScreen() {
           user_id: user?.id || null
         }).catch(e => console.error('Failed to log error:', e));
         Alert.alert('ข้อผิดพลาด', error.message || 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ');
-        setOcrConnected(0); // ✅ Set OCR status to 0 (Disconnected) for other errors too just in case
         openEditModal(null, null);
       }
     } finally {
