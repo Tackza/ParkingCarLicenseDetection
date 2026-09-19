@@ -6,7 +6,7 @@ import axios from 'axios';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
-import { clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { clearProjectsTable, clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
@@ -261,12 +261,24 @@ export default function SettingsScreen() {
               // เราจะเปลี่ยนหน้าหลังจาก API call สำเร็จ
               router.replace('/login'); // ย้ายไปหน้า Login ทันที
 
+              // lprToken มาจาก state ที่โหลดตอน mount จึงยังใช้ได้แม้ clearSession() ไปแล้ว
+              // แต่ถ้าโหลดตอน mount ไม่สำเร็จก็ไม่ต้องยิง ไม่งั้นส่ง "Bearer undefined" ไปเปล่าๆ
+              if (!lprToken) {
+                console.log('No token in state; skipping server logout.');
+                setLoading(false);
+                return;
+              }
+
               // ดักจับ error จาก fetch API call
-              const result = await axios.post(`${API_BASE_URL}/lpr/logout`, {
+              // ✅ axios.post(url, body, config) — เดิมส่ง { headers } เป็น argument ที่ 2
+              //    จึงกลายเป็น request body และไม่มี Authorization header ติดไปเลย
+              //    server ระบุ session ไม่ได้ → token เดิมไม่เคยถูกเพิกถอน (แถม token หลุดไปอยู่ใน body)
+              const result = await axios.post(`${API_BASE_URL}/lpr/logout`, {}, {
                 headers: {
                   'Content-Type': 'application/json',
                   'Authorization': `Bearer ${lprToken}`,
                 },
+                timeout: 15000,
               });
               const data = await result.data;
 
@@ -335,24 +347,37 @@ export default function SettingsScreen() {
 
   const getProject = async () => {
     setLoading(true);
-    const result = await axios.get(`${API_BASE_URL}/lpr/projects`, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${lprToken}`, // ถ้าต้องใช้ token
-      },
-    });
 
+    // ✅ การเรียก API ต้องอยู่ใน try ด้วย เดิมอยู่นอก try ทำให้ตอนออฟไลน์/401
+    //    ฟังก์ชัน reject ก่อนถึง try → finally ไม่ทำงาน → setLoading(false) ไม่ถูกเรียก
+    //    หน้านี้ return spinner เมื่อ loading = true ผู้ใช้จึงค้างจนต้องปิดแอปทิ้ง
     try {
+      const result = await axios.get(`${API_BASE_URL}/lpr/projects`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${lprToken}`, // ถ้าต้องใช้ token
+        },
+        timeout: 30000,
+      });
+
       if (result.status !== 200) {
         Alert.alert('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
-        setLoading(false);
         return;
       }
       const data = await result.data;
       console.log('data :>> ', data);
       await saveProjects(data.result);
+
+      // ✅ saveProjects ลบแล้วเขียนใหม่ทั้งตาราง โปรเจกต์ที่ active และตัวนับจึงต้องอ่านใหม่
+      const projectData = await getCurrentProject();
+      setCurrentProject(projectData);
+      const idForFilter = projectData
+        ? (isModeOne ? projectData.project_id : projectData.activity_id)
+        : null;
+      setCurrentId(idForFilter);
+      await refreshCounts(idForFilter);
+
       Alert.alert('สำเร็จ', 'อัพเดทข้อมูลเรียบร้อย');
-      setLoading(false);
 
     } catch (error) {
       // Log error to database
@@ -371,12 +396,9 @@ export default function SettingsScreen() {
       }
 
       Alert.alert('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
-      setLoading(false);
     } finally {
       setLoading(false);
     }
-
-
   }
 
 
@@ -527,26 +549,81 @@ export default function SettingsScreen() {
     <Text style={styles.sectionHeader}>{title.toUpperCase()}</Text>
   );
 
+  // ✅ สลับ environment ต้องล้างข้อมูลที่ผูกกับ server เดิมออกให้หมด
+  //    เดิมแค่พลิกค่า prod/test ทำให้ token, projects และ registers ของอีก server ค้างอยู่
+  //    register_id / project_id ของสอง server เป็นคนละชุด แต่ REPLACE INTO registers ใช้
+  //    register_id เป็นคีย์ ข้อมูลสองฝั่งจึงปนกันในตารางเดียว
+  const applyEnvChange = async (newEnv) => {
+    try {
+      setLoading(true);
+      await updateEnvironment(newEnv);
+
+      // ตัด session เดิม (token ใช้กับอีก server ไม่ได้) และ unpair เครื่องพิมพ์ตามการ logout ปกติ
+      await clearSession();
+      await deleteSetting('saved_printer');
+
+      // ล้างข้อมูล master ที่ผูกกับ server เดิม รอบ sync ถัดไปหลัง login จะดึงใหม่ทั้งหมด
+      await clearRegistersTable();
+      await clearProjectsTable();
+
+      router.replace('/login');
+    } catch (e) {
+      console.error("Failed to switch environment:", e);
+      try {
+        await insertErrorLog({
+          comp_id: null,
+          error_type: 'DATABASE_ERROR',
+          error_message: e.message || 'Failed to switch environment',
+          error_code: e.code || 'SWITCH_ENV_ERROR',
+          page_name: 'settings.js',
+          action_name: 'applyEnvChange',
+          user_id: user?.id || null
+        });
+      } catch (logError) {
+        console.error('Failed to log error:', logError);
+      }
+      Alert.alert("ผิดพลาด", "ไม่สามารถเปลี่ยน Environment ได้.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleConfirmEnvChange = async () => {
     if (envMasterCodeInput !== '8989') {
       Alert.alert("ผิดพลาด", "รหัสอนุมัติไม่ถูกต้อง.");
       return;
     }
 
-    try {
-      // สลับค่า 'prod' -> 'test' หรือ 'test' -> 'prod'
-      const newEnv = environment === 'prod' ? 'test' : 'prod';
-      await updateEnvironment(newEnv);
+    // สลับค่า 'prod' -> 'test' หรือ 'test' -> 'prod'
+    const newEnv = environment === 'prod' ? 'test' : 'prod';
 
-      Alert.alert("สำเร็จ", `เปลี่ยน Environment เป็น ${newEnv.toUpperCase()} เรียบร้อยแล้ว!`);
+    // ปิด Modal ก่อน ไม่งั้น Alert จะซ้อนอยู่หลัง Modal
+    setEnvModalVisible(false);
+    setEnvMasterCodeInput('');
 
-      // ปิด Modal และเคลียร์ค่า
-      setEnvModalVisible(false);
-      setEnvMasterCodeInput('');
-    } catch (e) {
-      console.error("Failed to save environment setting:", e);
-      Alert.alert("ผิดพลาด", "ไม่สามารถบันทึก Environment ได้.");
-    }
+    // ยอดค้างทั้งเครื่อง ไม่ใช่เฉพาะโปรเจกต์ที่ active
+    const pendingTotal = await getTotalUnsyncedCheckInsCount();
+
+    const warning =
+      `จะออกจากระบบ และล้างข้อมูลกิจกรรม/ใบ C7 ในเครื่องทั้งหมด\n` +
+      `ต้องเข้าสู่ระบบใหม่เพื่อดึงข้อมูลของ ${newEnv.toUpperCase()}` +
+      (pendingTotal > 0
+        ? `\n\n⚠️ มีรายการลงทะเบียนค้างส่งอยู่ ${pendingTotal} รายการ\nรายการเหล่านี้จะถูกส่งขึ้น ${newEnv.toUpperCase()} แทนที่จะเป็น ${environment.toUpperCase()}`
+        : '');
+
+    Alert.alert(
+      `เปลี่ยน Environment เป็น ${newEnv.toUpperCase()}?`,
+      warning,
+      [
+        { text: 'ยกเลิก', style: 'cancel' },
+        {
+          text: 'ยืนยัน',
+          style: 'destructive',
+          onPress: () => applyEnvChange(newEnv),
+        },
+      ],
+      { cancelable: false }
+    );
   };
 
 
