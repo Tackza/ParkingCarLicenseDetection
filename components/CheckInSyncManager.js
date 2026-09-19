@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 // import { Ionicons } from '@expo/vector-icons';
 import {
+  clearSession,
+  deleteSetting,
   getActiveSession,
   getCurrentProject,
   getUnsyncedCheckIns,
@@ -16,13 +18,19 @@ import { useProject } from '@/contexts/ProjectContext';
 import axios from 'axios';
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
+import { useRouter } from 'expo-router';
 import BackgroundTimer from 'react-native-background-timer';
 
-const SYNC_INTERVAL = 10000; // 1 นาที
+const SYNC_INTERVAL = 10000; // 10 วินาที ระหว่างรอบ sync
+// ✅ หน่วงก่อน sync รอบแรกหลัง mount พอให้ DB/session พร้อม (เดิม 20 วิ ซึ่งนานเกินจำเป็น)
+const INITIAL_SYNC_DELAY = 5000;
+// ✅ กันคำขอค้างเมื่อสัญญาณอ่อน/ต่อ wifi ได้แต่ออกเน็ตไม่ได้ (axios default = ไม่จำกัด)
+const UPLOAD_TIMEOUT = 30000;
 
 
 const CheckInSyncManager = () => {
   const { activeProject } = useProject();
+  const router = useRouter();
   // ✅ ใช้ state ของ Component นี้เอง
   const [isCheckInSyncing, setIsCheckInSyncing] = useState(false);
   const [lastCheckInSyncTime, setLastCheckInSyncTime] = useState(null);
@@ -148,6 +156,7 @@ const CheckInSyncManager = () => {
       const apiUrl = `${API_URL}/lpr/checkins`; // <-- ✅ เปลี่ยน API Endpoint สำหรับส่งทีละรายการ
 
       let successfulUploads = 0;
+      let authExpired = false; // ✅ ตั้งเมื่อเจอ 401/403 เพื่อหยุดลูปแล้วบังคับ login ใหม่
       for (const checkIn of unsyncedCheckIns) {
 
 
@@ -166,6 +175,9 @@ const CheckInSyncManager = () => {
         console.log('checkIn :>> ', checkIn);
         try {
 
+          // ✅ ต้องประกาศใหม่ทุกรอบ ไม่งั้นค่าเดิมจะค้างข้าม iteration (และข้ามรอบ sync)
+          //    ทำให้รายการที่ไม่มีรูป/รูปหายจาก cache ถูกแนบรูปของคันก่อนหน้าไปแทน
+          let processedPhotoUri = null;
 
           if (checkIn.photo_path) {
             const fileInfo = await FileSystem.getInfoAsync(checkIn.photo_path);
@@ -247,6 +259,7 @@ const CheckInSyncManager = () => {
               'Content-Type': 'multipart/form-data',
 
             },
+            timeout: UPLOAD_TIMEOUT, // ✅ กันลูป sync ค้างยาวเมื่อเน็ตติดๆ ดับๆ
           });
 
           if (response.status !== 200) {
@@ -301,6 +314,18 @@ const CheckInSyncManager = () => {
             console.error('Failed to log error:', logError);
           }
 
+          // ✅ Token หมดอายุ/ถูกเพิกถอน: ไม่ใช่ความผิดของข้อมูลแถวนี้
+          //    คงไว้ที่ 3 (รอส่งใหม่) แล้วหยุดลูปทันที ไม่ต้องยิงต่อด้วย token ที่ใช้ไม่ได้แล้ว
+          //    ถ้า mark เป็น 4 ข้อมูลจะค้างถาวรแม้ login ใหม่สำเร็จ
+          const httpStatus = itemError.response?.status || itemError.status;
+          if (httpStatus === 401 || httpStatus === 403) {
+            console.log(`🔐 Token invalid (${httpStatus}) while uploading uid ${checkIn.uid}. Aborting batch.`);
+            await markCheckInAsSyncedError(checkIn.id, errorMsg, 3);
+            setSyncError('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่');
+            authExpired = true;
+            break;
+          }
+
           // ✅ ตรวจสอบ Network Error แลา HTTP Status Code อย่างละเอียด
           let syncStatus = 3; // ค่าเริ่มต้นสำหรับ Network/Server Error
 
@@ -338,6 +363,16 @@ const CheckInSyncManager = () => {
           }
         }
       } // สิ้นสุด for-loop
+
+      // ✅ Token ใช้ไม่ได้แล้ว — บังคับ login ใหม่แบบเดียวกับ loop registers ใน app/(tabs)/_layout.js
+      //    ข้อมูลที่ค้างยังอยู่ที่ sync_status 0/3 จึงถูกส่งต่อได้ทันทีหลัง login สำเร็จ
+      if (authExpired) {
+        console.log('🔐 Forcing re-login after auth failure during check-in sync.');
+        await clearSession();
+        await deleteSetting('saved_printer');
+        router.replace('/login');
+        return;
+      }
 
       if (successfulUploads === unsyncedCheckIns.length) {
         console.log(`✅ All ${successfulUploads} check-ins uploaded successfully.`);
@@ -379,17 +414,35 @@ const CheckInSyncManager = () => {
     //  setIsOnline, 
     API_URL]);
 
+  // ✅ เก็บ ref ไปยัง sync function ล่าสุด เพราะ effect ด้านล่างรันครั้งเดียวตอน mount
+  //    จึงต้องให้ timer chain เรียก closure ปัจจุบันเสมอ (เช่นเมื่อผู้ใช้สลับ environment แล้ว API_URL เปลี่ยน)
+  const syncFnRef = useRef(null);
+  useEffect(() => {
+    syncFnRef.current = syncCheckInsToServer;
+  }, [syncCheckInsToServer]);
+
   const scheduleNextSync = (sessionId) => {
     // Only schedule if the session is still valid
     if (sessionId !== currentSyncSessionId.current) return;
 
+    // ✅ เคลียร์ timer เดิมก่อนเสมอ กัน chain ซ้อนกันหลายเส้น
+    if (timeoutIdRef.current) {
+      BackgroundTimer.clearTimeout(timeoutIdRef.current);
+      timeoutIdRef.current = null;
+    }
+
     console.log(`Scheduling next sync for session ${sessionId} in ${SYNC_INTERVAL}ms`);
     timeoutIdRef.current = BackgroundTimer.setTimeout(() => {
-      syncCheckInsToServer(sessionId);
+      syncFnRef.current?.(sessionId);
     }, SYNC_INTERVAL);
   };
 
 
+  // ✅ เริ่ม timer chain ครั้งเดียวตอน mount แล้วปล่อยให้วนต่อไปเรื่อยๆ
+  //    ห้ามผูก dependency กับ activeProject: getCurrentProject() คืน object ใหม่ทุกครั้ง และหน้า main
+  //    เรียก refreshCurrentProject() ทุกครั้งที่ focus (ซึ่งเกิดหลังพิมพ์เสร็จทุกใบ) effect จึง re-run
+  //    แล้วนับ delay เริ่มต้นใหม่ไม่รู้จบ — ถ้าสแกนถี่กว่า delay คิวจะไม่ถูกส่งเลยตลอดกะ
+  //    syncCheckInsToServer อ่านโปรเจกต์ผ่าน activeProjectRef อยู่แล้ว และ schedule รอบถัดไปเองเมื่อยังไม่มีโปรเจกต์
   useEffect(() => {
     // 1. Generate New Session ID
     const newSessionId = Date.now();
@@ -402,26 +455,22 @@ const CheckInSyncManager = () => {
       timeoutIdRef.current = null;
     }
 
-    if (activeProject) {
-      console.log("Setting up initial background timer...");
-      // Initial delay before first sync
-      timeoutIdRef.current = BackgroundTimer.setTimeout(() => {
-        console.log("BackgroundTimer: Initial sync triggered.");
-        syncCheckInsToServer(newSessionId);
-      }, 20000); // 20 seconds initial delay
-    } else {
-      console.log("No active project, sync not started.");
-    }
+    console.log("Setting up initial background timer...");
+    timeoutIdRef.current = BackgroundTimer.setTimeout(() => {
+      console.log("BackgroundTimer: Initial sync triggered.");
+      syncFnRef.current?.(newSessionId);
+    }, INITIAL_SYNC_DELAY);
 
     // ✅ 6. Cleanup function (สำคัญมาก!)
     return () => {
       console.log(`Session Cleaned: ${newSessionId} (Timer removed)`);
+      currentSyncSessionId.current = 0; // run ที่ค้างอยู่จะไม่ schedule รอบถัดไป
       if (timeoutIdRef.current) {
         BackgroundTimer.clearTimeout(timeoutIdRef.current);
         timeoutIdRef.current = null;
       }
     };
-  }, [activeProject]); // ✅ Depend on activeProject to restart session when it changes
+  }, []);
 
   return null; // Component นี้ไม่จำเป็นต้อง render อะไร
 
