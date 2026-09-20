@@ -46,8 +46,8 @@ Note: `eas.json` sets `APP_URL_DETECTION` on the development profile, but **noth
 [app/_layout.tsx](app/_layout.tsx) wraps every screen in this exact provider order — order matters because inner providers read from outer ones:
 
 ```
-EnvironmentProvider → AuthProvider → SyncProvider → ProjectProvider → ModeProvider
-                                                  ↳ <CheckInSyncManager />  (headless, mounted once)
+EnvironmentProvider → AuthProvider → SyncProvider → ProjectProvider → ModeProvider → PrinterProvider
+                                                                    ↳ <CheckInSyncManager />  (headless, mounted once)
 ```
 
 `setupDatabase()` from [constants/Database.js](constants/Database.js) runs once on root mount. `AuthProvider` and `ProjectProvider` each block rendering with a spinner while `EnvironmentProvider` is still loading, so the API base URL is always resolved before any request goes out.
@@ -58,7 +58,7 @@ EnvironmentProvider → AuthProvider → SyncProvider → ProjectProvider → Mo
 
 - [app/index.js](app/index.js) — redirect: no user → `/login`, else `/scan`
 - [app/login.js](app/login.js) — auto-skips to `/bluetooth-setup` if a session row exists (no token revalidation); otherwise `POST /lpr/login` → `saveSession()` → `syncProjectsWithApi()`
-- [app/bluetooth-setup.js](app/bluetooth-setup.js) — required after login. Auto-reconnects to `saved_printer`; on failure deletes the setting and rescans. Requests `BLUETOOTH_SCAN` / `BLUETOOTH_CONNECT` / `ACCESS_FINE_LOCATION` via `react-native-permissions`
+- [app/bluetooth-setup.js](app/bluetooth-setup.js) — the printer step after login; see **Printer connection** below. Requests `BLUETOOTH_SCAN` / `BLUETOOTH_CONNECT` / `ACCESS_FINE_LOCATION` via `react-native-permissions`
 - [app/(tabs)/_layout.js](app/(tabs)/_layout.js) — owns the **registers sync loop**; the Scan tab's `tabPress` is intercepted (`e.preventDefault()`) to launch the camera and pass `imageUri` as a route param
 - [app/(tabs)/main.js](app/(tabs)/main.js) — local check-in history, plus a server-side plate search modal that can reprint
 - [app/(tabs)/scan.js](app/(tabs)/scan.js) — OCR → manual correction → register lookup → save/print (mode two) or hand off to passenger_count (mode one)
@@ -70,15 +70,17 @@ EnvironmentProvider → AuthProvider → SyncProvider → ProjectProvider → Mo
 `getCurrentProject()` runs `SELECT * FROM projects WHERE datetime('now','localtime') BETWEEN start_time AND end_time LIMIT 1`. There is no project picker. Consequences worth remembering when debugging "nothing works":
 
 - Outside every project's time window, `activeProject` is `null`, **both sync loops go idle**, and tapping Scan alerts `ไม่พบกิจกรรม`.
-- `saveProjects()` does `DELETE FROM projects` then re-inserts, so a `/lpr/projects` response that omits a project silently removes it.
+- `saveProjects()` does `DELETE FROM projects` then re-inserts, so a `/lpr/projects` response that omits a project removes it. It **refuses to touch the table when handed an empty list** — an empty `result` used to wipe every activity and report success, which takes the checkpoint offline instantly. Stale rows are harmless because of the time-window filter; losing them is not. It returns `{saved, replaced}` so callers can report what actually happened, and `settings.js` distinguishes "server sent nothing", "unexpected shape", "saved but no activity is in its window yet" (naming the next one via `getNextUpcomingProject()`) and real success.
 - `getCurrentProject()` also decodes storage-level fields into JS types: `bus_types` JSON string → array, and the three flag columns → booleans. Read project flags through this function, not via raw SQL.
 
 ### Two independent sync loops
 
 Both are **self-scheduling `BackgroundTimer.setTimeout` chains** (each run schedules the next in its `finally`), not `setInterval`. Both guard against overlap with a lock plus a `currentSyncSessionId` ref: the effect stamps a new session id on every restart, and a run whose id no longer matches aborts — including mid-loop. Preserve that pattern; a plain interval will double-fire when `activeProject` changes.
 
-1. **Registers (master plate data) — pull.** [app/(tabs)/_layout.js](app/(tabs)/_layout.js). 3 s initial delay, then every 30 s: `GET /lpr/registers?last_update=X&last_id=Y&project_id=Z` → `saveRegisters()`. Uses a module-level `globalSyncLock` (survives re-renders); the lock-skip path deliberately does *not* reschedule, leaving that to the in-flight run. A `401` here is the app's only session-expiry path: it clears the session, deletes `saved_printer`, and redirects to `/login`.
+1. **Registers (master plate data) — pull.** [app/(tabs)/_layout.js](app/(tabs)/_layout.js). 3 s initial delay, then every 30 s: `GET /lpr/registers?last_update=X&last_id=Y&project_id=Z` → `saveRegisters()`. Uses a module-level `globalSyncLock` (survives re-renders); the lock-skip path deliberately does *not* reschedule, leaving that to the in-flight run. A `401` here is one of two session-expiry paths: it clears the session and redirects to `/login`, leaving `saved_printer` alone.
 2. **Check-ins — push.** [components/CheckInSyncManager.js](components/CheckInSyncManager.js). 5 s initial delay, then every 10 s, with a 30 s per-request timeout. Selects `sync_status IN (0, 3, 4)` in batches of 50, **unattempted rows (`sync_status = 0`) first** then oldest-first — without that ordering a batch of permanently-rejected old rows would fill every cycle and new registrations would never upload. For each row it resizes the photo to 400 px wide at quality 0.7 (`expo-image-manipulator`), POSTs `/lpr/checkins` as **`multipart/form-data`** with the image attached as a `photo_file` part — not base64, not JSON — and deletes the resized temp file afterwards. A `duplicate` / `already exists` error from the server still marks the row synced (intentional — the server already has it). A `401`/`403` aborts the batch, keeps the row retryable, and forces re-login the same way the registers loop does.
+
+Neither loop notifies the UI. [app/(tabs)/main.js](app/(tabs)/main.js) re-runs `loadHistory` on a 5 s interval **while focused only** (plain `setInterval`, not `BackgroundTimer` — refreshing a screen nobody is looking at is pointless) and offers pull-to-refresh; the list is always rendered with `ListEmptyComponent` so the gesture works when empty too. `loadHistory` keeps the previous array reference when nothing changed, compared on `id`/`sync_status`/`printed`/`error_msg`, so a quiet tick causes no re-render. Settings refreshes its counters via `useFocusEffect`. The proper fix — having the sync manager signal the screens — is blocked by the double `SyncProvider` above.
 
 Every field in the upload payload comes from the `check_ins` row itself — never recomputed from live state at upload time. That matters because a row can be uploaded hours after it was created, under a different active project. Keep that invariant when adding fields.
 
@@ -129,6 +131,19 @@ Every query that scopes by mode goes through **`getScopeField()`** in [constants
 The mode also keys the `<Tabs>` element (`key={isModeOne ? ... }`), so toggling it remounts the whole tab navigator.
 
 `passenger` is a pipe-delimited string, `adults|children|monks|novices` (default `'0|0|0|0'`), written by `passenger_count.js` and re-parsed by each receipt's `formatPassengerInfo`. Per-project flags `not_show_child_qty` / `not_show_novice_qty` hide counters, and `show_slip_section_2` (default **on**, hidden only when the API explicitly sends `false`) gates the second slip section.
+
+### Printer connection
+
+Login goes `login → bluetooth-setup → main` and **the printer screen is never meant to be interacted with**. It connects the saved printer, or — with none saved, or when the saved one is unreachable — scans and takes the **first device**, preferring an already-paired one, then saves it. Picking the first entry is what operators did manually every single time, so the list was a step to tap through, not a choice.
+
+- Device lists arrive by event, so they cannot be read straight after `scanDevices()`. `pairedDevicesRef` / `foundDevicesRef` shadow the state and `waitForFirstDevice()` polls them for up to 8 s; the found ref is cleared on each scan so a device from a previous scan cannot be picked.
+- Connecting is retried twice — a printer that has just been powered on often refuses the first attempt.
+- It **always** ends on `router.replace('/main')`. Failing to connect must not block entry: recording check-ins matters more than printing.
+- A centered dialog names the current step, and is held for `MIN_CONNECTING_DIALOG_MS` (3 s) ending on the outcome, because a saved printer reconnects too fast to read otherwise.
+
+`saved_printer` is **never deleted automatically**. It used to be cleared on logout, on a `401` from either sync loop, and on an environment switch; a printer is hardware bound to the device, not to the user or the environment, and wiping it defeated auto-connect. `deleteSetting()` is consequently unused anywhere.
+
+[contexts/PrinterContext.js](contexts/PrinterContext.js) holds `isConnected` / `printerName` / `hasSavedPrinter` and listens for `EVENT_CONNECTION_LOST` globally, so a printer leaving range mid-shift is noticed rather than only while the setup screen is open. It is mounted **once** at root — do not repeat the `SyncProvider` mistake. When not connected, `main.js` shows a persistent banner that opens `bluetooth-setup?manual=1`; that flag makes the screen show the picker instead of auto-connecting, and without it the picker would now be unreachable.
 
 ### Receipt printing (Bluetooth ESC/POS)
 
@@ -213,13 +228,11 @@ Several files look live but aren't — check before editing:
 - **Root [index.js](index.js)** imports `./app-default`, which does not exist. It's inert because `package.json` sets `main: expo-router/entry`.
 - `components/.scan.js.swp`, `components/Untitled-1.ipynb`, and `eas-build-error-log.text` are stray artifacts checked into the repo.
 - `contexts/AuthContext.js` calls `saveSession(user.id, user.username)` in a `useEffect`, but `saveSession(loginData)` takes a single object — that call rejects unhandled. The session is actually saved by `login.js` calling `saveSession(result.data)` correctly. Fix the `AuthContext` call rather than changing `saveSession`'s signature.
-- A row stuck in backoff is only visible as a number in the Settings "พบปัญหา" counter — there is no screen listing *which* rows are failing or why, and no way to force an immediate retry. `next_retry_at` would need to be cleared by hand (or by a new Settings action) to flush them early.
+- A row stuck in backoff is only visible as a number in the Settings "พบปัญหา" counter — there is no screen listing *which* rows are failing, only the reason on each card in the history list. The one way to force an immediate retry is saving a machine code, which calls `backfillCheckInCompId()`; anything else needs `next_retry_at` cleared by hand.
 - `photo_path` points into the ImagePicker cache, which Android may evict, and the photo is never copied anywhere durable. A long-queued row can still lose its image; the upload now logs `PHOTO_MISSING` and proceeds without it rather than failing silently, but the photo is gone. Preventing it means copying the capture into `documentDirectory` at scan time and taking on the cleanup that implies.
 - `CheckInSyncManager` reads `useAuth()` for `user?.id` on its error logs, but it is mounted above the login screen, so early-startup logs can carry a null user.
 - **`AuthContext.logout()` is never called.** The Settings logout only does `clearSession()` on the database, so the context keeps the previous `user` until the app restarts — later error logs carry the stale id, and logging in as a different account hits the broken `saveSession(user.id, user.username)` call above.
-- The Settings screen has **no `useFocusEffect`**: the counters load once at mount and on a mode change, so they are stale after scanning. Tapping a dashboard card calls `refreshCounts()`, but nothing tells the user that.
 - Logging out does not warn when check-ins are still queued, even though the count is displayed directly above the button. Nothing is lost (the rows keep `sync_status` 0/3) but they stay stuck until someone logs back in. `getTotalUnsyncedCheckInsCount()` exists for exactly this warning — the environment switch already uses it.
-- `handleSaveCode` does not validate the machine code, so it can be saved empty, and `comp_id` then goes into an `INTEGER NOT NULL` column as `""`.
 - The master approval code `8989` is hardcoded at four separate call sites in `settings.js`.
 - `handleClearRegisters` does not refresh the counters, so "ใบ C7" keeps showing the pre-delete number.
 - `exportStartDate` / `exportEndDate` are dead state — the export modal never renders date inputs and `exportDatabaseFile()` takes no range. `exportDatabaseToJSON(start, end)` in [utils/exportUtils.js](utils/exportUtils.js) would accept one but is not imported.
@@ -227,3 +240,9 @@ Several files look live but aren't — check before editing:
 - The registers pull makes **one request per 30 s cycle with no drain loop**. If the server paginates, a first sync of N pages takes N × 30 s before the device holds complete data, and during that window `findRegisterByPlate()` reports "ไม่พบซีเจ็ด" for vehicles that are in fact registered. If it does not paginate, the initial pull arrives as one huge payload that `saveRegisters()` walks one `runAsync` at a time.
 - Only the **currently active** project is pulled (`project_id=${activeProject.project_id}`), and `activeProject` is time-windowed, so nothing is pre-fetched for a project whose window has not opened. It starts from zero at the exact moment operators begin scanning.
 - The registers URL is built by string interpolation, so `last_update` (a timestamp that normally contains a space) is not percent-encoded. Pass it through axios `params` instead.
+- `clearScanState()` in `scan.js` deliberately leaves `setVehicleType(null)` commented out, so the vehicle type carries over to the next scan. When a C7 is found it is overwritten, but when one is not — and mode two allows saving anyway — the previous vehicle's type is pre-filled and easy to save by accident.
+- Bangkok is stored inconsistently: `registers` and the mode-one path use `กทม.`, but mode two saves `province` raw from `scan.js`, so those check-ins carry `กรุงเทพมหานคร` and do not match either.
+- Mode one hard-disables the save button unless `isVerified` (a C7 was found), so a vehicle missing from `registers` cannot be checked in at all. Read that together with the registers-pull gaps above: during an initial sync, operators may be unable to register anyone.
+- When a C7 is found, `executeSave` overwrites `bus_type` with the register's value as its last step, so the vehicle-type dropdown is editable but ignored. `bus_type` also holds two different value spaces — the label via `convertBusTypeToLabel()` with no C7, the server's own value with one.
+- The duplicate check reads the local `registers` table, which is up to 30 s stale, and each device generates its own `uid`, so two lanes scanning the same vehicle inside that window both succeed and the server cannot dedupe them.
+- Auto-picking the first Bluetooth device assumes the printer sorts first among paired devices. A tablet paired with anything else could connect to the wrong device; filter by name or class if that shows up.
