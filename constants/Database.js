@@ -1406,6 +1406,80 @@ export const getRegistersCountForId = async (currentId) => {
 };
 
 /**
+ * 🚀 คอลัมน์วันที่ที่บอกว่า "ใบ C7 ใบนี้ถูกสแกนไปแล้ว" ของกิจกรรมที่ทำอยู่
+ *
+ * ต้องตรงกับเงื่อนไขกันสแกนซ้ำใน scan.js (checkDuplicate) เป๊ะๆ ไม่งั้นรายการ
+ * "รถที่เหลือ" จะขัดกับหน้างาน — ขึ้นว่ายังไม่สแกน แต่พอเดินไปสแกนจริงแอพเตือนว่า
+ * ลงทะเบียนไปแล้ว ซึ่งทำให้เจ้าหน้าที่เลิกเชื่อรายการนี้ทั้งหน้า
+ * scan.js ใช้การเช็ค truthy ดังนั้นสตริงว่างต้องนับเป็น "ยังไม่สแกน" เหมือนกัน
+ * @param {number|null|undefined} seqNo - activeProject.seq_no
+ * @returns {'activity1_date'|'activity2_date'|'checkin_date'}
+ */
+const getScanDateField = (seqNo) => {
+  if (seqNo == 1) return 'activity1_date';
+  if (seqNo == 2) return 'activity2_date';
+  return 'checkin_date';
+};
+
+/**
+ * 🚀 ใบ C7 ที่ยังไม่ถูกสแกนในกิจกรรมที่ทำอยู่ — ข้อมูลของเมนู "รถที่เหลือ"
+ *
+ * ข้อมูลชุดนี้อยู่ในเครื่องอยู่แล้วและถูก sync ใหม่ทุก 30 วิ แต่เดิม registers ถูกใช้
+ * แค่ตอบว่า "ทะเบียนที่เห็นตรงหน้าลงทะเบียนไว้ไหม" (findRegisterByPlate) กับตัวเลข
+ * นับรวมในหน้านี้ ไม่เคยถูกใช้ตอบว่า "เหลือคันไหนที่ยังไม่เจอ" ทั้งที่เป็นข้อมูลชุดเดียวกัน
+ *
+ * ข้อดีของการอิง registers แทน check_ins: checkin_date/activity*_date มาจาก server
+ * จึงเห็นการสแกนของ "ทุกเครื่อง" ไม่ใช่เฉพาะเครื่องตัวเอง แต่ก็แปลว่ารายการจะค้าง
+ * เมื่อเครื่องออฟไลน์ — หน้า UI ต้องบอกเวลา sync ล่าสุดกำกับไว้เสมอ
+ *
+ * ใช้วิธีจำกัดขอบเขตชุดเดียวกับ getRegistersCountForId เพื่อให้ยอด "รถที่เหลือ"
+ * กับตัวเลข "ใบ C7" บนหน้าเดียวกันอ้างฐานเดียวกันเสมอ
+ *
+ * @param {number|null} currentId - ค่าจาก getScopeId()
+ * @param {number|null|undefined} seqNo - activeProject.seq_no
+ * @returns {Promise<Array>} เรียงตามจุดออกรถ เพราะรถที่มาจากสถานีเดียวกันมักจอดใกล้กัน
+ */
+export const getUnscannedRegisters = async (currentId, seqNo) => {
+  if (!currentId && currentId !== 0) return [];
+  const db = await getDb();
+  const dateField = getScanDateField(seqNo);
+  // ชื่อคอลัมน์มาจาก getScanDateField เท่านั้น ไม่ได้รับมาจากภายนอก จึงต่อสตริงได้ปลอดภัย
+  const notScanned = `(${dateField} IS NULL OR ${dateField} = '')`;
+  // เมื่อ backend ส่งเบอร์โทรมาแล้ว (ดูแผน 1b) ให้เพิ่มคอลัมน์ใหม่ตรงนี้จุดเดียว
+  const columns = `register_id, short_code, plate_no, plate_province, bus_type,
+                   station_name, station_province, note, alert_message`;
+  try {
+    const field = await getScopeField();
+    if (field === 'project_id') {
+      return await db.getAllAsync(
+        `SELECT ${columns} FROM registers
+          WHERE project_id = ? AND deleted_at IS NULL AND ${notScanned}
+          ORDER BY station_name, plate_no;`,
+        [currentId]
+      );
+    }
+
+    // โหมดธรรมยาตรา: registers เก็บแค่ project_id ต้องแปลง activity_id เป็นชุด project_id ก่อน
+    const projectRows = await db.getAllAsync(
+      'SELECT project_id FROM projects WHERE activity_id = ?',
+      [currentId]
+    );
+    const projectIds = projectRows.map(r => r.project_id);
+    if (projectIds.length === 0) return [];
+    const placeholders = projectIds.map(() => '?').join(',');
+    return await db.getAllAsync(
+      `SELECT ${columns} FROM registers
+        WHERE project_id IN (${placeholders}) AND deleted_at IS NULL AND ${notScanned}
+        ORDER BY station_name, plate_no;`,
+      projectIds
+    );
+  } catch (error) {
+    console.error('Error getting unscanned registers:', error);
+    return [];
+  }
+};
+
+/**
  * ดึงจำนวน check_ins ที่ยังไม่ Sync (sync_status IN (0, 3)) โดยเลือก field ตามค่า appMode
  * @param {number} id (project_id หรือ activity_id ขึ้นกับโหมด)
  */

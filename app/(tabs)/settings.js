@@ -1,22 +1,44 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, SectionList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Linking, Modal, SectionList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons'; // Import ไอคอน
 import axios from 'axios';
 import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
-import { backfillCheckInCompId, clearProjectsTable, clearRegistersTable, clearSession, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { backfillCheckInCompId, clearProjectsTable, clearRegistersTable, clearSession, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnscannedRegisters, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
 import { exportDatabaseFile } from '../../utils/exportUtils';
 
 
+// ✅ registers ยังไม่มีคอลัมน์เบอร์โทร (ต้องให้ backend ส่งมาก่อน — ดูแผน 1b)
+//    ระหว่างนี้ดึงเบอร์จาก note / alert_message ที่ admin กรอกไว้ ซึ่ง sync ลงเครื่อง
+//    อยู่แล้วทุกรอบแต่ไม่เคยถูกแสดงที่ไหนเลยในแอพ
+//    พอ backend ส่งฟิลด์จริงมา ให้ใส่ reg.driver_phone เป็นตัวแรกของ candidates
+const extractPhone = (text) => {
+  if (!text) return null;
+  // เบอร์ไทย: ขึ้นต้น 0 หรือ +66 คั่นด้วย - เว้นวรรค หรือ . ได้
+  const match = String(text).match(/(?:\+66|0)[\d\-\s.]{7,12}\d/);
+  if (!match) return null;
+  const cleaned = match[0].replace(/[^\d+]/g, '');
+  return cleaned.length >= 9 ? cleaned : null;
+};
+
+const getContactInfo = (reg) => {
+  const candidates = [reg?.driver_phone, reg?.note, reg?.alert_message];
+  const phone = candidates.map(extractPhone).find(Boolean) || null;
+  // เก็บข้อความเต็มไว้ด้วย เพราะ note อาจมีข้อมูลอื่นที่เจ้าหน้าที่ต้องเห็น
+  const raw = candidates.find(v => v && String(v).trim());
+  return { phone, raw: raw ? String(raw).trim() : null };
+};
+
 const sections = [
   {
     title: '',
     data: [
+      { id: 'remainingVehicles', title: 'รถที่เหลือ', icon: 'bus' },
       { id: 'refresh', title: 'อัพเดทข้อมูลกิจกรรม', icon: 'refresh' },
       { id: 'export', title: 'Export Database', icon: 'share-social' },
       { id: 'machineCode', title: 'รหัสเครื่อง', icon: 'code' },
@@ -72,6 +94,12 @@ export default function SettingsScreen() {
 
   // Version Info States
   const [isVersionModalVisible, setVersionModalVisible] = useState(false);
+
+  // Remaining Vehicles ("รถที่เหลือ") States
+  const [isRemainingModalVisible, setRemainingModalVisible] = useState(false);
+  const [remainingList, setRemainingList] = useState([]);
+  const [remainingCount, setRemainingCount] = useState(0);
+  const [remainingLoading, setRemainingLoading] = useState(false);
   const appVersion = Constants.expoConfig?.version || '1.0.0';
   const runtimeVersion = Constants.expoConfig?.runtimeVersion || '-';
   const updateId = Updates.updateId || null;
@@ -165,10 +193,13 @@ export default function SettingsScreen() {
   }, []); // [] หมายถึงให้ทำงานแค่ครั้งเดียว
 
   // Refresh counts separately so we can call when mode changes
-  const refreshCounts = async (idForFilter = currentId) => {
+  const refreshCounts = async (idForFilter = currentId, project = currentProject) => {
     try {
       const regCount = await getRegistersCountForId(idForFilter);
       setRegistersCount(regCount);
+      // ✅ ยอด "รถที่เหลือ" ขึ้นบนเมนูเลย เจ้าหน้าที่จะได้เห็นโดยไม่ต้องกดเข้าไปดู
+      const remaining = await getUnscannedRegisters(idForFilter, project?.seq_no);
+      setRemainingCount(remaining.length);
       const chkCount = await getCheckInsCountForId(idForFilter);
       setCheckInsCount(chkCount);
       const unsync = await getUnsyncedCheckInsCountForId(idForFilter);
@@ -214,7 +245,7 @@ export default function SettingsScreen() {
           const idForFilter = await getScopeId(projectData);
           if (cancelled) return;
           setCurrentId(idForFilter);
-          await refreshCounts(idForFilter);
+          await refreshCounts(idForFilter, projectData);
         } catch (e) {
           console.error('Error refreshing settings on focus', e);
         }
@@ -232,7 +263,7 @@ export default function SettingsScreen() {
         setCurrentProject(projectData); // Update project data
         const idForFilter = await getScopeId(projectData);
         setCurrentId(idForFilter);
-        await refreshCounts(idForFilter);
+        await refreshCounts(idForFilter, projectData);
       } catch (e) {
         console.error('Error updating counts after mode change', e);
       }
@@ -329,6 +360,23 @@ export default function SettingsScreen() {
       { cancelable: false } // ป้องกันไม่ให้ผู้ใช้ปิด Alert โดยการแตะด้านนอก
     );
   };
+
+  // จัดกลุ่มตามจุดออกรถ — รถที่มาจากสถานีเดียวกันมักมาเป็นขบวนและจอดใกล้กัน
+  // ถ้าตามหาคันที่หายอยู่ ให้ดูว่าคันอื่นจากสถานีเดียวกันถูกสแกนแถวไหน
+  //
+  // ⚠️ ต้องอยู่ "เหนือ" early return ข้างล่างเสมอ — hook ที่อยู่ใต้ if (loading) จะถูกเรียก
+  //    เฉพาะตอน loading = false ทำให้จำนวน hook ไม่เท่ากันระหว่าง render แล้ว React จะ throw
+  //    "rendered more hooks than during the previous render" ทันทีที่โหลดข้อมูลเสร็จ
+  //    hook อื่นทั้งหมดในไฟล์นี้ก็อยู่เหนือ early return ด้วยเหตุผลเดียวกัน
+  const remainingSections = useMemo(() => {
+    const groups = new Map();
+    for (const reg of remainingList) {
+      const key = (reg.station_name || '').trim() || 'ไม่ระบุจุดออกรถ';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(reg);
+    }
+    return Array.from(groups, ([title, data]) => ({ title, data }));
+  }, [remainingList]);
 
   if (loading) {
     return (
@@ -518,6 +566,54 @@ export default function SettingsScreen() {
     </Modal>
   );
 
+  // ✅ โหลดรายการรถที่ยังไม่ถูกสแกน อ่านจาก registers ในเครื่องล้วนๆ ไม่ยิง API
+  //    จึงใช้ได้ตอนออฟไลน์ (ข้อมูลเก่าสุดเท่ารอบ sync ล่าสุด)
+  const loadRemainingVehicles = async () => {
+    setRemainingLoading(true);
+    try {
+      const projectData = await getCurrentProject();
+      setCurrentProject(projectData);
+      const idForFilter = await getScopeId(projectData);
+      const rows = await getUnscannedRegisters(idForFilter, projectData?.seq_no);
+      setRemainingList(rows);
+      setRemainingCount(rows.length);
+    } catch (e) {
+      console.error('Failed to load remaining vehicles', e);
+      setRemainingList([]);
+      try {
+        await insertErrorLog({
+          comp_id: null,
+          error_type: 'DATABASE_ERROR',
+          error_message: e.message || 'Failed to load remaining vehicles',
+          error_code: e.code || 'REMAINING_VEHICLES_ERROR',
+          page_name: 'settings.js',
+          action_name: 'loadRemainingVehicles',
+          user_id: user?.id || null
+        });
+      } catch (logError) {
+        console.error('Failed to log error:', logError);
+      }
+    } finally {
+      setRemainingLoading(false);
+    }
+  };
+
+  // ✅ แท็บเล็ตอาจไม่มีซิม โทรออกไม่ได้ — ต้องโชว์เบอร์ให้อ่านได้เสมอ
+  //    ไม่ใช่ให้ปุ่มโทรเป็นทางเดียวที่จะเห็นเบอร์
+  const handleCallDriver = async (phone) => {
+    const url = `tel:${phone}`;
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        Alert.alert('โทรออกจากเครื่องนี้ไม่ได้', `อาจไม่มีซิมในเครื่อง\n\nเบอร์: ${phone}`);
+        return;
+      }
+      await Linking.openURL(url);
+    } catch (e) {
+      Alert.alert('โทรออกจากเครื่องนี้ไม่ได้', `เบอร์: ${phone}`);
+    }
+  };
+
   // --- Render Functions สำหรับ SectionList ---
   const renderItem = ({ item }) => (
     <TouchableOpacity
@@ -530,7 +626,10 @@ export default function SettingsScreen() {
       }}
       // --- เปลี่ยน onPress ให้เปิด Modal ---
       onPress={() => {
-        if (item.id === 'machineCode') {
+        if (item.id === 'remainingVehicles') {
+          setRemainingModalVisible(true);
+          loadRemainingVehicles();
+        } else if (item.id === 'machineCode') {
           setMachineCodeInput(machineCode || '');
           setMasterCodeInput('');
           setModalVisible(true);
@@ -559,6 +658,11 @@ export default function SettingsScreen() {
       <Ionicons name={item.icon} size={20} color="#555" style={styles.itemIcon} />
       <Text style={styles.itemText}>{item.title}</Text>
 
+      {item.id === 'remainingVehicles' && (
+        <Text style={[styles.itemValueText, remainingCount > 0 && styles.remainingBadgeText]}>
+          {remainingCount} คัน
+        </Text>
+      )}
       {item.id === 'machineCode' && (
         <Text style={styles.itemValueText}>
           {machineCode || 'Not Set'}
@@ -893,6 +997,130 @@ export default function SettingsScreen() {
   );
 
   // Modal สำหรับแสดง Version Info
+  const renderRemainingVehicleCard = ({ item }) => {
+    const { phone, raw } = getContactInfo(item);
+    return (
+      <View style={styles.remainingCard}>
+        <View style={styles.remainingCardTop}>
+          <Text style={styles.remainingPlate}>
+            {item.plate_no} {item.plate_province || ''}
+          </Text>
+          {!!item.short_code && (
+            <Text style={styles.remainingCode}>{item.short_code}</Text>
+          )}
+        </View>
+
+        <View style={styles.remainingRow}>
+          <Text style={styles.remainingLabel}>ประเภทรถ:</Text>
+          <Text style={styles.remainingValue}>{item.bus_type || '--'}</Text>
+        </View>
+
+        <View style={styles.remainingRow}>
+          <Text style={styles.remainingLabel}>จุดออกรถ:</Text>
+          <Text style={styles.remainingValue}>
+            {item.station_name || '--'}
+            {item.station_province ? ` (${item.station_province})` : ''}
+          </Text>
+        </View>
+
+        <View style={styles.remainingRow}>
+          <Text style={styles.remainingLabel}>เบอร์คนขับ:</Text>
+          {phone ? (
+            <TouchableOpacity onPress={() => handleCallDriver(phone)} style={styles.callButton}>
+              <Ionicons name="call" size={14} color="#fff" />
+              {/* selectable เผื่อเครื่องโทรออกไม่ได้ จะได้กดค้างคัดลอกไปโทรจากมือถือ */}
+              <Text style={styles.callButtonText} selectable>{phone}</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={[styles.remainingValue, styles.remainingMuted]}>
+              {raw || 'ไม่มีข้อมูลติดต่อ'}
+            </Text>
+          )}
+        </View>
+
+        {/* ถ้าข้อความต้นทางมีตัวอักษรนอกเหนือจากตัวเบอร์ (เช่นชื่อคนติดต่อ) ให้เห็นด้วย
+            เทียบเฉพาะตัวเลขไม่ได้ เพราะ "โทร 081-xxx หัวหน้าสมชาย" จะได้ตัวเลขชุดเดียวกัน
+            แล้วชื่อจะหายไปทั้งที่เป็นข้อมูลที่ต้องใช้ */}
+        {!!phone && !!raw && /[^\d\s\-+.()]/.test(raw) && (
+          <Text style={styles.remainingNote} numberOfLines={2}>{raw}</Text>
+        )}
+      </View>
+    );
+  };
+
+  const renderRemainingModal = () => (
+    <Modal
+      animationType="slide"
+      transparent={true}
+      visible={isRemainingModalVisible}
+      onRequestClose={() => setRemainingModalVisible(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.remainingModalContainer}>
+          <Text style={styles.modalTitle}>🚌 รถที่เหลือ</Text>
+
+          <Text style={styles.remainingSubtitle}>
+            {currentProject?.name
+              ? `${currentProject.name} · ยังไม่สแกน ${remainingCount} คัน`
+              : `ยังไม่สแกน ${remainingCount} คัน`}
+          </Text>
+          {/* ✅ ข้อมูลมาจาก registers ที่ sync มา ไม่ใช่ check_ins ของเครื่องนี้
+              จึงเห็นการสแกนของเครื่องอื่นด้วย แต่ก็ค้างได้ถ้าเครื่องออฟไลน์ */}
+          <Text style={styles.remainingHint}>
+            อัปเดตตามรอบ sync ใบ C7 (ทุก 30 วินาที) · รวมการสแกนจากทุกเครื่อง
+          </Text>
+
+          {remainingLoading ? (
+            <View style={styles.remainingEmpty}>
+              <ActivityIndicator size="large" color="#3498db" />
+            </View>
+          ) : (
+            <SectionList
+              sections={remainingSections}
+              keyExtractor={(item) => String(item.register_id)}
+              renderItem={renderRemainingVehicleCard}
+              renderSectionHeader={({ section: { title, data } }) => (
+                <Text style={styles.remainingSectionHeader}>
+                  {title} ({data.length})
+                </Text>
+              )}
+              stickySectionHeadersEnabled={false}
+              showsVerticalScrollIndicator={true}
+              style={styles.remainingListArea}
+              contentContainerStyle={remainingSections.length === 0 && styles.remainingEmpty}
+              ListEmptyComponent={
+                <View style={styles.remainingEmptyInner}>
+                  <Ionicons name="checkmark-circle" size={48} color="#27ae60" />
+                  <Text style={styles.remainingEmptyText}>
+                    {currentProject
+                      ? 'สแกนครบทุกคันแล้ว'
+                      : 'ไม่พบกิจกรรมที่กำลังดำเนินอยู่'}
+                  </Text>
+                </View>
+              }
+            />
+          )}
+
+          <View style={styles.modalButtonContainer}>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.cancelButton]}
+              onPress={() => setRemainingModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>ปิด</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.saveButton]}
+              onPress={loadRemainingVehicles}
+              disabled={remainingLoading}
+            >
+              <Text style={styles.modalButtonText}>รีเฟรช</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
   const renderVersionModal = () => (
     <Modal
       animationType="fade"
@@ -956,6 +1184,7 @@ export default function SettingsScreen() {
       {renderExportModal()}
       {renderVersionModal()}
       {renderClearRegistersModal()}
+      {renderRemainingModal()}
       <View style={styles.profileHeader}>
 
         <View style={styles.profileContent}>
@@ -1184,6 +1413,135 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#888', // สีเทา
     marginRight: 8, // ระยะห่างจากลูกศร
+  },
+  remainingBadgeText: {
+    color: '#e67e22', // ส้ม = ยังมีรถค้าง ให้สะดุดตาโดยไม่ดูเป็น error
+    fontWeight: 'bold',
+  },
+  // --- Modal "รถที่เหลือ" ---
+  // สูงกว่า modalContainer ปกติเพราะเป็นรายการที่ต้องเลื่อนอ่าน ไม่ใช่กล่องยืนยัน
+  remainingModalContainer: {
+    width: '92%',
+    height: '85%',
+    backgroundColor: 'white',
+    borderRadius: 15,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  remainingSubtitle: {
+    fontSize: 15,
+    color: '#2c3e50',
+    textAlign: 'center',
+    marginBottom: 2,
+  },
+  remainingHint: {
+    fontSize: 11,
+    color: '#95a5a6',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  remainingListArea: {
+    flex: 1,
+  },
+  remainingSectionHeader: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#fff',
+    backgroundColor: '#7f8c8d',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    marginTop: 10,
+    marginBottom: 6,
+    overflow: 'hidden',
+  },
+  remainingCard: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#e67e22',
+  },
+  remainingCardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  remainingPlate: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    flex: 1,
+  },
+  remainingCode: {
+    fontSize: 12,
+    color: '#fff',
+    backgroundColor: '#3498db',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  remainingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  remainingLabel: {
+    fontSize: 13,
+    color: '#7f8c8d',
+    width: 82,
+  },
+  remainingValue: {
+    fontSize: 14,
+    color: '#2c3e50',
+    flex: 1,
+  },
+  remainingMuted: {
+    color: '#b2bec3',
+    fontStyle: 'italic',
+  },
+  remainingNote: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    marginTop: 6,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: '#e9ecef',
+  },
+  callButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#27ae60',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 6,
+  },
+  callButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: 'bold',
+    marginLeft: 6,
+  },
+  remainingEmpty: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  remainingEmptyInner: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  remainingEmptyText: {
+    fontSize: 16,
+    color: '#7f8c8d',
+    marginTop: 12,
   },
   modalOverlay: {
     flex: 1,
