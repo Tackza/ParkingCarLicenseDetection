@@ -9,6 +9,7 @@ import {
   Image,
   Keyboard, // เพิ่มเข้ามา
   Modal,
+  RefreshControl,
   StyleSheet,
   Text,
   TextInput,
@@ -37,6 +38,17 @@ import { useSync } from '../../contexts/SyncContext';
 const windowWidth = Dimensions.get('window').width;
 const windowHeight = Dimensions.get('window').height;
 
+// ✅ ระยะรีเฟรชรายการระหว่างที่เปิดหน้านี้อยู่
+//    CheckInSyncManager เขียน sync_status ลง SQLite ทุก 10 วิ แต่หน้านี้อ่านใหม่เฉพาะตอน focus
+//    เดิมจึงต้องสลับหน้าไปมาถึงจะเห็นสถานะเปลี่ยน
+const HISTORY_REFRESH_INTERVAL = 5000;
+
+// เทียบเฉพาะฟิลด์ที่เปลี่ยนได้จากการ sync เพื่อไม่ต้อง setState ทุกรอบ
+const historySignature = (rows) =>
+  Array.isArray(rows)
+    ? rows.map(r => `${r.id}:${r.sync_status}:${r.printed}:${r.error_msg || ''}`).join('|')
+    : '';
+
 export default function HistoryScreen() {
   const [history, setHistory] = useState([]);
   const [modalVisible, setModalVisible] = useState(false);
@@ -58,6 +70,7 @@ export default function HistoryScreen() {
   const [isSearching, setIsSearching] = useState(false);
   const [printData, setPrintData] = useState(null);
   const [printLoading, setPrintLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchImageModalVisible, setSearchImageModalVisible] = useState(false);
   const [selectedSearchImage, setSelectedSearchImage] = useState(null);
   const receiptRef = useRef();
@@ -327,6 +340,44 @@ export default function HistoryScreen() {
     }
   }, [activeProject]);
 
+  // ✅ เก็บ ref ของ loadHistory และ searchQuery ล่าสุด
+  //    timer ด้านล่างถูกตั้งครั้งเดียวตอน focus จึงต้องเรียกผ่าน ref ไม่งั้นจะติด closure เก่า
+  //    (และถ้าใส่ searchQuery เป็น dependency ตรงๆ timer จะถูกตั้งใหม่ทุกครั้งที่พิมพ์)
+  const loadHistoryRef = useRef(null);
+  const searchQueryRef = useRef('');
+  useEffect(() => {
+    loadHistoryRef.current = loadHistory;
+    searchQueryRef.current = searchQuery;
+  });
+
+  // ✅ รีเฟรชอัตโนมัติเฉพาะตอนที่หน้านี้ถูกเปิดอยู่ แล้วหยุดทันทีที่ออกจากหน้า
+  //    ใช้ setInterval ธรรมดา ไม่ใช่ BackgroundTimer เพราะเป็นการรีเฟรช UI
+  //    ที่ไม่มีประโยชน์เลยเมื่อผู้ใช้มองไม่เห็นหน้าจอ
+  useFocusEffect(
+    useCallback(() => {
+      const timer = setInterval(() => {
+        loadHistoryRef.current?.(searchQueryRef.current || '');
+      }, HISTORY_REFRESH_INTERVAL);
+      return () => clearInterval(timer);
+    }, [])
+  );
+
+  // ✅ ดึงลงเพื่อรีเฟรชเอง สำหรับตอนที่ไม่อยากรอครบรอบ
+  const handlePullToRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      // อ่านกิจกรรมใหม่เฉพาะตอนที่ยังไม่มี (เช่นเพิ่งถึงเวลาเริ่ม)
+      // ถ้าเรียกทุกครั้ง refreshCurrentProject จะไปกระตุ้น useEffect([activeProject])
+      // ซึ่งล้างช่องค้นหาทิ้ง — ไม่ควรเกิดระหว่างผู้ใช้กำลังค้นหาอยู่บนหน้านี้
+      if (!activeProject) {
+        await refreshCurrentProject();
+      }
+      await loadHistoryRef.current?.(searchQueryRef.current || '');
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [activeProject, refreshCurrentProject]);
+
 
   // ✅ 2. สร้างฟังก์ชัน loadHistory ที่ขึ้นอยู่กับ activeProject
   // const loadHistory = useCallback(async () => {
@@ -355,9 +406,9 @@ export default function HistoryScreen() {
       // ใช้ getScopeId เพื่อให้ "ค่า" ตรงกับ "คอลัมน์" ที่ getScanHistory เลือกเสมอ
       // และเพื่อให้ถอยไป project_id เองเมื่อกิจกรรมนั้นไม่มี activity_id
       const id = await getScopeId(activeProject);
-      console.log(`Loading history for id: ${id} (mode: ${isModeOne ? 'project_id' : 'activity_id'}), Query: "${query}"`);
       const data = await getScanHistory(id, query);
-      setHistory(data);
+      // ✅ คงอ้างอิง array เดิมไว้ถ้าข้อมูลไม่เปลี่ยน เพื่อให้ FlatList ไม่ re-render ทุกรอบรีเฟรช
+      setHistory(prev => (historySignature(prev) === historySignature(data) ? prev : data));
     } catch (error) {
       console.error('Error loading history:', error);
 
@@ -425,28 +476,38 @@ export default function HistoryScreen() {
 
 
       <View style={styles.content}>
-        {history.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>
-              {!activeProject ? 'ไม่พบข้อมูลกิจกรรม' : (searchQuery.length > 0 ? 'ไม่พบข้อมูลที่ตรงกัน' : 'ไม่มีข้อมูล')}
-            </Text>
-          </View>
-        ) : (
-          <FlatList
-            data={history}
-            keyExtractor={(item) => item.id ? item.id.toString() : Math.random().toString()}
-            renderItem={({ item, index }) => (
-              <HistoryItem
-                item={item}
-                index={index}
-                numberPlate={numberPlate}
-                openImageModal={openImageModal}
-                onQuickSearch={handleQuickSearch}
-              />
-            )}
-            keyboardShouldPersistTaps="handled"
-          />
-        )}
+        {/* ✅ render FlatList เสมอ แล้วใช้ ListEmptyComponent แทนการสลับ View
+            เพื่อให้ "ดึงลงเพื่อรีเฟรช" ใช้ได้ตอนลิสต์ว่างด้วย ซึ่งเป็นตอนที่อยากรีเฟรชที่สุด */}
+        <FlatList
+          data={history}
+          keyExtractor={(item) => item.id ? item.id.toString() : Math.random().toString()}
+          renderItem={({ item, index }) => (
+            <HistoryItem
+              item={item}
+              index={index}
+              numberPlate={numberPlate}
+              openImageModal={openImageModal}
+              onQuickSearch={handleQuickSearch}
+            />
+          )}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ flexGrow: 1 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={handlePullToRefresh}
+              colors={['#3498db']}
+              tintColor="#3498db"
+            />
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>
+                {!activeProject ? 'ไม่พบข้อมูลกิจกรรม' : (searchQuery.length > 0 ? 'ไม่พบข้อมูลที่ตรงกัน' : 'ไม่มีข้อมูล')}
+              </Text>
+            </View>
+          }
+        />
       </View>
 
       {/* Modal สำหรับแสดงรูปภาพเต็มจอ */}

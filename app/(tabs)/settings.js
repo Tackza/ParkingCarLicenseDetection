@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, SectionList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons'; // Import ไอคอน
 import axios from 'axios';
 import Constants from 'expo-constants';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
 import { clearProjectsTable, clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useAuth } from '../../contexts/AuthContext';
@@ -199,6 +199,29 @@ export default function SettingsScreen() {
       }
     }
   };
+
+  // ✅ อ่านตัวเลขใหม่ทุกครั้งที่กลับเข้าหน้านี้
+  //    เดิมโหลดแค่ตอน mount กับตอนสลับโหมด ไปสแกนมาแล้วกลับเข้ามาจึงเห็นตัวเลขค้างของเก่า
+  //    ทั้งที่หน้านี้มีไว้ดูสถานะ sync โดยเฉพาะ
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        try {
+          const projectData = await getCurrentProject();
+          if (cancelled) return;
+          setCurrentProject(projectData);
+          const idForFilter = await getScopeId(projectData);
+          if (cancelled) return;
+          setCurrentId(idForFilter);
+          await refreshCounts(idForFilter);
+        } catch (e) {
+          console.error('Error refreshing settings on focus', e);
+        }
+      })();
+      return () => { cancelled = true; };
+    }, [])
+  );
 
   // Refresh when mode changes
   useEffect(() => {
