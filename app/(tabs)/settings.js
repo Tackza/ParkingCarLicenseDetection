@@ -6,7 +6,7 @@ import axios from 'axios';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
-import { clearProjectsTable, clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { clearProjectsTable, clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
@@ -119,18 +119,9 @@ export default function SettingsScreen() {
         // ดึง current project (ใช้เพื่อหาค่า project_id/activity_id)
         const projectData = await getCurrentProject();
         setCurrentProject(projectData); // Store project data for display
-        let idForFilter = null;
-        if (projectData) {
-          // default use project_id
-          idForFilter = projectData.project_id;
-          const appMode = await getSetting('appMode');
-
-          // app mode is false to dharmmakaya mode
-          // app mode is true to general mode
-          if (appMode == "false") {
-            idForFilter = projectData.activity_id;
-          }
-        }
+        // ใช้ getScopeId เพื่อให้ตรงกับคอลัมน์ที่ฟังก์ชันนับเลือกใช้ และถอยไป project_id
+        // เองเมื่อกิจกรรมนั้นไม่มี activity_id
+        const idForFilter = await getScopeId(projectData);
         setCurrentId(idForFilter);
 
         // ดึงจำนวน Registers (filtered) และ CheckIns (filtered)
@@ -216,15 +207,7 @@ export default function SettingsScreen() {
       try {
         const projectData = await getCurrentProject();
         setCurrentProject(projectData); // Update project data
-        let idForFilter = null;
-        if (projectData) {
-          idForFilter = projectData.project_id;
-          const appMode = await getSetting('appMode');
-          const isModeOneLocal = appMode === null ? true : appMode === 'true';
-          if (!isModeOneLocal) {
-            idForFilter = projectData.activity_id;
-          }
-        }
+        const idForFilter = await getScopeId(projectData);
         setCurrentId(idForFilter);
         await refreshCounts(idForFilter);
       } catch (e) {
@@ -393,9 +376,7 @@ export default function SettingsScreen() {
       // ✅ saveProjects ลบแล้วเขียนใหม่ทั้งตาราง โปรเจกต์ที่ active และตัวนับจึงต้องอ่านใหม่
       const projectData = await getCurrentProject();
       setCurrentProject(projectData);
-      const idForFilter = projectData
-        ? (isModeOne ? projectData.project_id : projectData.activity_id)
-        : null;
+      const idForFilter = await getScopeId(projectData);
       setCurrentId(idForFilter);
       await refreshCounts(idForFilter);
 

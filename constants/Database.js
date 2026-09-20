@@ -590,7 +590,31 @@ export const pruneErrorLogs = async ({ maxAgeDays = 14, maxRows = 5000 } = {}) =
  */
 const getScopeField = async () => {
   const appMode = await getSetting('appMode');
-  return appMode === 'false' ? 'activity_id' : 'project_id';
+  if (appMode !== 'false') return 'project_id';
+
+  // ✅ โหมดธรรมยาตราอิง activity_id แต่ "โหมด" เป็นการตั้งค่าที่เครื่อง ส่วน activity_id
+  //    เป็นคุณสมบัติของข้อมูลฝั่ง server ทั้งสองอย่างจึงไม่ตรงกันได้
+  //    ถ้ากิจกรรมที่ active อยู่ไม่มี activity_id ต้องถอยไปใช้ project_id
+  //    ไม่งั้น getScanHistory จะได้ id = null แล้ว return [] ทันที — หน้าแรกว่างเปล่าแบบเงียบๆ
+  //    ทั้งที่ข้อมูลถูกบันทึกและถูกส่งขึ้น server เรียบร้อย
+  const project = await getCurrentProject();
+  return project?.activity_id != null ? 'activity_id' : 'project_id';
+};
+
+/**
+ * 🚀 ค่าที่ต้องใช้คู่กับ getScopeField()
+ * หน้าจอเป็นคนเลือก "ค่า" ส่วน query เป็นคนเลือก "คอลัมน์" — สองอย่างนี้ต้องมาจากกติกาเดียวกัน
+ * เสมอ ไม่งั้นจะได้ WHERE activity_id = <project_id> แบบที่เคยเกิดมาแล้ว
+ * @param {object|null} project - โปรเจกต์ที่ active อยู่ (จาก useProject หรือ getCurrentProject)
+ * @returns {Promise<number|null>}
+ */
+export const getScopeId = async (project) => {
+  if (!project) return null;
+  const appMode = await getSetting('appMode');
+  if (appMode === 'false' && project.activity_id != null) {
+    return project.activity_id;
+  }
+  return project.project_id ?? null;
 };
 
 export const saveSetting = async (key, value) => {
