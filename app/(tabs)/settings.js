@@ -6,7 +6,7 @@ import axios from 'axios';
 import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
-import { clearProjectsTable, clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { backfillCheckInCompId, clearProjectsTable, clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
@@ -673,15 +673,35 @@ export default function SettingsScreen() {
       return;
     }
 
+    // ✅ รหัสเครื่องว่าง = check-in ทุกแถวจะถูก server ปฏิเสธด้วย 422 (comp id required)
+    //    เดิมไม่มี validate เลย จึงตั้งเป็นค่าว่างได้ แล้วข้อมูลค้างส่งทั้งหมดโดยไม่มีใครรู้
+    const trimmedCode = (machineCodeInput || '').trim();
+    if (!trimmedCode) {
+      Alert.alert("ผิดพลาด", "กรุณากรอกรหัสเครื่อง");
+      return;
+    }
+
     try {
-      await saveSetting('machineCode', machineCodeInput);
-      setMachineCode(machineCodeInput); // อัปเดต UI
-      Alert.alert("สำเร็จ", "รหัสเครื่องเปลี่ยนเรียบร้อยแล้ว!");
+      await saveSetting('machineCode', trimmedCode);
+      setMachineCode(trimmedCode); // อัปเดต UI
+
+      // ✅ เติมรหัสเครื่องให้แถวที่ค้างส่งเพราะไม่มี comp_id แล้วสั่งให้ลองใหม่ทันที
+      //    payload อ่านจากแถวเสมอ การตั้งรหัสตอนนี้จึงไม่ช่วยของเก่าถ้าไม่เติมย้อนหลัง
+      const filled = await backfillCheckInCompId(trimmedCode);
+
+      Alert.alert(
+        "สำเร็จ",
+        filled > 0
+          ? `รหัสเครื่องเปลี่ยนเรียบร้อยแล้ว!\n\nเติมรหัสเครื่องให้รายการที่ค้างส่ง ${filled} รายการ ระบบจะลองส่งใหม่ให้ทันที`
+          : "รหัสเครื่องเปลี่ยนเรียบร้อยแล้ว!"
+      );
 
       // ปิด Modal และเคลียร์ค่า input
       setModalVisible(false);
       setMasterCodeInput('');
       setMachineCodeInput('');
+
+      await refreshCounts();
     } catch (e) {
       Alert.alert("ผิดพลาด", "ไม่สามารถบันทึกรหัสเครื่องได้.");
     }
