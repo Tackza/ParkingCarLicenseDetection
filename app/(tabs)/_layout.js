@@ -1,6 +1,5 @@
 import {
   clearSession,
-  deleteSetting,
   getActiveSession,
   getLastRegisterSyncState,
   insertErrorLog,
@@ -131,7 +130,8 @@ function TabLogic() {
 
       if (error.response && error.response.status === 401) {
         await clearSession();
-        await deleteSetting('saved_printer');
+        // ไม่ลบ saved_printer — เครื่องพิมพ์ผูกกับ "เครื่อง" ไม่ใช่ผู้ใช้
+        // ลบทิ้งแล้วรอบหน้าจะ auto-connect ไม่ได้ ต้องให้คนมาเลือกใหม่ทุกครั้ง
         router.replace('/login');
         return false;
       }

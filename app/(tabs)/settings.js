@@ -6,7 +6,7 @@ import axios from 'axios';
 import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
-import { backfillCheckInCompId, clearProjectsTable, clearRegistersTable, clearSession, deleteSetting, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { backfillCheckInCompId, clearProjectsTable, clearRegistersTable, clearSession, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
@@ -261,7 +261,8 @@ export default function SettingsScreen() {
               console.log('lprToken :>> ', lprToken);
 
               await clearSession();
-              await deleteSetting('saved_printer');
+              // ไม่ลบ saved_printer — เครื่องพิมพ์ผูกกับ "เครื่อง" ไม่ใช่ผู้ใช้
+              // ลบทิ้งแล้วคนถัดไปที่ login ต้องมาเลือกเครื่องพิมพ์ใหม่ทุกครั้ง
 
               // ไม่ต้อง await router.replace ตรงนี้ เพราะมี call ไป API อีก
               // เราจะเปลี่ยนหน้าหลังจาก API call สำเร็จ
@@ -598,7 +599,7 @@ export default function SettingsScreen() {
 
       // ตัด session เดิม (token ใช้กับอีก server ไม่ได้) และ unpair เครื่องพิมพ์ตามการ logout ปกติ
       await clearSession();
-      await deleteSetting('saved_printer');
+      // เครื่องพิมพ์เป็นฮาร์ดแวร์ตัวเดิมไม่ว่าจะชี้ไป prod หรือ test จึงไม่ต้องลบ
 
       // ล้างข้อมูล master ที่ผูกกับ server เดิม รอบ sync ถัดไปหลัง login จะดึงใหม่ทั้งหมด
       await clearRegistersTable();
@@ -983,6 +984,16 @@ export default function SettingsScreen() {
               </View>
             )}
           </View>
+
+          {/* ✅ ออกจากระบบ — ย้ายมาไว้มุมขวาบนแทนปุ่มยาวด้านล่าง */}
+          <TouchableOpacity
+            style={styles.logoutIconButton}
+            onPress={handleLogout}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            accessibilityLabel="ออกจากระบบ"
+          >
+            <Ionicons name="log-out-outline" size={26} color="#D32F2F" />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -1052,11 +1063,6 @@ export default function SettingsScreen() {
         contentContainerStyle={styles.listContent}
       />
 
-      {/* --- ส่วนปุ่ม Logout --- */}
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-        <Ionicons name="log-out" size={24} color="#D32F2F" />
-        <Text style={styles.logoutButtonText}>ออกจากระบบ</Text>
-      </TouchableOpacity>
     </View>
   );
 
@@ -1156,21 +1162,8 @@ const styles = StyleSheet.create({
     color: '#333',
   },
   // Logout Button
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#fff',
-    margin: 16,
-    padding: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#FFCDD2'
-  },
-  logoutButtonText: {
-    fontSize: 16,
-    color: '#D32F2F',
-    fontWeight: '600',
+  logoutIconButton: {
+    padding: 8,
     marginLeft: 8,
   },
   avatarTextContainer: {

@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { setupDatabase } from "../constants/Database";
 import { AuthProvider } from "../contexts/AuthContext";
 import { ModeProvider } from "../contexts/ModeContext";
+import { PrinterProvider } from "../contexts/PrinterContext";
 import { ProjectProvider } from "../contexts/ProjectContext";
 
 import CheckInSyncManager from "../components/CheckInSyncManager";
@@ -43,6 +44,7 @@ export default function RootLayout() {
         <SyncProvider>
           <ProjectProvider>
             <ModeProvider>
+              <PrinterProvider>
               <ThemeProvider value={DefaultTheme}>
                 <CheckInSyncManager />
                 <Stack screenOptions={{ headerShown: false }}>
@@ -51,6 +53,7 @@ export default function RootLayout() {
                   <Stack.Screen name="(tabs)" />
                 </Stack>
               </ThemeProvider>
+              </PrinterProvider>
             </ModeProvider>
           </ProjectProvider>
         </SyncProvider>
