@@ -1013,7 +1013,9 @@ export const insertCheckIn = async (checkInData) => {
         checkInData.project_id,
         checkInData.register_id,
         checkInData.activity_id || null,
-        checkInData.seq_no || null,
+        // ✅ ?? ไม่ใช่ || — seq_no = 0 เป็นค่าที่มีความหมายจริง (เคสลงทะเบียนปกติ ไม่ใช่กิจกรรมที่ 1/2)
+        //    `0 || null` ทำให้กลายเป็น null แล้วตอนอัปโหลดส่งเป็นสตริงว่าง ซึ่ง server ปฏิเสธด้วย 422
+        checkInData.seq_no ?? null,
         checkInData.detect_plate_no,
         checkInData.detect_plate_province,
         checkInData.plate_no,

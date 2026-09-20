@@ -407,7 +407,8 @@ export default function ScanScreen() {
         sticker_no: isModeOne ? "" : stickerNumber, // ✅ เพิ่ม sticker_no จาก state
         chk_mile: shouldShowMileage ? mileage : null,
         comp_id: machineCode, // ✅ comp_id ควรมาจาก machineCode ที่คุณดึงมา
-        seq_no: activeProject?.seq_no || null, // ✅ seq_no มาจาก activeProject
+        // ✅ ?? ไม่ใช่ || — seq_no = 0 คือเคสลงทะเบียนปกติ ต้องไม่ถูกแปลงเป็น null
+        seq_no: activeProject?.seq_no ?? null, // ✅ seq_no มาจาก activeProject
         printed: shouldPrint ? 1 : 0, // ✅ ใช้ shouldPrint แทน isVerified
         error_msg: '',
         ocr_connected: ocrConnected, // ✅ ส่งค่า ocrConnected ไปบันทึก

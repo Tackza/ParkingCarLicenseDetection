@@ -59,6 +59,39 @@ const CheckInSyncManager = () => {
     "https://mbus.dhammakaya.network/api" :
     "https://mbus-test.dhammakaya.network/api";
 
+  // ✅ axios ใส่แค่ข้อความสำเร็จรูปไว้ใน .message ("Request failed with status code 422")
+  //    เหตุผลจริงที่ server ส่งมาอยู่ใน response.data ซึ่งเดิมถูกทิ้งทั้งหมด
+  //    ผลคือหน้ารายการขึ้นแค่เลข status ดูไม่ออกว่าฟิลด์ไหนไม่ผ่าน validation
+  //    รองรับรูปแบบ { message, errors: { field: [...] } } ที่ API ใช้ และ fallback เป็น JSON ดิบ
+  const describeUploadError = (error) => {
+    const fallback = error?.message || String(error);
+    const status = error?.response?.status;
+    const body = error?.response?.data;
+
+    if (body === undefined || body === null || body === '') return fallback;
+
+    const prefix = status ? `[${status}] ` : '';
+
+    if (typeof body === 'string') {
+      return `${prefix}${body}`.slice(0, 2000);
+    }
+
+    const parts = [];
+    if (body.message) parts.push(body.message);
+    if (body.errors && typeof body.errors === 'object') {
+      for (const [field, msgs] of Object.entries(body.errors)) {
+        parts.push(`${field}: ${Array.isArray(msgs) ? msgs.join(', ') : msgs}`);
+      }
+    }
+    if (parts.length > 0) return `${prefix}${parts.join(' | ')}`.slice(0, 2000);
+
+    try {
+      return `${prefix}${JSON.stringify(body)}`.slice(0, 2000);
+    } catch (e) {
+      return fallback;
+    }
+  };
+
   const isDuplicateError = (errorMessage) => {
     console.log('errorMessage 44 :>> ', errorMessage);
     if (!errorMessage) return false;
@@ -306,7 +339,8 @@ const CheckInSyncManager = () => {
             }
           }
         } catch (itemError) {
-          const errorMsg = itemError.message || itemError.toString();
+          // เก็บเหตุผลจาก server ด้วย ไม่ใช่แค่ข้อความสำเร็จรูปของ axios
+          const errorMsg = describeUploadError(itemError);
           console.log(`Failed to upload check-in uid ${checkIn.uid}:`, errorMsg);
           console.log('itemError message :>> ', itemError);
           console.log('isDuplicateError(errorMessage) :>> ', isDuplicateError(errorMsg));
