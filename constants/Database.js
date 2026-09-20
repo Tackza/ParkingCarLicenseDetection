@@ -631,7 +631,9 @@ export const getSetting = async (key) => {
   const db = await getDb();;
   try {
     const result = await db.getFirstAsync('SELECT value FROM settings WHERE key = ?;', [key]);
-    return result?.value || null; // คืนค่า value หรือ null ถ้าไม่เจอ
+    // ?? ไม่ใช่ || — ไม่งั้นค่าที่เก็บไว้จริงอย่าง "0" หรือ "" จะถูกอ่านกลับมาเป็น null
+    // (เช่น รหัสเครื่องที่ตั้งเป็น "0" จะกลายเป็นเหมือนยังไม่ได้ตั้ง)
+    return result?.value ?? null; // คืนค่า value หรือ null ถ้าไม่เจอ
   } catch (error) {
     console.error(`Error getting setting for key "${key}":`, error);
     return null;
@@ -1146,6 +1148,46 @@ export const updateCheckInPrintedStatus = async (checkInId, printed) => {
   } catch (error) {
     console.error(`Error updating printed status for check-in ${checkInId}:`, error);
     return null;
+  }
+};
+
+/**
+ * 🚀 เติม comp_id (รหัสเครื่อง) ให้ check-in ที่ยังส่งไม่สำเร็จและไม่มีค่านั้น
+ *
+ * รหัสเครื่องเป็นการตั้งค่าที่เครื่อง ถ้ายังไม่ได้ตั้งตอนสแกน แถวจะถูกบันทึกด้วย comp_id = ''
+ * แล้ว server ปฏิเสธด้วย 422 "The comp id field is required." ตลอดไป
+ * เพราะ payload อ่านจากแถวเสมอ การตั้งรหัสเครื่องทีหลังจึงไม่ช่วยแถวที่ค้างอยู่
+ *
+ * comp_id คือ "ตัวตนของเครื่อง" ไม่ใช่ข้อมูลที่แปรตามเวลาแบบ seq_no การเติมย้อนหลัง
+ * จึงถูกต้องตามความหมาย ไม่ขัดกับหลักที่ว่า payload ต้องมาจากแถว
+ *
+ * แตะเฉพาะแถวที่ยังส่งไม่สำเร็จ (sync_status != 2) — แถวที่ server รับไปแล้วต้องไม่ถูกแก้
+ * และล้างสถานะถอยเวลาด้วย เพื่อให้ลองส่งใหม่ทันทีแทนที่จะรอ backoff ที่อาจยาวถึง 6 ชั่วโมง
+ *
+ * @param {string|number} compId - รหัสเครื่องที่เพิ่งตั้ง
+ * @returns {Promise<number>} - จำนวนแถวที่ถูกเติม
+ */
+export const backfillCheckInCompId = async (compId) => {
+  const value = typeof compId === 'string' ? compId.trim() : compId;
+  if (value === undefined || value === null || value === '') return 0;
+
+  const db = await getDb();
+  try {
+    const result = await db.runAsync(
+      `UPDATE check_ins
+          SET comp_id = ?, retry_count = 0, next_retry_at = NULL
+        WHERE sync_status != 2
+          AND (comp_id IS NULL OR TRIM(CAST(comp_id AS TEXT)) = '');`,
+      [value]
+    );
+    const filled = result.changes || 0;
+    if (filled > 0) {
+      console.log(`✅ Backfilled comp_id on ${filled} pending check-ins.`);
+    }
+    return filled;
+  } catch (error) {
+    console.error('Error backfilling comp_id:', error);
+    return 0;
   }
 };
 
