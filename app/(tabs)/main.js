@@ -28,7 +28,7 @@ import { THAI_PROVINCES } from '../../constants/provinces';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 // import CheckInSyncManager from '../../components/CheckInSyncManager';
 import HistoryItem from '../../components/HistoryItem';
-import { getActiveSession, getScanHistory, insertErrorLog } from '../../constants/Database';
+import { getActiveSession, getScanHistory, getScopeId, insertErrorLog } from '../../constants/Database';
 import { useAuth } from '../../contexts/AuthContext';
 import { useMode } from '../../contexts/ModeContext';
 import { useProject } from '../../contexts/ProjectContext';
@@ -352,7 +352,9 @@ export default function HistoryScreen() {
     }
     try {
       // เลือก id ที่จะส่งเข้า getScanHistory ตามโหมด
-      const id = isModeOne ? activeProject.project_id : activeProject.activity_id;
+      // ใช้ getScopeId เพื่อให้ "ค่า" ตรงกับ "คอลัมน์" ที่ getScanHistory เลือกเสมอ
+      // และเพื่อให้ถอยไป project_id เองเมื่อกิจกรรมนั้นไม่มี activity_id
+      const id = await getScopeId(activeProject);
       console.log(`Loading history for id: ${id} (mode: ${isModeOne ? 'project_id' : 'activity_id'}), Query: "${query}"`);
       const data = await getScanHistory(id, query);
       setHistory(data);
