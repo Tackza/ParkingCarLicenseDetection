@@ -4,7 +4,6 @@ import { StyleSheet } from 'react-native';
 // import { Ionicons } from '@expo/vector-icons';
 import {
   clearSession,
-  deleteSetting,
   getActiveSession,
   getUnsyncedCheckIns,
   insertErrorLogThrottled,
@@ -435,7 +434,8 @@ const CheckInSyncManager = () => {
       if (authExpired) {
         console.log('🔐 Forcing re-login after auth failure during check-in sync.');
         await clearSession();
-        await deleteSetting('saved_printer');
+      // ไม่ลบ saved_printer — เครื่องพิมพ์ผูกกับ "เครื่อง" ไม่ใช่ผู้ใช้หรือ environment
+      // ลบทิ้งแล้วรอบหน้าจะ auto-connect ไม่ได้ ต้องให้คนมาเลือกใหม่ทุกครั้ง
         router.replace('/login');
         return;
       }

@@ -1,4 +1,4 @@
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -33,6 +33,7 @@ import { getActiveSession, getScanHistory, getScopeId, insertErrorLog } from '..
 import { useAuth } from '../../contexts/AuthContext';
 import { useMode } from '../../contexts/ModeContext';
 import { useProject } from '../../contexts/ProjectContext';
+import { usePrinter } from '../../contexts/PrinterContext';
 import { useSync } from '../../contexts/SyncContext';
 
 const windowWidth = Dimensions.get('window').width;
@@ -54,7 +55,8 @@ export default function HistoryScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  // const router = useRouter();
+  const router = useRouter();
+  const { isConnected: isPrinterConnected, hasSavedPrinter } = usePrinter();
   const { isOnline } = useSync();
   const { activeProject, refreshCurrentProject } = useProject();
   // const debounceTimer = useRef(null);
@@ -458,6 +460,24 @@ export default function HistoryScreen() {
       </View>
 
 
+      {/* ✅ เตือนค้างไว้เมื่อยังเชื่อมเครื่องพิมพ์ไม่ได้ — ลงทะเบียนต่อได้ แต่จะพิมพ์ไม่ออก
+          แตะเพื่อกลับไปเลือก/เชื่อมเครื่องพิมพ์ (manual=1 บอกให้หน้านั้นแสดงรายการแทนการ auto-connect) */}
+      {!isPrinterConnected && (
+        <TouchableOpacity
+          style={styles.printerWarningBanner}
+          onPress={() => router.push('/bluetooth-setup?manual=1')}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="print-outline" size={18} color="#fff" />
+          <Text style={styles.printerWarningText}>
+            {hasSavedPrinter
+              ? 'ยังไม่ได้เชื่อมเครื่องพิมพ์ — แตะเพื่อเชื่อมใหม่'
+              : 'ยังไม่ได้ตั้งเครื่องพิมพ์ — แตะเพื่อเลือก'}
+          </Text>
+          <Ionicons name="chevron-forward" size={18} color="#fff" />
+        </TouchableOpacity>
+      )}
+
       {/* ✅ ADD: Online Search Button */}
       <TouchableOpacity
         style={[styles.onlineSearchButton, !isOnline && styles.onlineSearchButtonDisabled]}
@@ -796,6 +816,23 @@ const styles = StyleSheet.create({
     color: '#7f8c8d',
   },
 
+  printerWarningBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f39c12',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginHorizontal: 12,
+    marginTop: 8,
+    borderRadius: 10,
+  },
+  printerWarningText: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',

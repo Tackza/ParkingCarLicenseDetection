@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -16,7 +16,8 @@ import { BluetoothManager } from 'react-native-bluetooth-escpos-printer';
 import { PERMISSIONS, RESULTS, requestMultiple } from 'react-native-permissions';
 // MODIFIED: เพิ่มการ import AsyncStorage
 // import AsyncStorage from '@react-native-async-storage/async-storage';
-import { deleteSetting, getSetting, saveSetting } from '../constants/Database';
+import { getSetting, saveSetting } from '../constants/Database';
+import { usePrinter } from '../contexts/PrinterContext';
 
 const SAVED_PRINTER_KEY = 'saved_printer'; // Key สำหรับเก็บข้อมูลใน AsyncStorage
 
@@ -28,6 +29,10 @@ export default function BluetoothSetupScreen() {
   const [foundDevices, setFoundDevices] = useState([]);
   const [connectedDevice, setConnectedDevice] = useState(null);
   const router = useRouter();
+  // manual=1 แปลว่าผู้ใช้กดมาจากแถบเตือนเพื่อเลือกเครื่องพิมพ์เอง ไม่ใช่ขั้นตอนหลัง login
+  const { manual } = useLocalSearchParams();
+  const isManual = manual === '1';
+  const { markConnected, markDisconnected } = usePrinter();
 
   // --- ส่วนจัดการ Event Listeners (ไม่เปลี่ยนแปลง) ---
   const deviceAlreadPaired = useCallback(
@@ -71,6 +76,7 @@ export default function BluetoothSetupScreen() {
       emitter.addListener(BluetoothManager.EVENT_DEVICE_FOUND, deviceFoundEvent),
       emitter.addListener(BluetoothManager.EVENT_CONNECTION_LOST, () => {
         setConnectedDevice(null);
+        markDisconnected();
         Alert.alert('การเชื่อมต่อหลุด', 'การเชื่อมต่อกับเครื่องพิมพ์ถูกตัด');
       }),
     ];
@@ -128,31 +134,50 @@ export default function BluetoothSetupScreen() {
           await BluetoothManager.enableBluetooth();
         }
 
+        // ✅ ผู้ใช้กดมาจากแถบเตือนที่หน้าหลักเพื่อเลือกเครื่องพิมพ์เอง — แสดงรายการเลย
+        if (isManual) {
+          setIsLoading(false);
+          scanDevices();
+          return;
+        }
+
         // ตรวจสอบเครื่องพิมพ์ที่บันทึกไว้
         const savedPrinterJSON = await getSetting(SAVED_PRINTER_KEY);
         if (savedPrinterJSON) {
           const savedPrinter = JSON.parse(savedPrinterJSON);
-          // Alert.alert('พบเครื่องพิมพ์ที่บันทึกไว้', `กำลังพยายามเชื่อมต่อกับ ${savedPrinter.name || 'Unknown Device'}...`);
 
-          try {
-            // พยายามเชื่อมต่ออัตโนมัติ
-            await BluetoothManager.connect(savedPrinter.address);
+          // ✅ ลองสองครั้ง เครื่องพิมพ์ที่เพิ่งเปิดมักไม่ติดในครั้งแรก
+          let connected = false;
+          for (let attempt = 1; attempt <= 2 && !connected; attempt++) {
+            try {
+              await BluetoothManager.connect(savedPrinter.address);
+              connected = true;
+            } catch (autoConnectError) {
+              console.log(`Auto-connect attempt ${attempt} failed:`, autoConnectError?.message);
+              if (attempt < 2) await new Promise(r => setTimeout(r, 1200));
+            }
+          }
+
+          if (connected) {
             setConnectedDevice(savedPrinter);
-            // Alert.alert('สำเร็จ', `เชื่อมต่อกับ ${savedPrinter.name} เรียบร้อยแล้ว`);
+            markConnected(savedPrinter);
             console.log('เชื่อมต่อกับเครื่องพิมพ์ที่บันทึกไว้สำเร็จ:', savedPrinter);
-            router.push('/main');// ไปหน้าต่อไปทันที
-          } catch (autoConnectError) {
-            // หากเชื่อมต่ออัตโนมัติล้มเหลว
-            Alert.alert('เชื่อมต่ออัตโนมัติล้มเหลว', 'ไม่สามารถเชื่อมต่อกับเครื่องพิมพ์ที่บันทึกไว้ได้ กรุณาเลือกเครื่องพิมพ์ใหม่');
-            await deleteSetting(SAVED_PRINTER_KEY); // ลบข้อมูลที่ไม่ถูกต้องออก
-            setIsLoading(false); // แสดงหน้าให้ผู้ใช้เลือก
-            scanDevices(); // เริ่มสแกนหาเครื่องพิมพ์ใหม่
+          } else {
+            // ✅ ไม่ลบ saved_printer ทิ้ง เครื่องพิมพ์แค่ปิดอยู่หรืออยู่ไกลชั่วคราว
+            //    ก็ไม่ควรเสียค่าที่ตั้งไว้ รอบหน้าจะได้ลองเชื่อมตัวเดิมอีก
+            console.log('Auto-connect failed; continuing without printer.');
+            markDisconnected();
           }
         } else {
-          // ถ้าไม่มีเครื่องพิมพ์ที่บันทึกไว้ ก็เริ่มสแกนตามปกติ
-          setIsLoading(false);
-          scanDevices();
+          // ยังไม่เคยตั้งเครื่องพิมพ์ — ไม่บล็อกการเข้าใช้งาน
+          markDisconnected();
         }
+
+        // ✅ เข้าหน้าหลักเสมอ ไม่ว่าจะต่อเครื่องพิมพ์ติดหรือไม่
+        //    เดิมถ้าต่อไม่ติดจะค้างอยู่หน้านี้ ทั้งที่การลงทะเบียนสำคัญกว่าการพิมพ์
+        //    หน้าหลักมีแถบเตือนให้กดกลับมาเชื่อมใหม่ได้ตลอด
+        //    ใช้ replace เพื่อไม่ให้หน้านี้ค้างอยู่ใน stack แล้วกดย้อนกลับมาโดน
+        router.replace('/main');
       } catch (error) {
         setIsLoading(false);
         Alert.alert('ข้อผิดพลาด', 'ไม่สามารถเริ่มต้นการใช้งาน Bluetooth ได้');
@@ -160,7 +185,7 @@ export default function BluetoothSetupScreen() {
     };
 
     initializeBluetooth();
-  }, [router]);
+  }, [router, isManual]);
 
 
   // --- MODIFIED: ปรับปรุงฟังก์ชันเชื่อมต่อ ให้บันทึกข้อมูลหลังเชื่อมต่อสำเร็จ ---
@@ -173,11 +198,12 @@ export default function BluetoothSetupScreen() {
       await saveSetting(SAVED_PRINTER_KEY, JSON.stringify(device));
 
       setConnectedDevice(device);
+      markConnected(device);
       setIsScanning(false);
       Alert.alert('สำเร็จ', `เชื่อมต่อกับ ${device.name || 'Unknown Device'} สำเร็จ`, [
         {
           text: 'ตกลง',
-          onPress: () => router.push('/main'),
+          onPress: () => router.replace('/main'),
         },
       ]);
     } catch (error) {
