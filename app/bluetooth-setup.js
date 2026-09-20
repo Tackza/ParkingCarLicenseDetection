@@ -22,6 +22,11 @@ import { usePrinter } from '../contexts/PrinterContext';
 
 const SAVED_PRINTER_KEY = 'saved_printer'; // Key สำหรับเก็บข้อมูลใน AsyncStorage
 
+// ✅ เวลาขั้นต่ำที่กล่อง "กำลังเชื่อมต่อเครื่องพิมพ์" ต้องค้างอยู่
+//    ไม่ใช่การหน่วงให้ช้าลง แต่เพื่อให้ผู้ใช้เห็นว่าระบบเตรียมเครื่องพิมพ์ให้แล้วจริง
+//    เครื่องที่เคยบันทึกไว้จะเชื่อมเสร็จเร็วมากจนกล่องวาบหายไปเฉยๆ
+const MIN_CONNECTING_DIALOG_MS = 3000;
+
 export default function BluetoothSetupScreen() {
   // MODIFIED: เพิ่ม isLoading state สำหรับการตรวจสอบข้อมูลตอนเริ่มต้น
   const [isLoading, setIsLoading] = useState(true);
@@ -162,6 +167,7 @@ export default function BluetoothSetupScreen() {
   // --- MODIFIED: ปรับปรุงฟังก์ชันเริ่มต้น ---
   useEffect(() => {
     const initializeBluetooth = async () => {
+      const startedAt = Date.now();
       try {
         // เปิด Bluetooth ถ้ายังไม่เปิด
         const enabled = await BluetoothManager.isBluetoothEnabled();
@@ -214,9 +220,20 @@ export default function BluetoothSetupScreen() {
         if (connectedTo) {
           setConnectedDevice(connectedTo);
           markConnected(connectedTo);
+          setConnectingStatus(`เชื่อมต่อ ${connectedTo.name || 'เครื่องพิมพ์'} แล้ว`);
           console.log('เชื่อมต่อเครื่องพิมพ์สำเร็จ:', connectedTo);
         } else {
           markDisconnected();
+          setConnectingStatus('ยังเชื่อมต่อเครื่องพิมพ์ไม่ได้');
+        }
+
+        // ✅ ค้างกล่องไว้อย่างน้อย MIN_CONNECTING_DIALOG_MS
+        //    เครื่องที่เคยบันทึกเครื่องพิมพ์ไว้จะเชื่อมเสร็จในเสี้ยววินาที กล่องจะวาบหายไป
+        //    จนผู้ใช้ไม่ทันเห็นว่าระบบเตรียมอะไรให้บ้าง และดูเหมือนแอปกระตุก
+        //    ข้อความสุดท้ายบอกผลลัพธ์ ช่วงที่ค้างไว้จึงมีความหมาย ไม่ใช่หน่วงเปล่าๆ
+        const elapsed = Date.now() - startedAt;
+        if (elapsed < MIN_CONNECTING_DIALOG_MS) {
+          await new Promise(r => setTimeout(r, MIN_CONNECTING_DIALOG_MS - elapsed));
         }
 
         // ✅ เข้าหน้าหลักเสมอ ไม่ว่าจะต่อเครื่องพิมพ์ติดหรือไม่
