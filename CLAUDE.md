@@ -50,13 +50,17 @@ EnvironmentProvider → AuthProvider → SyncProvider → ProjectProvider → Mo
                                                                     ↳ <CheckInSyncManager />  (headless, mounted once)
 ```
 
-`setupDatabase()` from [constants/Database.js](constants/Database.js) runs once on root mount. `AuthProvider` and `ProjectProvider` each block rendering with a spinner while `EnvironmentProvider` is still loading, so the API base URL is always resolved before any request goes out.
+`setupDatabase()` from [constants/Database.js](constants/Database.js) runs once on root mount (fire-and-forget — nothing awaits it, so the first queries race the migrations). `AuthProvider` and `ProjectProvider` each block rendering with a spinner while `EnvironmentProvider` is still loading, so the API base URL is always resolved before any request goes out. `EnvironmentProvider`'s own spinner is commented out, so it renders children immediately with `environment === null`; `AuthProvider`'s early return is what actually holds the tree back.
 
-**`SyncProvider` is mounted twice.** [app/(tabs)/_layout.js](app/(tabs)/_layout.js) wraps its own `TabLogic` in a *second* `SyncProvider`. Anything inside `(tabs)` that calls `useSync()` reads the inner instance; `CheckInSyncManager` reads the outer one. That's why the `SyncStatus` header widget reflects only the registers loop. Adding shared sync state means picking which provider actually owns it.
+**That early return is load-bearing for more than the URL.** `ProjectProvider` calls `useEnvironment()` / `useAuth()`, then returns its spinner on `isEnvLoading`, and only *after* that return declares two `useCallback`s and a `useEffect`. Declaring hooks below a conditional return is a Rules-of-Hooks violation that would throw "rendered more hooks than during the previous render" the moment `isEnvLoading` flipped — it never fires only because `AuthProvider` returns *its* spinner first and never mounts `ProjectProvider`'s subtree while the environment is loading. Removing or reordering `AuthProvider`'s guard crashes `ProjectProvider`. Move those three hooks above the early return before touching either provider.
+
+**`user` is never rehydrated from SQLite.** `setUser` is called only by `login()` and `logout()`, so on a cold start `useAuth().user` is `null` no matter what is in `sessions`. Consequences: [app/index.js](app/index.js) always redirects to `/login` (the real auto-login is `login.js` checking for a session row itself), and every `user_id` on an error log is `null` until someone logs in *within that process* — which is most of them, since the app normally resumes straight past the login screen.
+
+**`SyncProvider` is mounted twice.** [app/(tabs)/_layout.js](app/(tabs)/_layout.js) wraps its own `TabLogic` in a *second* `SyncProvider`. Anything inside `(tabs)` that calls `useSync()` reads the inner instance; `CheckInSyncManager` reads the outer one, so nothing the check-in loop sets is readable from any tab screen. Adding shared sync state means picking which provider actually owns it. (The `SyncStatus` widget that would have surfaced this is wired to `headerRight` but every `Tabs.Screen` sets `headerShown: false`, so it never renders — see dead code.)
 
 ### Routing (Expo Router, file-based)
 
-- [app/index.js](app/index.js) — redirect: no user → `/login`, else `/scan`
+- [app/index.js](app/index.js) — redirect: no user → `/login`, else `/scan`. In practice the `else` is unreachable (see `user` rehydration above), so this always lands on `/login`
 - [app/login.js](app/login.js) — auto-skips to `/bluetooth-setup` if a session row exists (no token revalidation); otherwise `POST /lpr/login` → `saveSession()` → `syncProjectsWithApi()`
 - [app/bluetooth-setup.js](app/bluetooth-setup.js) — the printer step after login; see **Printer connection** below. Requests `BLUETOOTH_SCAN` / `BLUETOOTH_CONNECT` / `ACCESS_FINE_LOCATION` via `react-native-permissions`
 - [app/(tabs)/_layout.js](app/(tabs)/_layout.js) — owns the **registers sync loop**; the Scan tab's `tabPress` is intercepted (`e.preventDefault()`) to launch the camera and pass `imageUri` as a route param
@@ -126,7 +130,14 @@ High-water marks are derived from the table itself (`getLastRegisterSyncState()`
 | Mileage | n/a | required when `activeProject.seq_no` is 1 or 2 and the register's matching `activity{1,2}_checkmile` is 1 |
 | History / count queries | filtered by `project_id` | filtered by `activity_id` |
 
-Every query that scopes by mode goes through **`getScopeField()`** in [constants/Database.js](constants/Database.js), which returns `activity_id` only for the explicit string `'false'` and `project_id` for everything else. Never inline the `appMode` comparison again: the old `appMode == "true" ? 'project_id' : 'activity_id'` fell back the *opposite* way from `ModeContext` (which defaults `isModeOne = true`), so on a device that had never toggled the mode the UI said mode one while every count and the history list filtered on `activity_id` using a `project_id` value. Migration v8 additionally seeds `appMode` so the setting is never absent.
+Mode scoping is a **matched pair** in [constants/Database.js](constants/Database.js), and getting one without the other is the bug it was written to prevent:
+
+- **`getScopeField()`** (module-private, line ~591) picks the **column**. Returns `activity_id` only for the explicit string `'false'` *and* only when the active project actually has a non-null `activity_id` — otherwise `project_id`. Every scoped query inside `Database.js` calls it (`getScanHistory`, and all five `*CountForId` helpers).
+- **`getScopeId(project)`** (exported, line ~611) picks the **value**, applying the same rule. Screens call this and pass the result in.
+
+So a caller never names a column; it asks `getScopeId()` for the id and the query asks `getScopeField()` for the column, and the two agree because they read the same setting through the same fallback. Passing `activeProject.project_id` straight into `getScanHistory()` or a count helper reintroduces `WHERE activity_id = <project_id>` — silently empty history and zeroed counters, with the data itself perfectly fine. Both callers today are [settings.js](app/(tabs)/settings.js) and [main.js](app/(tabs)/main.js); match them.
+
+Never inline the `appMode` comparison again: the old `appMode == "true" ? 'project_id' : 'activity_id'` fell back the *opposite* way from `ModeContext` (which defaults `isModeOne = true`), so on a device that had never toggled the mode the UI said mode one while every count and the history list filtered on `activity_id` using a `project_id` value. Migration v8 additionally seeds `appMode` so the setting is never absent.
 
 The mode also keys the `<Tabs>` element (`key={isModeOne ? ... }`), so toggling it remounts the whole tab navigator.
 
@@ -161,7 +172,7 @@ There are **three print sites and two receipt renderers**:
 
 Reprint from `main.js` calls `POST /lpr/checkins/print-slip` first and only prints if the server answers `status: "success"`, so the print count stays authoritative server-side.
 
-[components/SamplePrint.js](components/SamplePrint.js) is raw ESC/POS test-page commands and is the only consumer of the base64 logos in [components/dummy-logo.js](components/dummy-logo.js) — the real receipts have no logo.
+[components/SamplePrint.js](components/SamplePrint.js) is raw ESC/POS test-page commands and is the only consumer of the base64 logos in [components/dummy-logo.js](components/dummy-logo.js) and of `PRINT_DATA` in [components/printData.js](components/printData.js) — the real receipts have no logo. It is itself referenced only from the dead `components/oldFile/bluetooth.js`, so all four files are unreachable; see dead code.
 
 ### OCR
 
@@ -183,16 +194,16 @@ All under the environment base URL, `Authorization: Bearer <lpr_token>` from `ge
 
 ### Database (SQLite, expo-sqlite, WAL mode)
 
-[constants/Database.js](constants/Database.js) is a ~1070-line monolith — schema, migrations, and every query live here as plain exported async functions. `LicensePlateReader.db` is opened once into a module-level promise; every function starts with `await getDb()`.
+[constants/Database.js](constants/Database.js) is a ~1480-line monolith — schema, migrations, and every query live here as plain exported async functions. `LicensePlateReader.db` is opened once into a module-level promise; every function starts with `await getDb()`.
 
-Migrations run in `setupDatabase()` and are gated on `PRAGMA user_version`, **currently v8**: v1 initial schema, v2 `error_logs`, v3 mileage columns, v4 `projects.bus_types`, v5 `not_show_child_qty` / `not_show_novice_qty`, v6 `show_slip_section_2`, v7 `check_ins.retry_count` / `next_retry_at`, v8 seeds the `appMode` setting. Each block must set `user_version = N` itself; the single `PRAGMA user_version = ...` write at the end only fires when the value is `> 0`. Post-v1 migrations check `PRAGMA table_info(...)` before each `ALTER TABLE` so they are re-runnable.
+Migrations run in `setupDatabase()` and are gated on `PRAGMA user_version`, **currently v8**: v1 initial schema, v2 `error_logs`, v3 mileage columns, v4 `projects.bus_types`, v5 `not_show_child_qty` / `not_show_novice_qty`, v6 `show_slip_section_2`, v7 `check_ins.retry_count` / `next_retry_at`, v8 seeds the `appMode` setting. Each block must set `user_version = N` itself; the single `PRAGMA user_version = ...` write at the end only fires when the value is `> 0`. (The v1 block is the exception — it sets nothing and is carried to 2 by the v2 block that always follows it on a fresh DB. Don't copy that shape; a new tail migration that forgets the assignment re-runs forever.) Post-v1 migrations check `PRAGMA table_info(...)` before each `ALTER TABLE` so they are re-runnable.
 
 Key tables:
 
 - **`sessions`** — holds `lpr_token`. `getActiveSession()` is the canonical read (it joins `users`, so `user_id`, `username` etc. come back too).
 - **`settings`** — KV store for `appMode`, `environment`, `saved_printer` (JSON), `machineCode`.
 - **`projects`** — composite identity `(project_id, activity_id)`, plus the per-project feature flags and `bus_types`.
-- **`registers`** — master plate records; `register_id` is the server PK and the `REPLACE INTO` key. `findRegisterByPlate()` ignores soft-deleted rows.
+- **`registers`** — master plate records; `register_id` is the server PK and the `REPLACE INTO` key. `findRegisterByPlate()` ignores soft-deleted rows. The v1 column `check_mileage` is vestigial — never written by `saveRegisters()` and never read; the live flags are `activity1_checkmile` / `activity2_checkmile` from v3.
 - **`check_ins`** — local-first, `uid` is a client-generated ULID, indexed on `sync_status`. `comp_id` is the `machineCode` setting.
 - **`error_logs`** — every API/DB/camera/print/sync error funnels here; Settings exports it. Use `insertErrorLog()` for one-shot, user-triggered errors and **`insertErrorLogThrottled()` for anything inside a polling loop** — the latter collapses identical errors (same type/code/page/action/message prefix) into one row per 5 minutes and records how many were folded in. `pruneErrorLogs()` runs once from `setupDatabase()` and keeps 14 days / 5000 rows.
 
@@ -225,6 +236,9 @@ Several files look live but aren't — check before editing:
 
 - **[components/scan_normal.js](components/scan_normal.js)** (1073 lines) and **[components/oldFile/](components/oldFile)** — unreferenced older copies of the scan/bluetooth screens. The only mention of `scan_normal` in `(tabs)/_layout.js` is inside a commented-out block. Editing these changes nothing.
 - **[components/OrderSlip.js](components/OrderSlip.js)** + **[components/base64Image.js](components/base64Image.js)** — an older hardcoded slip and its print harness; referenced only by each other.
+- **[components/SamplePrint.js](components/SamplePrint.js)** + **[components/printData.js](components/printData.js)** + **[components/dummy-logo.js](components/dummy-logo.js)** — the ESC/POS test page, its hardcoded sample invoice (`PRINT_DATA`, a Chinese-commented sales receipt) and the base64 logos. `SamplePrint` is imported only by the dead `components/oldFile/bluetooth.js`, so the whole cluster is unreachable. Note `main.js` has local state also named `printData` — grepping the bare word finds live code that has nothing to do with this module.
+- **[components/SyncStatus.js](components/SyncStatus.js)** — passed to `headerRight` on the settings tab (and in two commented-out blocks), but every `Tabs.Screen` in `(tabs)/_layout.js` sets `headerShown: false`, so no header exists to hold it. Nothing in the app displays sync state; the `useSync()` values `_layout.js` maintains are written and never read.
+- **[components/styles.js](components/styles.js)** — imported by nothing.
 - **Root [index.js](index.js)** imports `./app-default`, which does not exist. It's inert because `package.json` sets `main: expo-router/entry`.
 - `components/.scan.js.swp`, `components/Untitled-1.ipynb`, and `eas-build-error-log.text` are stray artifacts checked into the repo.
 - `contexts/AuthContext.js` calls `saveSession(user.id, user.username)` in a `useEffect`, but `saveSession(loginData)` takes a single object — that call rejects unhandled. The session is actually saved by `login.js` calling `saveSession(result.data)` correctly. Fix the `AuthContext` call rather than changing `saveSession`'s signature.
