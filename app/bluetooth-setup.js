@@ -1,10 +1,11 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   DeviceEventEmitter,
   FlatList,
+  Modal,
   NativeEventEmitter,
   Platform,
   StyleSheet,
@@ -33,6 +34,11 @@ export default function BluetoothSetupScreen() {
   const { manual } = useLocalSearchParams();
   const isManual = manual === '1';
   const { markConnected, markDisconnected } = usePrinter();
+  // ข้อความในกล่อง "กำลังเชื่อมต่อ" กลางจอ อัปเดตตามขั้นตอนที่กำลังทำ
+  const [connectingStatus, setConnectingStatus] = useState('กำลังเริ่มต้น Bluetooth...');
+  // รายชื่ออุปกรณ์มาทาง event ซึ่งอ่านจาก state ใน effect ไม่ได้ (ติด closure เก่า) จึงต้องผ่าน ref
+  const pairedDevicesRef = useRef([]);
+  const foundDevicesRef = useRef([]);
 
   // --- ส่วนจัดการ Event Listeners (ไม่เปลี่ยนแปลง) ---
   const deviceAlreadPaired = useCallback(
@@ -44,6 +50,7 @@ export default function BluetoothSetupScreen() {
 
 
       if (ds && ds.length) {
+        pairedDevicesRef.current = ds;
         setPairedDevices(ds);
       }
     },
@@ -62,7 +69,9 @@ export default function BluetoothSetupScreen() {
           if (prev.some((device) => device.address === r.address)) {
             return prev;
           }
-          return [...prev, r];
+          const next = [...prev, r];
+          foundDevicesRef.current = next;
+          return next;
         });
       }
     },
@@ -114,6 +123,7 @@ export default function BluetoothSetupScreen() {
 
     setIsScanning(true);
     setFoundDevices([]);
+    foundDevicesRef.current = []; // ล้าง ref ด้วย ไม่งั้นอาจหยิบอุปกรณ์ค้างจากการสแกนรอบก่อน
     try {
       await BluetoothManager.scanDevices();
     } catch (error) {
@@ -122,6 +132,31 @@ export default function BluetoothSetupScreen() {
     } finally {
       setTimeout(() => setIsScanning(false), 5000);
     }
+  };
+
+  // ลองเชื่อมสองครั้ง เครื่องพิมพ์ที่เพิ่งเปิดมักไม่ติดในครั้งแรก
+  const tryConnect = async (device) => {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await BluetoothManager.connect(device.address);
+        return true;
+      } catch (e) {
+        console.log(`Connect attempt ${attempt} to ${device.address} failed:`, e?.message);
+        if (attempt < 2) await new Promise(r => setTimeout(r, 1200));
+      }
+    }
+    return false;
+  };
+
+  // รายชื่ออุปกรณ์ทยอยมาทาง event จึงต้องรอ ไม่ใช่อ่านได้ทันทีหลัง scanDevices()
+  // เอาที่จับคู่ไว้แล้วก่อน (คือลำดับเดียวกับที่แสดงในรายการ) ถ้าไม่มีค่อยใช้ที่เพิ่งค้นเจอ
+  const waitForFirstDevice = async (timeoutMs = 8000) => {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (pairedDevicesRef.current?.length > 0) return pairedDevicesRef.current[0];
+      await new Promise(r => setTimeout(r, 300));
+    }
+    return pairedDevicesRef.current?.[0] || foundDevicesRef.current?.[0] || null;
   };
 
   // --- MODIFIED: ปรับปรุงฟังก์ชันเริ่มต้น ---
@@ -136,40 +171,51 @@ export default function BluetoothSetupScreen() {
 
         // ✅ ผู้ใช้กดมาจากแถบเตือนที่หน้าหลักเพื่อเลือกเครื่องพิมพ์เอง — แสดงรายการเลย
         if (isManual) {
+          setConnectingStatus('กำลังค้นหาเครื่องพิมพ์...');
           setIsLoading(false);
           scanDevices();
           return;
         }
 
-        // ตรวจสอบเครื่องพิมพ์ที่บันทึกไว้
+        // 1) ลองเครื่องพิมพ์ที่บันทึกไว้ก่อน
         const savedPrinterJSON = await getSetting(SAVED_PRINTER_KEY);
+        let connectedTo = null;
+
         if (savedPrinterJSON) {
           const savedPrinter = JSON.parse(savedPrinterJSON);
-
-          // ✅ ลองสองครั้ง เครื่องพิมพ์ที่เพิ่งเปิดมักไม่ติดในครั้งแรก
-          let connected = false;
-          for (let attempt = 1; attempt <= 2 && !connected; attempt++) {
-            try {
-              await BluetoothManager.connect(savedPrinter.address);
-              connected = true;
-            } catch (autoConnectError) {
-              console.log(`Auto-connect attempt ${attempt} failed:`, autoConnectError?.message);
-              if (attempt < 2) await new Promise(r => setTimeout(r, 1200));
-            }
-          }
-
-          if (connected) {
-            setConnectedDevice(savedPrinter);
-            markConnected(savedPrinter);
-            console.log('เชื่อมต่อกับเครื่องพิมพ์ที่บันทึกไว้สำเร็จ:', savedPrinter);
+          setConnectingStatus(`กำลังเชื่อมต่อ ${savedPrinter.name || 'เครื่องพิมพ์'}...`);
+          if (await tryConnect(savedPrinter)) {
+            connectedTo = savedPrinter;
           } else {
             // ✅ ไม่ลบ saved_printer ทิ้ง เครื่องพิมพ์แค่ปิดอยู่หรืออยู่ไกลชั่วคราว
             //    ก็ไม่ควรเสียค่าที่ตั้งไว้ รอบหน้าจะได้ลองเชื่อมตัวเดิมอีก
-            console.log('Auto-connect failed; continuing without printer.');
-            markDisconnected();
+            console.log('Saved printer unavailable; falling back to the first device.');
           }
+        }
+
+        // 2) ยังไม่ได้เชื่อม → ค้นหาแล้วเลือกตัวแรกให้เอง
+        //    หน้างานเลือกตัวแรกสุดทุกครั้งอยู่แล้ว จึงไม่มีเหตุผลให้ต้องกดเลือกเอง
+        if (!connectedTo) {
+          setConnectingStatus('กำลังค้นหาเครื่องพิมพ์...');
+          await scanDevices();
+
+          const firstDevice = await waitForFirstDevice();
+          if (firstDevice) {
+            setConnectingStatus(`กำลังเชื่อมต่อ ${firstDevice.name || 'เครื่องพิมพ์'}...`);
+            if (await tryConnect(firstDevice)) {
+              connectedTo = firstDevice;
+              await saveSetting(SAVED_PRINTER_KEY, JSON.stringify(firstDevice));
+            }
+          } else {
+            console.log('No bluetooth device found to auto-connect.');
+          }
+        }
+
+        if (connectedTo) {
+          setConnectedDevice(connectedTo);
+          markConnected(connectedTo);
+          console.log('เชื่อมต่อเครื่องพิมพ์สำเร็จ:', connectedTo);
         } else {
-          // ยังไม่เคยตั้งเครื่องพิมพ์ — ไม่บล็อกการเข้าใช้งาน
           markDisconnected();
         }
 
@@ -233,12 +279,20 @@ export default function BluetoothSetupScreen() {
     </TouchableOpacity>
   );
 
-  // --- MODIFIED: เพิ่มหน้าจอ Loading ตอนเริ่มต้น ---
+  // --- ✅ กล่องแจ้งสถานะกลางจอระหว่างเชื่อมต่อเครื่องพิมพ์อัตโนมัติ ---
+  //     เดิมเป็น spinner เต็มจอที่บอกแค่ "กำลังตรวจสอบการตั้งค่า" ซึ่งไม่บอกว่ากำลังทำอะไรอยู่
   if (isLoading) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#3498db" />
-        <Text style={styles.loadingText}>กำลังตรวจสอบการตั้งค่า...</Text>
+      <View style={styles.container}>
+        <Modal visible transparent animationType="fade" onRequestClose={() => { }}>
+          <View style={styles.connectingBackdrop}>
+            <View style={styles.connectingCard}>
+              <ActivityIndicator size="large" color="#3498db" />
+              <Text style={styles.connectingTitle}>กำลังเชื่อมต่อเครื่องพิมพ์</Text>
+              <Text style={styles.connectingStatusText}>{connectingStatus}</Text>
+            </View>
+          </View>
+        </Modal>
       </View>
     );
   }
@@ -318,6 +372,37 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     padding: 15,
+  },
+  connectingBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  connectingCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingVertical: 28,
+    paddingHorizontal: 32,
+    alignItems: 'center',
+    minWidth: 260,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  connectingTitle: {
+    marginTop: 16,
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#2c3e50',
+  },
+  connectingStatusText: {
+    marginTop: 6,
+    fontSize: 14,
+    color: '#7f8c8d',
+    textAlign: 'center',
   },
   loadingContainer: {
     flex: 1,
