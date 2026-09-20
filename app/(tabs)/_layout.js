@@ -25,8 +25,11 @@ LogBox.ignoreLogs([
   "`new NativeEventEmitter()` was called with a non-null argument"
 ]);
 
-// ✅ กำหนดเวลา Sync (30 วินาที = 30,000 มิลลิวินาที)
-const SYNC_INTERVAL = 30000;
+// ✅ กำหนดเวลา Sync (10 วินาที)
+//    ใช้จังหวะเดียวกับลูป check-in ที่ยิงทุก 10 วิอยู่แล้ว วิทยุของเครื่องจึงถูกปลุก
+//    ตามรอบเดิม ไม่ได้สร้างจังหวะปลุกใหม่ ต้นทุนแบตจึงแทบไม่เพิ่ม
+//    รอบที่ไม่มีข้อมูลใหม่คือ GET เดียวที่ server ตอบ list ว่าง
+const SYNC_INTERVAL = 10000;
 
 // ✅ Module-level lock เพื่อป้องกัน sync ซ้ำซ้อนข้าม component re-renders
 let globalSyncLock = false;
@@ -118,7 +121,7 @@ function TabLogic() {
       }
     } catch (error) {
       console.log('Data sync failed :>> ', error);
-      // บันทึก error log (throttled — ลูปนี้วนทุก 30 วิ ตอนออฟไลน์จะพ่น error เดิมซ้ำไม่จบ)
+      // บันทึก error log (throttled — ลูปนี้วนทุก 10 วิ ตอนออฟไลน์จะพ่น error เดิมซ้ำไม่จบ)
       insertErrorLogThrottled({
         error_type: 'REGISTER_SYNC_ERROR',
         error_message: error.message || 'Failed to sync registers',
