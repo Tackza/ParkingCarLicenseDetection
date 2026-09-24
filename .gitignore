@@ -54,3 +54,5 @@ yarn-error.*
 
 expo-env.d.ts
 # @end expo-cli
+# สคริปต์ของสกิลสร้าง cache ตอนรัน ไม่ต้องเก็บ
+__pycache__/

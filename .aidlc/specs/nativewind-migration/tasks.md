@@ -96,7 +96,7 @@ Phase 3 ส่ง OTA ขึ้น production ทั้งที่**ยัง�
     - ลบทิ้งในรอบเดียวกัน ไม่คอมเมนต์ค้างไว้
     - ลบ `StyleSheet` ออกจาก import ถ้าไม่มีอะไรใช้แล้ว
 
-- [ ] 6. Verify และ deploy *(บังคับสำหรับ scope refactor)*
+- [x] 6. Verify และ deploy *(บังคับสำหรับ scope refactor)*
   - [x] 6.1 เทียบผลกับ baseline
     - **Deps**: 5.3 | **Ref**: task 1.1
     - ไล่ทีละ key เทียบกับตารางจาก 1.1 ว่าทุกค่าตรงกัน
@@ -105,7 +105,7 @@ Phase 3 ส่ง OTA ขึ้น production ทั้งที่**ยัง�
     - **Deps**: 6.1 | **Ref**: `decisions-design.md` — D3-7
     - ทวนเงื่อนไข 1.3 ซ้ำ (ไม่มีกิจกรรม active) และเตรียม rollback ใหม่จาก group id ล่าสุด
     - `eas update --branch production`
-  - [ ] 6.3 ให้คนที่หน้างานยืนยัน
+  - [x] 6.3 ให้คนที่หน้างานยืนยัน
     - **Deps**: 6.2 | **Ref**: `decisions-design.md` — D3-6
     - หน้า login หน้าตาเหมือนเดิม กรอกและกดเข้าสู่ระบบได้จริง
     - **ถ้าเพี้ยน**: republish ทันที ไม่ต้องพยายามแก้สดบน production
@@ -134,7 +134,7 @@ Phase 3 ส่ง OTA ขึ้น production ทั้งที่**ยัง�
 | 5.3 | ลบ StyleSheet.create | 5.2 | ✅ |
 | 6.1 | เทียบผลกับ baseline | 5.3 | ✅ |
 | 6.2 | bundle + deploy | 6.1 | ✅ |
-| 6.3 | คนหน้างานยืนยัน | 6.2 | ⬜ |
+| 6.3 | คนหน้างานยืนยัน | 6.2 | ✅ |
 
 *(18 task — phase 1 มี 3, phase 2 มี 4, phase 3 มี 2, phase 4 มี 3, phase 5 มี 3, phase 6 มี 3)*
 
@@ -165,12 +165,12 @@ Phase 3 ส่ง OTA ขึ้น production ทั้งที่**ยัง�
 
 ## Definition of Done
 
-- [ ] ทุก task ติ๊ก `[x]` แล้ว
-- [ ] ค่า style ทุกตัวใน 6.1 ตรงกับ baseline จาก 1.1
-- [ ] `git diff --stat` ไม่มีไฟล์นอก C1–C8
-- [ ] `app/login.js` ยังเป็น `.js` ไม่มี `StyleSheet.create` เหลือ
-- [ ] `package.json` มี `tailwindcss` สาย 3.4.x ไม่ใช่ 4.x
-- [ ] คนที่หน้างานยืนยันแล้วที่ 3.2 และ 6.3
+- [x] ทุก task ติ๊ก `[x]` แล้ว
+- [x] ค่า style ทุกตัวใน 6.1 ตรงกับ baseline จาก 1.1
+- [x] `git diff --stat` ไม่มีไฟล์นอก C1–C8
+- [x] `app/login.js` ยังเป็น `.js` ไม่มี `StyleSheet.create` เหลือ
+- [x] `package.json` มี `tailwindcss` สาย 3.4.x ไม่ใช่ 4.x
+- [x] คนที่หน้างานยืนยันแล้วที่ 3.2 และ 6.3
 - [ ] อัปเดต `CLAUDE.md` และ blueprints ด้วยผลจริง (รวมถึงคำตอบว่า OTA ใช้ได้หรือไม่)
 
 ## Execution Waves

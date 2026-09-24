@@ -149,3 +149,17 @@
 **Action**: task 6.2 implemented (standard mode)
 **Artifacts**: EAS update group `be660547-5f27-41fc-9bc3-60cf8b6787f5` (commit `d4a44d5`)
 **Outcome**: pass (publish สำเร็จ), 95% overall progress — ยืนยัน Group ID สดก่อน publish ได้ 70ce04e7 ซึ่งกลายเป็นจุดย้อนกลับใหม่ (ดีกว่า 55bbdb85 เพราะพิสูจน์แล้วว่าทำงานได้และมี toolchain อยู่แล้ว การย้อนกลับจึงถอนเฉพาะ UI) เหลือ task 6.3 ที่ต้องให้คนหน้างานยืนยัน
+
+### [2026-09-24T06:16:04Z] Wave Complete: 6 — Verify และ deploy
+
+**Phase**: implementation
+**Action**: task 6.3 verified by on-site device; wave 6 complete; all 19 tasks done
+**Artifacts**: EAS update group `be660547-5f27-41fc-9bc3-60cf8b6787f5`
+**Outcome**: pass, 100% — คนหน้างานยืนยันว่าหน้า login หน้าตาเหมือนเดิมและใช้งานได้จริง รวมถึงเงาของกล่องฟอร์มซึ่งเป็นจุดที่ตรวจด้วยเครื่องมือไม่ได้ เป้าหมาย "refactor โดยไม่เปลี่ยนสิ่งที่ผู้ใช้เห็น" สำเร็จ
+
+### [2026-09-24T06:55:49Z] Rollback + restore
+
+**Phase**: implementation
+**Action**: production rollback แล้ว restore
+**Artifacts**: EAS groups `cd01284b` (ย้อนกลับ) → `ceaab146` (กู้คืน)
+**Outcome**: ผู้ใช้ย้อนกลับเพราะเข้าใจว่าหน้า login ที่ไม่เปลี่ยนคือความผิดพลาด ซึ่งจริงๆ เป็นเกณฑ์ความสำเร็จของ scope refactor หลังอธิบายแล้วจึงกู้ `be660547` กลับเป็น `ceaab146` และตัดสินใจเริ่มงานออกแบบหน้า login ใหม่เป็น feature แยก
