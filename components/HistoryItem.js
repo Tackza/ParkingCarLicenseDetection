@@ -8,7 +8,7 @@ import { explainError, formatPassengerInfo, syncStateOf } from '../utils/checkIn
 const ICON_SEARCH = '#1a6296';   // primary-ink
 const ICON_DANGER = '#8f2020';   // danger-ink
 
-const HistoryItem = ({ item, index, numberPlate, openImageModal, onQuickSearch, onOpenDetail }) => {
+const HistoryItem = ({ item, openImageModal, onQuickSearch, onOpenDetail }) => {
   if (!item) return null;
 
   const passengerText = formatPassengerInfo(item.passenger);
@@ -44,6 +44,8 @@ const HistoryItem = ({ item, index, numberPlate, openImageModal, onQuickSearch, 
               <Image
                 source={{ uri: item.photo_path }}
                 resizeMode="cover"
+                // ไม่เฟดรูปเข้า (ค่าเริ่มต้นบน Android 300 ms) — ตอนปัดเร็วการ์ดใหม่เข้าจอถี่ เฟดทุกใบเปลืองเปล่าๆ
+                fadeDuration={0}
                 className="h-[66px] w-24 rounded-[7px] border border-border bg-chip"
               />
             ) : (
