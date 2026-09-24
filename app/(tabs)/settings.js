@@ -1032,7 +1032,7 @@ export default function SettingsScreen() {
         {/* ✅ ข้อมูลมาจาก registers ที่ sync มา ไม่ใช่ check_ins ของเครื่องนี้
             จึงเห็นการสแกนของเครื่องอื่นด้วย แต่ก็ค้างได้ถ้าเครื่องออฟไลน์ */}
         <Text className="px-[14px] pb-1 pt-[10px] text-[12px] text-text-subtle">
-          อัปเดตตามรอบ sync ใบ C7 (ทุก 30 วินาที) · รวมการสแกนจากทุกเครื่อง
+          อัปเดตตามรอบ sync ใบ C7 (ทุก 10 วินาที) · รวมการสแกนจากทุกเครื่อง
         </Text>
 
         {remainingLoading ? (
