@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  ⛔ ห้ามเขียน base style เพิ่มในไฟล์นี้
+
+  NativeWind แปลง base layer เป็น style ที่ผลกับ <View>/<Text> ทุกตัวในแอพ
+  รวมถึง 21 ไฟล์ที่ยังไม่ได้แปลงและยังใช้ StyleSheet อยู่ และรวมถึง
+  components/Receipt.js กับ receipt ใน passenger_count.js ซึ่งถูก captureRef
+  เป็นภาพไปพิมพ์ลงกระดาษจริง — layout เพี้ยนแม้เล็กน้อยแปลว่าสลิปพิมพ์ผิด
+
+  ถ้าต้องการ style ร่วม ให้นิยามเป็น token ใน tailwind.config.js แทน
+*/

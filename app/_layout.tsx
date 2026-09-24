@@ -1,3 +1,7 @@
+// ต้องอยู่บนสุดก่อน import อื่น — metro ใช้ไฟล์นี้เป็น input ของ NativeWind
+// ถ้าไม่ import ที่ไหนเลย utility class จะไม่ถูกฉีดเข้า bundle และ className จะไม่มีผล
+import "../global.css";
+
 import { EnvironmentProvider } from "@/contexts/EnvironmentContext";
 import { SyncProvider } from "@/contexts/SyncContext";
 import { DefaultTheme, ThemeProvider } from "@react-navigation/native";
