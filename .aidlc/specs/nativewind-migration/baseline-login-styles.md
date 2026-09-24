@@ -24,11 +24,11 @@
 | 6 | `subtitle` | `fontSize: 16`<br>`fontWeight: 'bold'`<br>`color: '#7f8c8d'` | *(ไม่แปลง — dead style)* | — |
 | 7 | `formContainer` | `backgroundColor: '#fff'`<br>`borderRadius: 20`<br>`padding: 25`<br>`shadowColor: '#000'`<br>`shadowOffset: {0, 2}`<br>`shadowOpacity: 0.1`<br>`shadowRadius: 8`<br>`elevation: 5` | `bg-surface rounded-[20px] p-[25px]` + **เงาแยก** | ⚠️ ดูด้านล่าง |
 | 8 | `inputContainer` | `marginBottom: 20` | `mb-5` | ✅ |
-| 9 | `label` | `fontSize: 14`<br>`fontWeight: '600'`<br>`color: '#2c3e50'`<br>`marginBottom: 8` | `text-sm font-semibold text-text mb-2` | ✅ 14px, 8px ตรง scale |
-| 10 | `input` | `backgroundColor: '#f8f9fa'`<br>`borderRadius: 12`<br>`padding: 15`<br>`fontSize: 16`<br>`borderWidth: 1`<br>`borderColor: '#e9ecef'` | `bg-input rounded-xl p-[15px] text-base border border-border` | ✅ 12px = `rounded-xl` |
+| 9 | `label` | `fontSize: 14`<br>`fontWeight: '600'`<br>`color: '#2c3e50'`<br>`marginBottom: 8` | `text-[14px] font-semibold text-text mb-2` | ✅ *(แก้จาก `text-sm` — ดูหมายเหตุท้ายไฟล์)* |
+| 10 | `input` | `backgroundColor: '#f8f9fa'`<br>`borderRadius: 12`<br>`padding: 15`<br>`fontSize: 16`<br>`borderWidth: 1`<br>`borderColor: '#e9ecef'` | `bg-input rounded-xl p-[15px] text-[16px] border border-border` | ✅ *(แก้จาก `text-base`)* |
 | 11 | `loginButton` | `backgroundColor: '#3498db'`<br>`borderRadius: 12`<br>`padding: 16`<br>`alignItems: 'center'`<br>`marginTop: 10` | `bg-primary rounded-xl p-4 items-center mt-2.5` | ✅ 16px = `p-4`, 10px = `mt-2.5` |
 | 12 | `loginButtonDisabled` | `backgroundColor: '#95a5a6'` | `bg-primary-muted` | ✅ |
-| 13 | `loginButtonText` | `color: '#fff'`<br>`fontSize: 16`<br>`fontWeight: '600'` | `text-surface text-base font-semibold` | ✅ |
+| 13 | `loginButtonText` | `color: '#fff'`<br>`fontSize: 16`<br>`fontWeight: '600'` | `text-surface text-[16px] font-semibold` | ✅ *(แก้จาก `text-base`)* |
 
 ## ⚠️ เงาของ `formContainer` — ความเสี่ยงที่ระบุไว้ตั้งแต่ design
 
@@ -68,3 +68,46 @@ shadowOpacity: 0.1, shadowRadius: 8, elevation: 5
 - ทุกแถวที่ 1–5 และ 7–13 ต้องให้ผลลัพธ์เท่าค่าเดิมทุก property
 - แถวที่ 6 (`subtitle`) ต้องหายไปจากไฟล์ ไม่ใช่ถูกแปลง
 - เงาของ `formContainer` ต้องดูเหมือนเดิมด้วยตา
+
+---
+
+## ⚠️ แก้ไขเอกสารฉบับนี้ — พบตอน task 6.1 (2026-09-24)
+
+ตารางด้านบนเดิมทำเครื่องหมาย "✅ ตรงเป๊ะ" ให้ `mb-5`, `p-4`, `mt-2.5`, `rounded-xl`, `mb-2`, `text-sm`, `text-base`
+**ซึ่งผิด** เพราะคิดบนสมมติฐานว่า 1rem = 16px แบบเว็บ
+
+### ปัญหาที่ 1 — NativeWind ใช้ rem = 14 ไม่ใช่ 16
+
+`withNativeWind` มีค่า default `inlineRem = 14` (อิงขนาดฟอนต์เริ่มต้นของ React Native)
+แต่ scale ของ Tailwind ออกแบบบนฐาน 16 ผลคือทุก class ที่ใช้ rem หดลง 12.5% เงียบๆ
+
+| class | rem=14 (ค่า default) | rem=16 (หลังแก้) | ค่าเดิมที่ต้องได้ |
+|---|---|---|---|
+| `mb-5` | 17.5 | **20** | 20 |
+| `mb-2` | 7 | **8** | 8 |
+| `p-4` | 14 | **16** | 16 |
+| `mt-2.5` | 8.75 | **10** | 10 |
+| `rounded-xl` | 10.5 | **12** | 12 |
+
+**แก้แล้ว**: ตั้ง `inlineRem: 16` ใน `metro.config.js`
+ยืนยันด้วยการเรียก `react-native-css-interop` โดยตรงเทียบสองค่า ไม่ใช่การอนุมาน
+
+### ปัญหาที่ 2 — `text-*` แถม line-height ที่ของเดิมไม่มี
+
+```
+.text-sm     { font-size: 0.875rem; line-height: 1.25rem; }   ← เพิ่ม line-height
+.text-base   { font-size: 1rem;     line-height: 1.5rem;  }   ← เพิ่ม line-height
+.text-[16px] { font-size: 16px; }                             ← ไม่เพิ่ม
+```
+
+ของเดิมตั้งแค่ `fontSize` ไม่เคยตั้ง `lineHeight` — RN ใช้ค่าจากฟอนต์เอง
+การใส่ `text-sm`/`text-base` จึงบังคับระยะบรรทัดที่ไม่เคยมี
+
+**แก้แล้ว**: ใช้ `text-[14px]` / `text-[16px]` แทน — arbitrary font size ไม่แถม line-height
+`inlineRem: 16` แก้ปัญหานี้ไม่ได้ เป็นคนละเรื่องกัน
+
+### บทเรียนสำหรับการแปลงอีก 21 ไฟล์
+
+- หน่วย spacing/radius ใช้ scale ปกติได้แล้ว (`mb-5`, `p-4`, `rounded-xl`) เพราะ `inlineRem: 16` แก้ที่ต้นเหตุ
+- **ขนาดฟอนต์ต้องใช้ arbitrary เสมอ** (`text-[14px]`) ตราบใดที่ของเดิมไม่ได้ตั้ง `lineHeight`
+- อย่าเชื่อว่า class ตรง scale แปลว่าตรงค่าเดิม — ต้องวัด

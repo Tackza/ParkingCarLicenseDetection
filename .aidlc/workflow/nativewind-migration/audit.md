@@ -129,3 +129,16 @@
 **Action**: task 4.1, 4.2, 4.3 implemented; wave 4 complete
 **Artifacts**: `tailwind.config.js`
 **Outcome**: pass, 68% overall progress — เติม semantic token 11 ตัว (10 ตามตาราง design + input alias) ยืนยันด้วย resolveConfig ว่าค่าตรง hex เดิมทุกตัวและสีมาตรฐานของ Tailwind ไม่ถูกทับ `nativewind-env.d.ts` ถูกสร้างอัตโนมัติและ commit ไปแล้วที่ 87eeb0e จึงไม่ต้องเขียนเอง bundle ผ่านและได้ **hash เดิมเป๊ะ** (entry-cf9783a7) เพราะยังไม่มีไฟล์ไหนใช้ class เหล่านี้ Tailwind จึง purge ทิ้ง — ยืนยันว่า wave นี้ไม่มีผลต่อ runtime
+
+### [2026-09-24T05:43:09Z] Wave Complete: 5 + Task 6.1 — แปลง UI และ verify
+
+**Phase**: implementation
+**Action**: task 5.1, 5.2, 5.3, 6.1 implemented
+**Artifacts**: `app/login.js`, `metro.config.js`, `baseline-login-styles.md`
+**Outcome**: pass หลังแก้ 2 ข้อบกพร่อง, 89% overall progress
+
+**task 6.1 จับข้อผิดพลาดได้ 2 ข้อ ก่อนถึง production**:
+1. เอกสาร baseline ที่ผมเขียนเองตอน task 1.1 ทำเครื่องหมาย "ตรงเป๊ะ" ให้ class ที่ใช้หน่วย rem โดยสมมติว่า 1rem = 16px แต่ NativeWind ตั้ง `inlineRem = 14` ทำให้ทุกค่าหดลง 12.5% (mb-5 ได้ 17.5 แทน 20, p-4 ได้ 14 แทน 16) → ผู้ใช้เลือกตัวเลือก A: ตั้ง `inlineRem: 16` ยืนยันด้วยการเรียก react-native-css-interop โดยตรงเทียบสองค่า
+2. `text-sm`/`text-base` แถม line-height ที่ของเดิมไม่เคยตั้ง → เปลี่ยนเป็น `text-[14px]`/`text-[16px]`
+
+แก้เอกสาร baseline ให้ตรงความจริงแล้ว พร้อมบทเรียนสำหรับการแปลงอีก 21 ไฟล์ `app/login.js` เหลือ 163 บรรทัด (จาก 219) ไม่มี StyleSheet ยังเป็น .js diff ไม่มีไฟล์นอกขอบเขต

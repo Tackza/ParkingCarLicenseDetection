@@ -81,23 +81,23 @@ Phase 3 ส่ง OTA ขึ้น production ทั้งที่**ยัง�
   - [x] 4.3 ยืนยันว่า bundle ยังผ่านหลังเพิ่ม token
     - **Deps**: 4.2 | **Ref**: `design.md` — Implementation
 
-- [ ] 5. แปลง UI — pilot ที่ `login.js`
-  - [ ] 5.1 แปลง 13 style key เป็น `className`
+- [x] 5. แปลง UI — pilot ที่ `login.js`
+  - [x] 5.1 แปลง 13 style key เป็น `className`
     - **Deps**: 4.3 | **Ref**: `design.md` — C7 (D3-4)
     - เทียบกับตารางจาก 1.1 ทีละ key ห้ามข้าม
     - ค่าที่ไม่มีใน Tailwind scale ใช้ arbitrary value (`text-[26px]`, `rounded-[20px]`) — **ห้ามปัดให้เข้า scale** เพราะเป้าหมายคือหน้าตาต้องไม่เปลี่ยน
     - **ห้ามแปลงไฟล์เป็น TypeScript** — ต้องยังเป็น `.js`
-  - [ ] 5.2 จัดการเงาของกล่องฟอร์ม
+  - [x] 5.2 จัดการเงาของกล่องฟอร์ม
     - **Deps**: 5.1 | **Ref**: `design.md` — ความเสี่ยงทางเทคนิค
     - `shadowColor/Offset/Opacity/Radius` + `elevation: 5` ไม่ map ตรงกับ `shadow-*`
     - ถ้าเทียบแล้วเพี้ยน ใช้ `style={{...}}` inline เฉพาะเงา — ยังถือว่าทำตาม D3-5 เพราะ `StyleSheet.create` ถูกลบแล้ว
-  - [ ] 5.3 ลบ `StyleSheet.create` ออกจาก `login.js`
+  - [x] 5.3 ลบ `StyleSheet.create` ออกจาก `login.js`
     - **Deps**: 5.2 | **Ref**: `decisions-design.md` — D3-5
     - ลบทิ้งในรอบเดียวกัน ไม่คอมเมนต์ค้างไว้
     - ลบ `StyleSheet` ออกจาก import ถ้าไม่มีอะไรใช้แล้ว
 
 - [ ] 6. Verify และ deploy *(บังคับสำหรับ scope refactor)*
-  - [ ] 6.1 เทียบผลกับ baseline
+  - [x] 6.1 เทียบผลกับ baseline
     - **Deps**: 5.3 | **Ref**: task 1.1
     - ไล่ทีละ key เทียบกับตารางจาก 1.1 ว่าทุกค่าตรงกัน
     - ตรวจ `git diff --stat` ว่าไม่มีไฟล์นอก C1–C8 ถูกแตะ
@@ -129,10 +129,10 @@ Phase 3 ส่ง OTA ขึ้น production ทั้งที่**ยัง�
 | 4.1 | เติม token เข้า tailwind.config.js | 3.2 | ✅ |
 | 4.2 | ยืนยัน nativewind-env.d.ts ถูกสร้างเอง | 4.1 | ✅ |
 | 4.3 | ยืนยัน bundle หลังเพิ่ม token | 4.2 | ✅ |
-| 5.1 | แปลง 13 style key เป็น className | 4.3 | ⬜ |
-| 5.2 | จัดการเงากล่องฟอร์ม | 5.1 | ⬜ |
-| 5.3 | ลบ StyleSheet.create | 5.2 | ⬜ |
-| 6.1 | เทียบผลกับ baseline | 5.3 | ⬜ |
+| 5.1 | แปลง 12 style key เป็น className | 4.3 | ✅ |
+| 5.2 | จัดการเงากล่องฟอร์ม | 5.1 | ✅ |
+| 5.3 | ลบ StyleSheet.create | 5.2 | ✅ |
+| 6.1 | เทียบผลกับ baseline | 5.3 | ✅ |
 | 6.2 | bundle + deploy | 6.1 | ⬜ |
 | 6.3 | คนหน้างานยืนยัน | 6.2 | ⬜ |
 
