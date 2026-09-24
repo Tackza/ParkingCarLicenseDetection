@@ -1,0 +1,75 @@
+version: "1.0.0"
+feature: "nativewind-migration"
+language: "th"
+platform: "claude-code"
+created: "2026-09-24T03:57:22Z"
+updated: "2026-09-24T05:18:51Z"
+state:
+  status: "active"
+  scope: "refactor"
+  sharedPhases: ["context", "design", "tasks"]
+  mode: null
+  foundationSkipped: false
+  implementationMode: "standard"
+  quickPath: false
+artifacts:
+  context:
+    status: "approved"
+    timestamp: "2026-09-24T03:57:22Z"
+    files: [context.md]
+  design:
+    status: "approved"
+    timestamp: "2026-09-24T04:20:34Z"
+    files: [design.md]
+  tasks:
+    status: "approved"
+    timestamp: "2026-09-24T04:31:40Z"
+    files: [tasks.md]
+implementation:
+  totalTasks: 19
+  completedTasks: 8
+  currentTask: "3.1"
+  currentWave: 3
+context-summary:
+  type: "Brownfield"
+  scope: "refactor"
+  stack: "JavaScript / Expo SDK 51 / React Native 0.74 / expo-sqlite"
+  architecture: "Expo Router file-based + React Context, local-first with two background sync loops"
+  feature: "ย้ายการเขียน style จาก StyleSheet.create ไปเป็น NativeWind (Tailwind syntax) โดยนำร่องที่ app/login.js"
+  impact: "Cross-cutting"
+  complexity: "Medium"
+  teamSize: null
+  recommendations: { personas: false, units: false, nfr: false }
+decisions:
+  design:
+    nativewindVersion: "v4"
+    colorStrategy: "semantic tokens mapped from existing hex (no visual change)"
+    tokenLocation: "tailwind.config.js only"
+    pilotConversion: "full className in app/login.js, remove StyleSheet.create"
+    oldStyles: "delete in same commit"
+    verification: "bundle passes + one on-site device confirms"
+    deploy: "OTA straight to production, rollback prepared"
+    correctness: "no new tests"
+    tsTypes: "add nativewind-env.d.ts"
+    darkMode: "not now"
+  tasks:
+    breakdown: "risk-ordered (toolchain before UI)"
+    granularity: "single-concern"
+    priority: "toolchain -> OTA proof -> tokens -> UI"
+    checkpoints: "stop after every wave"
+    install: "npx expo install with exact versions"
+    tests: "none added (justified: single-screen scope, wave 1 proves toolchain before UI)"
+    parallelism: "sequential only"
+    commits: "one per wave"
+versions:
+  resolved_at: "2026-09-24T04:20:34Z"
+  source: "npm-registry"
+  map:
+    nativewind: "4.2.7"
+    tailwindcss: "3.4.19"
+steering:
+  updatedBy:
+    product: [context]
+    tech: [context, design]
+    structure: [context, design]
+units: []
