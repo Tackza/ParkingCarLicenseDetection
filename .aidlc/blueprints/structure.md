@@ -27,7 +27,7 @@
 | File | Purpose | Notes |
 |---|---|---|
 | `CLAUDE.md` (root) | เอกสารสถาปัตยกรรมหลัก | ละเอียดมาก ดูแลต่อเนื่อง — อ่านก่อนแก้อะไรก็ตาม |
-| `constants/Database.js` | schema + migration + ทุก query | monolith; migration gate ด้วย `PRAGMA user_version` ปัจจุบัน v8 |
+| `constants/Database.js` | schema + migration + ทุก query | monolith; migration gate ด้วย `PRAGMA user_version` ปัจจุบัน v9 |
 | `app.config.js` | Expo config แบบ dynamic | อ่าน `APP_VARIANT` สลับชื่อแอพ/bundle id |
 | `eas.json` | โปรไฟล์ build | `development` / `preview` / `production` |
 | `babel.config.js` | มีแค่ `babel-preset-expo` | **จุดที่ NativeWind ต้องเพิ่ม preset** |

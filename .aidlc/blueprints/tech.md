@@ -19,7 +19,7 @@
 ## Infrastructure
 - **Cloud provider**: ไม่มีของตัวเอง
 - **Compute**: SUNMI V3 (POS มือถือ Android 13, จอ 360×800 dp) ที่หน้างาน — ไม่ใช่แท็บเล็ต
-- **Database**: SQLite ในเครื่อง (`LicensePlateReader.db`, WAL mode), `PRAGMA user_version` ปัจจุบัน **v8**
+- **Database**: SQLite ในเครื่อง (`LicensePlateReader.db`, WAL mode), `PRAGMA user_version` ปัจจุบัน **v9**
 - **IaC**: ไม่มี
 
 ## Patterns & Conventions

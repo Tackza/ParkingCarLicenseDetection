@@ -303,6 +303,25 @@ export const setupDatabase = async () => {
       }
     }
 
+    // ✅ Migration to version 9: index สำหรับรายการในหน้าหลัก
+    // getScanHistory กรองด้วย project_id หรือ activity_id แล้วเรียงตาม created_at แต่ไม่เคยมี index
+    // ของคอลัมน์เหล่านี้ ทุกรอบรีเฟรช (5 วินาที) SQLite จึงสแกน check_ins ทั้งตาราง — ของทุกกิจกรรม
+    // ที่เคยมี เพราะตารางนี้ไม่เคยถูกลบ — แล้วเรียงใหม่ใน temp b-tree ยิ่งใช้นานยิ่งช้า
+    // มี index แล้วจะอ่านเรียงตามลำดับได้ตรงๆ และหยุดที่ LIMIT (ยืนยันด้วย EXPLAIN QUERY PLAN)
+    if (user_version < 9) {
+      console.log("Migrating to version 9: Indexing check_ins for the history list...");
+      try {
+        await db.execAsync(`
+          CREATE INDEX IF NOT EXISTS ix_checkins_project_created ON check_ins(project_id, created_at);
+          CREATE INDEX IF NOT EXISTS ix_checkins_activity_created ON check_ins(activity_id, created_at);
+        `);
+        user_version = 9;
+      } catch (e) {
+        console.error('❌ Error during version 9 migration:', e);
+        throw e;
+      }
+    }
+
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
     // This handles cases where the database was created before version tracking was added
     try {
@@ -968,7 +987,19 @@ export const getLastRegisterSyncState = async (projectId) => {
 
 // ใน constants/Database.js
 
-export const getScanHistory = async (id, searchQuery = '') => {
+/**
+ * รายการลงทะเบียนสำหรับหน้าหลัก เรียงใหม่สุดก่อน ทีละหน้า
+ *
+ * เดิมตัดไว้ LIMIT 5 ตายตัวเมื่อไม่ได้ค้นหา และไม่จำกัดเลยเมื่อค้นหา — โหลดเยอะแล้วเครื่องช้า
+ * ตอนนี้ผู้เรียกบอกจำนวนเอง (หน้าหลักเพิ่มทีละหน้าเมื่อเลื่อนใกล้ท้ายลิสต์) และจำกัดทั้งสองกรณี
+ * id DESC เป็นตัวตัดสินเมื่อ created_at เท่ากัน (ละเอียดแค่วินาที) ไม่งั้นแถวสลับที่กันระหว่างรอบรีเฟรช
+ * index v9 ครอบคลุมทั้ง ORDER BY นี้ เพราะ rowid ต่อท้ายทุก index อยู่แล้ว
+ *
+ * @param {number} id - ค่าจาก getScopeId() คู่กับคอลัมน์จาก getScopeField()
+ * @param {string} searchQuery - ส่วนหนึ่งของทะเบียน ว่าง = ทั้งหมด
+ * @param {number} limit - จำนวนแถวสูงสุด
+ */
+export const getScanHistory = async (id, searchQuery = '', limit = 30) => {
   if (!id) {
     console.log("getScanHistory ถูกเรียกใช้โดยไม่มี id.");
     return [];
@@ -986,10 +1017,8 @@ export const getScanHistory = async (id, searchQuery = '') => {
       sql += ' AND plate_no LIKE ?';
       params.push(`%${normalizedQuery}%`);
     }
-    sql += ' ORDER BY created_at DESC';
-    if (normalizedQuery === '') {
-      sql += ' LIMIT 5';
-    }
+    sql += ' ORDER BY created_at DESC, id DESC LIMIT ?';
+    params.push(limit);
     const history = await db.getAllAsync(sql, params);
     return history;
   } catch (error) {

@@ -1,6 +1,7 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   BackHandler,
   FlatList,
@@ -39,11 +40,33 @@ const ICON_ON_FILL = '#ffffff'; // บนพื้นสีทึบ
 const TINT_PRIMARY = '#217cba'; // primary
 
 
-// เทียบเฉพาะฟิลด์ที่เปลี่ยนได้จากการ sync เพื่อไม่ต้อง setState ทุกรอบ
-const historySignature = (rows) =>
-  Array.isArray(rows)
-    ? rows.map(r => `${r.id}:${r.sync_status}:${r.printed}:${r.error_msg || ''}`).join('|')
-    : '';
+// ✅ โหลดทีละหน้า แล้วเพิ่มอีกหน้าเมื่อเลื่อนใกล้ท้ายลิสต์ (เดิมตัดไว้ 5 แถวตายตัว)
+//    30 การ์ดยาวราว 6 จอบน V3 — พอให้ปัดดูต่อเนื่องโดยไม่ต้องรอโหลดบ่อย
+const HISTORY_PAGE_SIZE = 30;
+
+// ฟิลด์ที่การ์ดแสดง หรือที่เปลี่ยนได้หลังบันทึก (sync_status, printed, error_msg)
+const rowSignature = (r) =>
+  `${r.id}|${r.sync_status}|${r.printed}|${r.error_msg || ''}|${r.plate_no}|${r.plate_province}|` +
+  `${r.bus_type}|${r.sticker_no || ''}|${r.passenger}|${r.photo_path || ''}|${r.register_id || ''}`;
+
+// ✅ รวมผลรอบใหม่เข้ากับของเดิม — แถวที่ไม่เปลี่ยนคืน object ตัวเดิม
+//    เดิมถ้ามีแถวไหนเปลี่ยนแม้แถวเดียว (sync เปลี่ยนสถานะทุก 10 วินาที) จะได้ array ใหม่ที่ทุกแถว
+//    เป็น object ใหม่ React.memo ของการ์ดจึงข้ามไม่ได้สักใบ ทุกรอบรีเฟรชการ์ดทุกใบที่ mount อยู่ render ใหม่หมด
+//    — นี่คือเหตุที่โหลดเยอะแล้วเครื่องช้า ไม่ใช่จำนวนแถวเอง
+//    ถ้าไม่มีอะไรเปลี่ยนเลยคืน prev ตัวเดิม FlatList จะไม่ทำอะไรในรอบนั้น
+const mergeHistory = (prev, next) => {
+  const prevById = new Map(prev.map((r) => [r.id, r]));
+  let changed = prev.length !== next.length;
+  const merged = next.map((row, i) => {
+    const old = prevById.get(row.id);
+    const kept = old && rowSignature(old) === rowSignature(row) ? old : row;
+    if (kept !== prev[i]) changed = true;
+    return kept;
+  });
+  return changed ? merged : prev;
+};
+
+const keyExtractor = (item) => String(item.id);
 
 export default function HistoryScreen() {
   const [history, setHistory] = useState([]);
@@ -63,10 +86,16 @@ export default function HistoryScreen() {
   const [searchPrefill, setSearchPrefill] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [machineCode, setMachineCode] = useState(null);
+  // ขนาดหน้าต่างของลิสต์ — มี ref คู่ไว้ให้ timer รีเฟรชอ่านค่าล่าสุดโดยไม่ต้องตั้ง timer ใหม่
+  const [listLimit, setListLimit] = useState(HISTORY_PAGE_SIZE);
+  const listLimitRef = useRef(HISTORY_PAGE_SIZE);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
   const { user } = useAuth();
 
   // ✅ แว่นขยายบนการ์ด → เปิดค้นหาบนเซิร์ฟเวอร์พร้อมเติมทะเบียนและค้นหาให้เลย
-  const handleQuickSearch = (plateNo, province) => {
+  //    useCallback เพราะส่งเข้าการ์ดทุกใบ — ฟังก์ชันใหม่ทุก render ทำให้ React.memo ของการ์ดไม่มีผล
+  const handleQuickSearch = useCallback((plateNo, province) => {
     if (!plateNo || !province) {
       Alert.alert('ข้อมูลไม่ครบ', 'กรุณาตรวจสอบข้อมูลทะเบียนและจังหวัด');
       return;
@@ -74,7 +103,7 @@ export default function HistoryScreen() {
     // check-in เก็บ กทม. แบบย่อ แต่ dropdown/THAI_PROVINCES ใช้ชื่อเต็ม จึงต้องแปลงให้ตรงกัน
     setSearchPrefill({ plate: plateNo, province: fullProvince(province) });
     setSearchModalVisible(true);
-  };
+  }, []);
 
   // ✅ แตะการ์ด → หน้ารายละเอียด (app/checkin-detail.js)
   //    push ได้เพราะเป็นการซ้อนหน้าใหม่บน stack จริงๆ — ต่างจากการกลับไปแท็บ ซึ่งต้องใช้ navigate
@@ -132,7 +161,9 @@ export default function HistoryScreen() {
   useEffect(() => {
     if (activeProject) {
       console.log("Project changed, loading full history...");
-      loadHistory(''); // 👈 โหลดทั้งหมด (ล้าง searchQuery)
+      listLimitRef.current = HISTORY_PAGE_SIZE; // เริ่มจากหน้าแรกใหม่
+      setListLimit(HISTORY_PAGE_SIZE);
+      loadHistory('', HISTORY_PAGE_SIZE); // 👈 โหลดหน้าแรก (ล้าง searchQuery)
       setSearchQuery(''); // 👈 เคลียร์ช่องค้นหาด้วย
     }
   }, [activeProject]);
@@ -142,9 +173,11 @@ export default function HistoryScreen() {
   //    (และถ้าใส่ searchQuery เป็น dependency ตรงๆ timer จะถูกตั้งใหม่ทุกครั้งที่พิมพ์)
   const loadHistoryRef = useRef(null);
   const searchQueryRef = useRef('');
+  const historyLenRef = useRef(0);
   useEffect(() => {
     loadHistoryRef.current = loadHistory;
     searchQueryRef.current = searchQuery;
+    historyLenRef.current = history.length;
   });
 
   // ✅ รหัสเครื่องตั้งได้จากหน้า Settings จึงอ่านใหม่ทุกครั้งที่กลับเข้าหน้านี้
@@ -163,7 +196,8 @@ export default function HistoryScreen() {
   useFocusEffect(
     useCallback(() => {
       const timer = setInterval(() => {
-        loadHistoryRef.current?.(searchQueryRef.current || '');
+        // อ่านใหม่เฉพาะหน้าต่างที่โหลดไว้ ไม่ใช่ทั้งตาราง
+        loadHistoryRef.current?.(searchQueryRef.current || '', listLimitRef.current);
       }, HISTORY_REFRESH_INTERVAL);
       return () => clearInterval(timer);
     }, [])
@@ -203,7 +237,7 @@ export default function HistoryScreen() {
   //   }
   // }, [activeProject, searchQuery]);
 
-  const loadHistory = async (query) => {
+  const loadHistory = async (query, limit = listLimitRef.current) => {
     if (!activeProject) {
       setHistory([]);
       return;
@@ -213,9 +247,8 @@ export default function HistoryScreen() {
       // ใช้ getScopeId เพื่อให้ "ค่า" ตรงกับ "คอลัมน์" ที่ getScanHistory เลือกเสมอ
       // และเพื่อให้ถอยไป project_id เองเมื่อกิจกรรมนั้นไม่มี activity_id
       const id = await getScopeId(activeProject);
-      const data = await getScanHistory(id, query);
-      // ✅ คงอ้างอิง array เดิมไว้ถ้าข้อมูลไม่เปลี่ยน เพื่อให้ FlatList ไม่ re-render ทุกรอบรีเฟรช
-      setHistory(prev => (historySignature(prev) === historySignature(data) ? prev : data));
+      const data = await getScanHistory(id, query, limit);
+      setHistory(prev => mergeHistory(prev, data));
     } catch (error) {
       console.error('Error loading history:', error);
 
@@ -238,32 +271,62 @@ export default function HistoryScreen() {
 
 
 
-  const openImageModal = (uri) => {
+  const openImageModal = useCallback((uri) => {
     setSelectedImage(uri);
     setModalVisible(true);
-  };
+  }, []);
 
-  const numberPlate = (index) => {
-    return (history.length - index)
-  }
+  // ✅ เลื่อนใกล้ท้ายลิสต์ → ขยายหน้าต่างอีกหนึ่งหน้า
+  //    รอบล่าสุดได้แถวน้อยกว่าหน้าต่าง = ไม่มีเหลือแล้ว ต้องกันไว้ เพราะ onEndReached ยิงซ้ำได้
+  //    (รวมถึงตอนลิสต์สั้นกว่าจอ) ไม่งั้นหน้าต่างขยายไปเรื่อยๆ โดยไม่มีข้อมูลเพิ่ม
+  const handleLoadMore = useCallback(async () => {
+    if (loadingMoreRef.current || historyLenRef.current < listLimitRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    const next = listLimitRef.current + HISTORY_PAGE_SIZE;
+    listLimitRef.current = next;
+    setListLimit(next);
+    try {
+      await loadHistoryRef.current?.(searchQueryRef.current || '', next);
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, []);
 
 
   // ค้นหาในเครื่อง — ช่องนี้ผูกกับ searchQuery ที่มีอยู่แล้วแต่ไม่มี UI มาก่อน
   //
-  // หน่วง 250 มิลลิวินาทีก่อนยิง query จริง เพราะ getScanHistory ตัด LIMIT ทิ้ง
-  // เมื่อมีคำค้น การพิมพ์ตัวแรก (เช่น "ก") จึงดึงได้ทั้งวันและ re-render ทั้งลิสต์
-  // — ถ้ายิงทุกตัวอักษรบนเครื่อง V3 จะรู้สึกหน่วง
+  // หน่วง 250 มิลลิวินาทีก่อนยิง query จริง ไม่ให้ยิงทุกตัวอักษรที่พิมพ์
+  // คำค้นใหม่เริ่มจากหน้าแรกเสมอ แล้วเลื่อนโหลดเพิ่มได้เหมือนลิสต์ปกติ
   const searchDebounceRef = useRef(null);
   const handleLocalSearch = (text) => {
     setSearchQuery(text);
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-    searchDebounceRef.current = setTimeout(() => loadHistoryRef.current?.(text), 250);
+    searchDebounceRef.current = setTimeout(() => {
+      listLimitRef.current = HISTORY_PAGE_SIZE;
+      setListLimit(HISTORY_PAGE_SIZE);
+      loadHistoryRef.current?.(text, HISTORY_PAGE_SIZE);
+    }, 250);
   };
 
   // กัน timer ค้างเมื่อออกจากหน้าไปกลางคัน
   useEffect(() => () => {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
   }, []);
+
+  // renderItem คงที่ + props คงที่ + object แถวเดิม = การ์ดที่ไม่เปลี่ยนไม่ render ใหม่
+  const renderHistoryItem = useCallback(({ item }) => (
+    <HistoryItem
+      item={item}
+      openImageModal={openImageModal}
+      onQuickSearch={handleQuickSearch}
+      onOpenDetail={handleOpenDetail}
+    />
+  ), [openImageModal, handleQuickSearch, handleOpenDetail]);
+
+  // รอบล่าสุดได้เต็มหน้าต่าง = อาจยังมีเหลือ
+  const hasMore = history.length >= listLimit;
 
   return (
     <View className="flex-1 bg-surface">
@@ -355,17 +418,15 @@ export default function HistoryScreen() {
             เพื่อให้ "ดึงลงเพื่อรีเฟรช" ใช้ได้ตอนลิสต์ว่างด้วย ซึ่งเป็นตอนที่อยากรีเฟรชที่สุด */}
         <FlatList
           data={history}
-          keyExtractor={(item) => item.id ? item.id.toString() : Math.random().toString()}
-          renderItem={({ item, index }) => (
-            <HistoryItem
-              item={item}
-              index={index}
-              numberPlate={numberPlate}
-              openImageModal={openImageModal}
-              onQuickSearch={handleQuickSearch}
-              onOpenDetail={handleOpenDetail}
-            />
-          )}
+          keyExtractor={keyExtractor}
+          renderItem={renderHistoryItem}
+          // ✅ ค่าเริ่มต้นของ FlatList เก็บการ์ดไว้ราว 21 จอ (windowSize 21) — การ์ดละรูปหนึ่งใบ
+          //    ลดเหลือ 7 จอ (3 จอบนและล่าง) ยังปัดลื่น แต่ mount การ์ดน้อยลงราวสามเท่า
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={7}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.5}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ flexGrow: 1, paddingBottom: 12 }}
           refreshControl={
@@ -385,11 +446,14 @@ export default function HistoryScreen() {
             </View>
           }
           ListFooterComponent={
-            // ✅ getScanHistory ใส่ LIMIT 5 ไว้เมื่อไม่ได้ค้นหา — เดิมไม่มีอะไรบอก
-            //    เจ้าหน้าที่จึงเข้าใจว่าวันนี้ลงทะเบียนไปแค่ 5 คัน
-            !searchQuery && history.length >= 5 ? (
+            loadingMore ? (
+              <View className="flex-row items-center justify-center gap-2 py-3">
+                <ActivityIndicator size="small" color={TINT_PRIMARY} />
+                <Text className="text-[12px] text-text-subtle">กำลังโหลดเพิ่ม…</Text>
+              </View>
+            ) : !hasMore && history.length > 0 ? (
               <Text className="px-[14px] pb-1 pt-2 text-center text-[12px] text-text-subtle">
-                แสดง 5 รายการล่าสุด · พิมพ์ทะเบียนเพื่อค้นหารายการก่อนหน้า
+                {searchQuery ? `พบ ${history.length} รายการ` : `ครบทั้งหมด ${history.length} รายการ`}
               </Text>
             ) : null
           }
