@@ -303,6 +303,25 @@ export const setupDatabase = async () => {
       }
     }
 
+    // ✅ Migration to version 9: index สำหรับรายการในหน้าหลัก
+    // getScanHistory กรองด้วย project_id หรือ activity_id แล้วเรียงตาม created_at แต่ไม่เคยมี index
+    // ของคอลัมน์เหล่านี้ ทุกรอบรีเฟรช (5 วินาที) SQLite จึงสแกน check_ins ทั้งตาราง — ของทุกกิจกรรม
+    // ที่เคยมี เพราะตารางนี้ไม่เคยถูกลบ — แล้วเรียงใหม่ใน temp b-tree ยิ่งใช้นานยิ่งช้า
+    // มี index แล้วจะอ่านเรียงตามลำดับได้ตรงๆ และหยุดที่ LIMIT (ยืนยันด้วย EXPLAIN QUERY PLAN)
+    if (user_version < 9) {
+      console.log("Migrating to version 9: Indexing check_ins for the history list...");
+      try {
+        await db.execAsync(`
+          CREATE INDEX IF NOT EXISTS ix_checkins_project_created ON check_ins(project_id, created_at);
+          CREATE INDEX IF NOT EXISTS ix_checkins_activity_created ON check_ins(activity_id, created_at);
+        `);
+        user_version = 9;
+      } catch (e) {
+        console.error('❌ Error during version 9 migration:', e);
+        throw e;
+      }
+    }
+
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
     // This handles cases where the database was created before version tracking was added
     try {
@@ -968,7 +987,19 @@ export const getLastRegisterSyncState = async (projectId) => {
 
 // ใน constants/Database.js
 
-export const getScanHistory = async (id, searchQuery = '') => {
+/**
+ * รายการลงทะเบียนสำหรับหน้าหลัก เรียงใหม่สุดก่อน ทีละหน้า
+ *
+ * เดิมตัดไว้ LIMIT 5 ตายตัวเมื่อไม่ได้ค้นหา และไม่จำกัดเลยเมื่อค้นหา — โหลดเยอะแล้วเครื่องช้า
+ * ตอนนี้ผู้เรียกบอกจำนวนเอง (หน้าหลักเพิ่มทีละหน้าเมื่อเลื่อนใกล้ท้ายลิสต์) และจำกัดทั้งสองกรณี
+ * id DESC เป็นตัวตัดสินเมื่อ created_at เท่ากัน (ละเอียดแค่วินาที) ไม่งั้นแถวสลับที่กันระหว่างรอบรีเฟรช
+ * index v9 ครอบคลุมทั้ง ORDER BY นี้ เพราะ rowid ต่อท้ายทุก index อยู่แล้ว
+ *
+ * @param {number} id - ค่าจาก getScopeId() คู่กับคอลัมน์จาก getScopeField()
+ * @param {string} searchQuery - ส่วนหนึ่งของทะเบียน ว่าง = ทั้งหมด
+ * @param {number} limit - จำนวนแถวสูงสุด
+ */
+export const getScanHistory = async (id, searchQuery = '', limit = 30) => {
   if (!id) {
     console.log("getScanHistory ถูกเรียกใช้โดยไม่มี id.");
     return [];
@@ -986,16 +1017,28 @@ export const getScanHistory = async (id, searchQuery = '') => {
       sql += ' AND plate_no LIKE ?';
       params.push(`%${normalizedQuery}%`);
     }
-    sql += ' ORDER BY created_at DESC';
-    if (normalizedQuery === '') {
-      sql += ' LIMIT 5';
-    }
+    sql += ' ORDER BY created_at DESC, id DESC LIMIT ?';
+    params.push(limit);
     const history = await db.getAllAsync(sql, params);
     return history;
   } catch (error) {
     console.error("Error getting scan history:", error);
     return [];
   }
+};
+
+/**
+ * 🚀 อ่าน check-in แถวเดียวสำหรับหน้ารายละเอียด (app/checkin-detail.js)
+ * ไม่กรองตามโหมด — id มาจากการ์ดในหน้าหลักซึ่งผ่าน getScopeField() มาแล้ว
+ * throw เมื่อฐานข้อมูลพัง เพื่อให้หน้าจอแยก "หาไม่เจอ" (null) ออกจาก "อ่านไม่ได้" แล้วลง error_logs เอง
+ * @param {number|string} id - check_ins.id
+ * @returns {Promise<object|null>}
+ */
+export const getCheckInById = async (id) => {
+  if (!id) return null;
+  const db = await getDb();
+  const row = await db.getFirstAsync('SELECT * FROM check_ins WHERE id = ?;', [id]);
+  return row || null;
 };
 
 export const insertCheckIn = async (checkInData) => {
@@ -1189,6 +1232,32 @@ export const backfillCheckInCompId = async (compId) => {
     console.error('Error backfilling comp_id:', error);
     return 0;
   }
+};
+
+/**
+ * 🚀 ให้แถวนี้ถูกส่งใหม่ในรอบ sync ถัดไป ไม่ต้องรอ backoff (ปุ่ม "ลองส่งใหม่" ในหน้ารายละเอียด)
+ *
+ * เดิมทางเดียวที่บังคับส่งทันทีได้คือบันทึกรหัสเครื่อง (backfillCheckInCompId) นอกนั้นต้องแก้
+ * next_retry_at ด้วยมือ — แถวที่ server ปฏิเสธเพราะเหตุอื่นแล้วถูกแก้ที่ฝั่ง server ไปแล้ว
+ * จึงต้องรอ backoff ที่อาจยาวถึง 6 ชั่วโมง
+ *
+ * รีเซ็ต retry_count ด้วยเหมือน backfillCheckInCompId: ถ้าถูกปฏิเสธอีก จะเริ่มถอยจาก 1 นาทีใหม่
+ * ไม่ได้เรียก CheckInSyncManager โดยตรง — แค่ปลดล็อก แล้วให้รอบ 10 วินาทีตามปกติหยิบไปเอง
+ * แตะเฉพาะแถวที่ยังส่งไม่สำเร็จ
+ *
+ * @param {number} checkInId - check_ins.id
+ * @returns {Promise<number>} - จำนวนแถวที่เปลี่ยน (0 = ส่งสำเร็จไปแล้ว หรือไม่มีแถวนี้)
+ */
+export const retryCheckInNow = async (checkInId) => {
+  if (!checkInId) return 0;
+  const db = await getDb();
+  const result = await db.runAsync(
+    `UPDATE check_ins
+        SET retry_count = 0, next_retry_at = NULL
+      WHERE id = ? AND sync_status != 2;`,
+    [checkInId]
+  );
+  return result.changes || 0;
 };
 
 // ตารางถอยเวลา (นาที) สำหรับการส่งซ้ำครั้งที่ 1, 2, 3, ... ครั้งหลังๆ ใช้ค่าสุดท้ายซ้ำไปเรื่อยๆ
@@ -1402,6 +1471,80 @@ export const getRegistersCountForId = async (currentId) => {
   } catch (error) {
     console.error('Error getting registers count for id:', error);
     return 0;
+  }
+};
+
+/**
+ * 🚀 คอลัมน์วันที่ที่บอกว่า "ใบ C7 ใบนี้ถูกสแกนไปแล้ว" ของกิจกรรมที่ทำอยู่
+ *
+ * ต้องตรงกับเงื่อนไขกันสแกนซ้ำใน scan.js (checkDuplicate) เป๊ะๆ ไม่งั้นรายการ
+ * "รถที่เหลือ" จะขัดกับหน้างาน — ขึ้นว่ายังไม่สแกน แต่พอเดินไปสแกนจริงแอพเตือนว่า
+ * ลงทะเบียนไปแล้ว ซึ่งทำให้เจ้าหน้าที่เลิกเชื่อรายการนี้ทั้งหน้า
+ * scan.js ใช้การเช็ค truthy ดังนั้นสตริงว่างต้องนับเป็น "ยังไม่สแกน" เหมือนกัน
+ * @param {number|null|undefined} seqNo - activeProject.seq_no
+ * @returns {'activity1_date'|'activity2_date'|'checkin_date'}
+ */
+const getScanDateField = (seqNo) => {
+  if (seqNo == 1) return 'activity1_date';
+  if (seqNo == 2) return 'activity2_date';
+  return 'checkin_date';
+};
+
+/**
+ * 🚀 ใบ C7 ที่ยังไม่ถูกสแกนในกิจกรรมที่ทำอยู่ — ข้อมูลของเมนู "รถที่เหลือ"
+ *
+ * ข้อมูลชุดนี้อยู่ในเครื่องอยู่แล้วและถูก sync ใหม่ทุก 30 วิ แต่เดิม registers ถูกใช้
+ * แค่ตอบว่า "ทะเบียนที่เห็นตรงหน้าลงทะเบียนไว้ไหม" (findRegisterByPlate) กับตัวเลข
+ * นับรวมในหน้านี้ ไม่เคยถูกใช้ตอบว่า "เหลือคันไหนที่ยังไม่เจอ" ทั้งที่เป็นข้อมูลชุดเดียวกัน
+ *
+ * ข้อดีของการอิง registers แทน check_ins: checkin_date/activity*_date มาจาก server
+ * จึงเห็นการสแกนของ "ทุกเครื่อง" ไม่ใช่เฉพาะเครื่องตัวเอง แต่ก็แปลว่ารายการจะค้าง
+ * เมื่อเครื่องออฟไลน์ — หน้า UI ต้องบอกเวลา sync ล่าสุดกำกับไว้เสมอ
+ *
+ * ใช้วิธีจำกัดขอบเขตชุดเดียวกับ getRegistersCountForId เพื่อให้ยอด "รถที่เหลือ"
+ * กับตัวเลข "ใบ C7" บนหน้าเดียวกันอ้างฐานเดียวกันเสมอ
+ *
+ * @param {number|null} currentId - ค่าจาก getScopeId()
+ * @param {number|null|undefined} seqNo - activeProject.seq_no
+ * @returns {Promise<Array>} เรียงตามจุดออกรถ เพราะรถที่มาจากสถานีเดียวกันมักจอดใกล้กัน
+ */
+export const getUnscannedRegisters = async (currentId, seqNo) => {
+  if (!currentId && currentId !== 0) return [];
+  const db = await getDb();
+  const dateField = getScanDateField(seqNo);
+  // ชื่อคอลัมน์มาจาก getScanDateField เท่านั้น ไม่ได้รับมาจากภายนอก จึงต่อสตริงได้ปลอดภัย
+  const notScanned = `(${dateField} IS NULL OR ${dateField} = '')`;
+  // เมื่อ backend ส่งเบอร์โทรมาแล้ว (ดูแผน 1b) ให้เพิ่มคอลัมน์ใหม่ตรงนี้จุดเดียว
+  const columns = `register_id, short_code, plate_no, plate_province, bus_type,
+                   station_name, station_province, note, alert_message`;
+  try {
+    const field = await getScopeField();
+    if (field === 'project_id') {
+      return await db.getAllAsync(
+        `SELECT ${columns} FROM registers
+          WHERE project_id = ? AND deleted_at IS NULL AND ${notScanned}
+          ORDER BY station_name, plate_no;`,
+        [currentId]
+      );
+    }
+
+    // โหมดธรรมยาตรา: registers เก็บแค่ project_id ต้องแปลง activity_id เป็นชุด project_id ก่อน
+    const projectRows = await db.getAllAsync(
+      'SELECT project_id FROM projects WHERE activity_id = ?',
+      [currentId]
+    );
+    const projectIds = projectRows.map(r => r.project_id);
+    if (projectIds.length === 0) return [];
+    const placeholders = projectIds.map(() => '?').join(',');
+    return await db.getAllAsync(
+      `SELECT ${columns} FROM registers
+        WHERE project_id IN (${placeholders}) AND deleted_at IS NULL AND ${notScanned}
+        ORDER BY station_name, plate_no;`,
+      projectIds
+    );
+  } catch (error) {
+    console.error('Error getting unscanned registers:', error);
+    return [];
   }
 };
 

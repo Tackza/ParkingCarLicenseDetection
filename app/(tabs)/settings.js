@@ -1,36 +1,160 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, SectionList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Linking, Modal, ScrollView, SectionList, Text, TextInput, TouchableOpacity, View } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons'; // Import ไอคอน
 import axios from 'axios';
 import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
-import { backfillCheckInCompId, clearProjectsTable, clearRegistersTable, clearSession, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { backfillCheckInCompId, clearProjectsTable, clearRegistersTable, clearSession, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnscannedRegisters, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
 import { exportDatabaseFile } from '../../utils/exportUtils';
 
 
-const sections = [
-  {
-    title: '',
-    data: [
-      { id: 'refresh', title: 'อัพเดทข้อมูลกิจกรรม', icon: 'refresh' },
-      { id: 'export', title: 'Export Database', icon: 'share-social' },
-      { id: 'machineCode', title: 'รหัสเครื่อง', icon: 'code' },
-      { id: 'mode', title: 'โหมด', icon: 'invert-mode' },
-      { id: 'environment', title: 'Environment', icon: 'server' },
-    ],
-  },
-  {
-    title: 'ข้อมูลแอป',
-    data: [
-      { id: 'version', title: 'เวอร์ชัน', icon: 'information-circle' },
-    ],
-  },
-];
+// ✅ registers ยังไม่มีคอลัมน์เบอร์โทร (ต้องให้ backend ส่งมาก่อน — ดูแผน 1b)
+//    ระหว่างนี้ดึงเบอร์จาก note / alert_message ที่ admin กรอกไว้ ซึ่ง sync ลงเครื่อง
+//    อยู่แล้วทุกรอบแต่ไม่เคยถูกแสดงที่ไหนเลยในแอพ
+//    พอ backend ส่งฟิลด์จริงมา ให้ใส่ reg.driver_phone เป็นตัวแรกของ candidates
+const extractPhone = (text) => {
+  if (!text) return null;
+  // เบอร์ไทย: ขึ้นต้น 0 หรือ +66 คั่นด้วย - เว้นวรรค หรือ . ได้
+  const match = String(text).match(/(?:\+66|0)[\d\-\s.]{7,12}\d/);
+  if (!match) return null;
+  const cleaned = match[0].replace(/[^\d+]/g, '');
+  return cleaned.length >= 9 ? cleaned : null;
+};
+
+const getContactInfo = (reg) => {
+  const candidates = [reg?.driver_phone, reg?.note, reg?.alert_message];
+  const phone = candidates.map(extractPhone).find(Boolean) || null;
+  // เก็บข้อความเต็มไว้ด้วย เพราะ note อาจมีข้อมูลอื่นที่เจ้าหน้าที่ต้องเห็น
+  const raw = candidates.find(v => v && String(v).trim());
+  return { phone, raw: raw ? String(raw).trim() : null };
+};
+
+// Ionicons และ ActivityIndicator รับสีเป็นค่า ไม่ใช่ className — ค่าต้องตรงกับ token ใน tailwind.config.js
+const ICON_TEXT = '#16181d';     // text
+const ICON_MUTED = '#5f6672';    // text-muted
+const ICON_SUBTLE = '#6e7580';   // text-subtle
+const ICON_FAINT = '#8f959e';    // icon-faint
+const ICON_ON_FILL = '#ffffff';
+const TINT_PRIMARY = '#217cba';  // primary
+const DANGER_INK = '#8f2020';    // danger-ink
+const SUCCESS = '#1e874b';       // success
+
+// เส้นซ้ายของการ์ดตัวเลข — ส่งเป็น style ไม่ใช่ className
+// border-l-* กับ border-* ต่างก็ตั้งสีขอบ และลำดับที่ NativeWind รวมสองตัวนี้ไม่แน่นอน
+const EDGE_NEUTRAL = '#d5d9de';  // border-strong
+const EDGE_SUCCESS = '#1e874b';  // success
+const EDGE_WARNING = '#b56015';  // warning
+const EDGE_DANGER = '#a52020';   // danger
+
+const modeLabel = (isModeOne) => (isModeOne ? 'งานบุญ' : 'ธรรมยาตรา');
+
+// ตัวย่อบน avatar — ชื่อไทยที่ขึ้นต้นด้วยสระหน้า (เ แ โ ใ ไ) ให้ข้ามไปเอาพยัญชนะ
+// ไม่งั้น "เอกชัย" จะได้ตัวย่อเป็น "เ"
+const initialOf = (name) => {
+  const s = (name || '').trim();
+  if (!s) return '';
+  return /^[เแโใไ]/.test(s) ? s.charAt(1) : s.charAt(0);
+};
+const initialsOf = (first, last, username) =>
+  (initialOf(first) + initialOf(last)) || (username || '').trim().slice(0, 2).toUpperCase();
+
+// ── ชิ้นส่วนหน้าตาที่ใช้ซ้ำในหน้านี้ ──
+// อยู่นอก component หลัก — ถ้านิยามข้างใน React จะเห็นเป็นคนละชนิดทุกครั้งที่ render แล้ว mount ใหม่หมด
+
+// กล่องยืนยันกลางจอ ใช้กับทุก modal ที่ถามรหัสอนุมัติ แทน style ชุด modalOverlay/modalContainer เดิม
+const Dialog = ({ visible, onClose, title, subtitle, tone, children }) => (
+  <Modal animationType="fade" transparent visible={visible} onRequestClose={onClose}>
+    <View className="flex-1 items-center justify-center bg-black/50 px-5">
+      <View className="w-full max-w-[340px] rounded-[14px] bg-surface p-5">
+        <Text className={`text-[17px] font-bold ${tone === 'danger' ? 'text-danger-ink' : 'text-text'}`}>{title}</Text>
+        {!!subtitle && <Text className="mt-1 text-[13px] leading-[19px] text-text-muted">{subtitle}</Text>}
+        <View className="mt-4 gap-3">{children}</View>
+      </View>
+    </View>
+  </Modal>
+);
+
+// ช่องกรอกพร้อมป้าย — เดิมมีแต่ placeholder ซึ่งหายไปทันทีที่เริ่มพิมพ์ ในกล่องที่มีสองช่องจะลืมว่าช่องไหนคืออะไร
+const Field = ({ label, ...inputProps }) => (
+  <View className="gap-[6px]">
+    {!!label && <Text className="text-[13px] font-semibold text-text-muted">{label}</Text>}
+    <TextInput
+      placeholderTextColor={ICON_SUBTLE}
+      className="h-11 rounded-[9px] border border-border-strong bg-surface px-3 py-0 text-[16px] text-text"
+      {...inputProps}
+    />
+  </View>
+);
+
+const DialogActions = ({ onCancel, onConfirm, confirmLabel, cancelLabel = 'ยกเลิก', tone, disabled }) => (
+  <View className="mt-1 flex-row gap-[9px]">
+    <TouchableOpacity
+      onPress={onCancel}
+      disabled={disabled}
+      activeOpacity={0.7}
+      className="h-11 flex-1 items-center justify-center rounded-[9px] border border-border-strong bg-surface"
+    >
+      <Text className="text-[15px] font-semibold text-text">{cancelLabel}</Text>
+    </TouchableOpacity>
+    <TouchableOpacity
+      onPress={onConfirm}
+      disabled={disabled}
+      activeOpacity={0.8}
+      className={`h-11 flex-1 items-center justify-center rounded-[9px] ${disabled ? 'bg-primary-muted' : tone === 'danger' ? 'bg-danger' : 'bg-primary'}`}
+    >
+      <Text className="text-[15px] font-semibold text-white">{confirmLabel}</Text>
+    </TouchableOpacity>
+  </View>
+);
+
+const StatCard = ({ value, label, edge, ink, onPress }) => (
+  <TouchableOpacity
+    onPress={onPress}
+    activeOpacity={0.7}
+    style={{ borderLeftWidth: 4, borderLeftColor: edge }}
+    className="flex-1 rounded-[10px] border border-border bg-surface px-[11px] py-[10px]"
+  >
+    <Text className={`text-[24px] font-bold leading-[28px] ${ink}`}>{value}</Text>
+    <Text className="mt-[2px] text-[12px] text-text-muted">{label}</Text>
+  </TouchableOpacity>
+);
+
+const MenuGroup = ({ title, children }) => (
+  <View className="gap-[6px]">
+    <Text className="text-[11px] font-bold tracking-[1px] text-text-subtle">{title}</Text>
+    <View className="overflow-hidden rounded-[10px] border border-border">{children}</View>
+  </View>
+);
+
+const MenuRow = ({ icon, label, value, valueClass = 'text-text-muted', onPress, onLongPress, last }) => (
+  <TouchableOpacity
+    onPress={onPress}
+    onLongPress={onLongPress}
+    activeOpacity={0.6}
+    className={`min-h-[52px] flex-row items-center gap-[10px] bg-surface px-3 py-[11px] ${last ? '' : 'border-b border-fill'}`}
+  >
+    <View className="w-[22px] items-center">
+      <Ionicons name={icon} size={19} color={ICON_MUTED} />
+    </View>
+    <Text numberOfLines={1} className="flex-1 text-[15px] text-text">{label}</Text>
+    {!!value && (
+      <Text numberOfLines={1} className={`max-w-[150px] text-[14px] font-semibold ${valueClass}`}>{value}</Text>
+    )}
+    <Ionicons name="chevron-forward" size={16} color={ICON_FAINT} />
+  </TouchableOpacity>
+);
+
+const InfoLine = ({ label, value }) => (
+  <View className="flex-row items-baseline gap-2">
+    <Text className="w-[76px] text-[13px] text-text-subtle">{label}</Text>
+    <Text className="flex-1 text-[14px] text-text">{value}</Text>
+  </View>
+);
 
 
 export default function SettingsScreen() {
@@ -72,6 +196,12 @@ export default function SettingsScreen() {
 
   // Version Info States
   const [isVersionModalVisible, setVersionModalVisible] = useState(false);
+
+  // Remaining Vehicles ("รถที่เหลือ") States
+  const [isRemainingModalVisible, setRemainingModalVisible] = useState(false);
+  const [remainingList, setRemainingList] = useState([]);
+  const [remainingCount, setRemainingCount] = useState(0);
+  const [remainingLoading, setRemainingLoading] = useState(false);
   const appVersion = Constants.expoConfig?.version || '1.0.0';
   const runtimeVersion = Constants.expoConfig?.runtimeVersion || '-';
   const updateId = Updates.updateId || null;
@@ -165,10 +295,13 @@ export default function SettingsScreen() {
   }, []); // [] หมายถึงให้ทำงานแค่ครั้งเดียว
 
   // Refresh counts separately so we can call when mode changes
-  const refreshCounts = async (idForFilter = currentId) => {
+  const refreshCounts = async (idForFilter = currentId, project = currentProject) => {
     try {
       const regCount = await getRegistersCountForId(idForFilter);
       setRegistersCount(regCount);
+      // ✅ ยอด "รถที่เหลือ" ขึ้นบนเมนูเลย เจ้าหน้าที่จะได้เห็นโดยไม่ต้องกดเข้าไปดู
+      const remaining = await getUnscannedRegisters(idForFilter, project?.seq_no);
+      setRemainingCount(remaining.length);
       const chkCount = await getCheckInsCountForId(idForFilter);
       setCheckInsCount(chkCount);
       const unsync = await getUnsyncedCheckInsCountForId(idForFilter);
@@ -214,7 +347,7 @@ export default function SettingsScreen() {
           const idForFilter = await getScopeId(projectData);
           if (cancelled) return;
           setCurrentId(idForFilter);
-          await refreshCounts(idForFilter);
+          await refreshCounts(idForFilter, projectData);
         } catch (e) {
           console.error('Error refreshing settings on focus', e);
         }
@@ -232,7 +365,7 @@ export default function SettingsScreen() {
         setCurrentProject(projectData); // Update project data
         const idForFilter = await getScopeId(projectData);
         setCurrentId(idForFilter);
-        await refreshCounts(idForFilter);
+        await refreshCounts(idForFilter, projectData);
       } catch (e) {
         console.error('Error updating counts after mode change', e);
       }
@@ -330,11 +463,28 @@ export default function SettingsScreen() {
     );
   };
 
+  // จัดกลุ่มตามจุดออกรถ — รถที่มาจากสถานีเดียวกันมักมาเป็นขบวนและจอดใกล้กัน
+  // ถ้าตามหาคันที่หายอยู่ ให้ดูว่าคันอื่นจากสถานีเดียวกันถูกสแกนแถวไหน
+  //
+  // ⚠️ ต้องอยู่ "เหนือ" early return ข้างล่างเสมอ — hook ที่อยู่ใต้ if (loading) จะถูกเรียก
+  //    เฉพาะตอน loading = false ทำให้จำนวน hook ไม่เท่ากันระหว่าง render แล้ว React จะ throw
+  //    "rendered more hooks than during the previous render" ทันทีที่โหลดข้อมูลเสร็จ
+  //    hook อื่นทั้งหมดในไฟล์นี้ก็อยู่เหนือ early return ด้วยเหตุผลเดียวกัน
+  const remainingSections = useMemo(() => {
+    const groups = new Map();
+    for (const reg of remainingList) {
+      const key = (reg.station_name || '').trim() || 'ไม่ระบุจุดออกรถ';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(reg);
+    }
+    return Array.from(groups, ([title, data]) => ({ title, data }));
+  }, [remainingList]);
+
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#0000ff" />
-        <Text style={styles.loadingText}>กำลังโหลดข้อมูล...</Text>
+      <View className="flex-1 items-center justify-center gap-3 bg-surface">
+        <ActivityIndicator size="large" color={TINT_PRIMARY} />
+        <Text className="text-[15px] text-text-muted">กำลังโหลดข้อมูล...</Text>
       </View>
     );
   }
@@ -478,115 +628,101 @@ export default function SettingsScreen() {
   };
 
   const renderClearRegistersModal = () => (
-    <Modal
-      animationType="fade"
-      transparent={true}
+    <Dialog
       visible={isClearRegistersModalVisible}
-      onRequestClose={() => setClearRegistersModalVisible(false)}
+      onClose={() => setClearRegistersModalVisible(false)}
+      title="ลบข้อมูล Registers"
+      subtitle="การกระทำนี้จะลบข้อมูลทะเบียนรถทั้งหมดในเครื่อง กรุณากรอกรหัสเพื่อยืนยัน"
+      tone="danger"
     >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContainer}>
-          <Text style={styles.modalTitle}>⚠️ ลบข้อมูล Registers</Text>
-          <Text style={styles.modalSubTitle}>
-            การกระทำนี้จะลบข้อมูลทะเบียนรถทั้งหมดในเครื่อง
-            กรุณากรอกรหัสเพื่อยืนยัน
-          </Text>
-          <TextInput
-            style={styles.modalInput}
-            placeholder="กรอกรหัสอนุมัติ"
-            value={clearRegistersCodeInput}
-            onChangeText={setClearRegistersCodeInput}
-            secureTextEntry={true}
-            keyboardType="number-pad"
-          />
-          <View style={styles.modalButtonContainer}>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.cancelButton]}
-              onPress={() => setClearRegistersModalVisible(false)}
-            >
-              <Text style={styles.modalButtonText}>ยกเลิก</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.saveButton, { backgroundColor: '#D32F2F' }]}
-              onPress={handleClearRegisters}
-            >
-              <Text style={styles.modalButtonText}>ลบข้อมูล</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
+      <Field
+        label="รหัสอนุมัติ"
+        placeholder="กรอกรหัสอนุมัติ"
+        value={clearRegistersCodeInput}
+        onChangeText={setClearRegistersCodeInput}
+        secureTextEntry={true}
+        keyboardType="number-pad"
+      />
+      <DialogActions
+        onCancel={() => setClearRegistersModalVisible(false)}
+        onConfirm={handleClearRegisters}
+        confirmLabel="ลบข้อมูล"
+        tone="danger"
+      />
+    </Dialog>
   );
 
-  // --- Render Functions สำหรับ SectionList ---
-  const renderItem = ({ item }) => (
-    <TouchableOpacity
-      style={styles.itemContainer}
-      onLongPress={() => {
-        if (item.id === 'version') {
-          setClearRegistersCodeInput('');
-          setClearRegistersModalVisible(true);
-        }
-      }}
-      // --- เปลี่ยน onPress ให้เปิด Modal ---
-      onPress={() => {
-        if (item.id === 'machineCode') {
-          setMachineCodeInput(machineCode || '');
-          setMasterCodeInput('');
-          setModalVisible(true);
-        } else if (item.id === 'mode') {
-          // เมื่อกดที่เมนูโหมด ให้เปิด Modal เพื่อกรอกรหัส
-          setModeMasterCodeInput(''); // เคลียร์รหัสเก่าทุกครั้งที่เปิด
-          setModeModalVisible(true);
-        } else if (item.id === 'environment') {
-          setEnvMasterCodeInput(''); // เคลียร์รหัส
-          setEnvModalVisible(true); // เปิด Modal ใหม่
-        } else if (item.id === 'refresh') {
-          getProject()
-        } else if (item.id === 'export') {
-          // เปิด Modal เลือกวันที่ก่อน Export
-          setExportModalVisible(true);
-        } else if (item.id === 'version') {
-          setVersionModalVisible(true);
-        }
-        else {
-          <Ionicons name={item.icon} size={20} color="#555" style={styles.itemIcon} />
-          Alert.alert('Navigate', `Go to ${item.title} screen`);
-        }
-      }}
-    >
-      {/* ... ส่วนแสดง icon และ text เหมือนเดิม ... */}
-      <Ionicons name={item.icon} size={20} color="#555" style={styles.itemIcon} />
-      <Text style={styles.itemText}>{item.title}</Text>
+  // ✅ โหลดรายการรถที่ยังไม่ถูกสแกน อ่านจาก registers ในเครื่องล้วนๆ ไม่ยิง API
+  //    จึงใช้ได้ตอนออฟไลน์ (ข้อมูลเก่าสุดเท่ารอบ sync ล่าสุด)
+  const loadRemainingVehicles = async () => {
+    setRemainingLoading(true);
+    try {
+      const projectData = await getCurrentProject();
+      setCurrentProject(projectData);
+      const idForFilter = await getScopeId(projectData);
+      const rows = await getUnscannedRegisters(idForFilter, projectData?.seq_no);
+      setRemainingList(rows);
+      setRemainingCount(rows.length);
+    } catch (e) {
+      console.error('Failed to load remaining vehicles', e);
+      setRemainingList([]);
+      try {
+        await insertErrorLog({
+          comp_id: null,
+          error_type: 'DATABASE_ERROR',
+          error_message: e.message || 'Failed to load remaining vehicles',
+          error_code: e.code || 'REMAINING_VEHICLES_ERROR',
+          page_name: 'settings.js',
+          action_name: 'loadRemainingVehicles',
+          user_id: user?.id || null
+        });
+      } catch (logError) {
+        console.error('Failed to log error:', logError);
+      }
+    } finally {
+      setRemainingLoading(false);
+    }
+  };
 
-      {item.id === 'machineCode' && (
-        <Text style={styles.itemValueText}>
-          {machineCode || 'Not Set'}
-        </Text>
-      )}
-      {item.id == 'mode' && (
-        <Text style={styles.itemValueText}>
-          {isModeOne ? 'งานบุญ' : 'ธรรมยาตรา'}
-        </Text>
-      )}
-      {item.id == 'environment' && (
-        <Text style={[styles.itemValueText, environment === 'prod' ? styles.envProdText : styles.envTestText]}>
-          {environment === 'prod' ? 'Prod' : 'Test'}
-        </Text>
-      )}
-      {item.id === 'version' && (
-        <Text style={styles.itemValueText}>
-          {otaVersion || appVersion}
-        </Text>
-      )}
+  // ✅ เครื่องอาจไม่มีซิม โทรออกไม่ได้ — ต้องโชว์เบอร์ให้อ่านได้เสมอ
+  //    ไม่ใช่ให้ปุ่มโทรเป็นทางเดียวที่จะเห็นเบอร์
+  const handleCallDriver = async (phone) => {
+    const url = `tel:${phone}`;
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        Alert.alert('โทรออกจากเครื่องนี้ไม่ได้', `อาจไม่มีซิมในเครื่อง\n\nเบอร์: ${phone}`);
+        return;
+      }
+      await Linking.openURL(url);
+    } catch (e) {
+      Alert.alert('โทรออกจากเครื่องนี้ไม่ได้', `เบอร์: ${phone}`);
+    }
+  };
 
-      <Ionicons name="chevron-forward" size={20} color="#aaa" />
-    </TouchableOpacity>
-  );
-
-  const renderSectionHeader = ({ section: { title } }) => (
-    <Text style={styles.sectionHeader}>{title.toUpperCase()}</Text>
-  );
+  // --- เปิด modal จากเมนู ---
+  const openRemaining = () => {
+    setRemainingModalVisible(true);
+    loadRemainingVehicles();
+  };
+  const openMachineCode = () => {
+    setMachineCodeInput(machineCode || '');
+    setMasterCodeInput('');
+    setModalVisible(true);
+  };
+  const openModeChange = () => {
+    setModeMasterCodeInput(''); // เคลียร์รหัสเก่าทุกครั้งที่เปิด
+    setModeModalVisible(true);
+  };
+  const openEnvChange = () => {
+    setEnvMasterCodeInput('');
+    setEnvModalVisible(true);
+  };
+  // ซ่อนไว้หลังการกดค้างที่แถวเวอร์ชันโดยตั้งใจ — ลบใบ C7 ทั้งหมดในเครื่อง (ดู CLAUDE.md)
+  const openClearRegisters = () => {
+    setClearRegistersCodeInput('');
+    setClearRegistersModalVisible(true);
+  };
 
   // ✅ สลับ environment ต้องล้างข้อมูลที่ผูกกับ server เดิมออกให้หมด
   //    เดิมแค่พลิกค่า prod/test ทำให้ token, projects และ registers ของอีก server ค้างอยู่
@@ -710,129 +846,67 @@ export default function SettingsScreen() {
 
   // --- ฟังก์ชันสำหรับสร้าง Modal ---
   const renderMachineCodeModal = () => (
-    <Modal
-      animationType="fade"
-      transparent={true}
+    <Dialog
       visible={isModalVisible}
-      onRequestClose={() => setModalVisible(false)}
+      onClose={() => setModalVisible(false)}
+      title="ตั้งรหัสเครื่อง"
+      subtitle="ทุกรายการที่บันทึกจากเครื่องนี้จะติดรหัสนี้ไปด้วย"
     >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContainer}>
-          <Text style={styles.modalTitle}>ตั้งรหัสเครื่อง</Text>
-          <TextInput
-            style={styles.modalInput}
-            placeholder="กรอกรหัสเครื่อง"
-            value={machineCodeInput}
-            onChangeText={setMachineCodeInput}
-
-            keyboardType="number-pad"
-          />
-          <TextInput
-            style={styles.modalInput}
-            placeholder="กรอกรหัสอนุมัติ"
-            value={masterCodeInput}
-            secureTextEntry={true}
-            onChangeText={setMasterCodeInput}
-            keyboardType="number-pad"
-          />
-
-
-
-          <View style={styles.modalButtonContainer}>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.cancelButton]}
-              onPress={() => setModalVisible(false)}
-            >
-              <Text style={styles.modalButtonText}>ยกเลิก</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.saveButton]}
-              onPress={handleSaveCode}
-            >
-              <Text style={styles.modalButtonText}>บันทึก</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
+      <Field
+        label="รหัสเครื่อง"
+        placeholder="กรอกรหัสเครื่อง"
+        value={machineCodeInput}
+        onChangeText={setMachineCodeInput}
+        keyboardType="number-pad"
+      />
+      <Field
+        label="รหัสอนุมัติ"
+        placeholder="กรอกรหัสอนุมัติ"
+        value={masterCodeInput}
+        secureTextEntry={true}
+        onChangeText={setMasterCodeInput}
+        keyboardType="number-pad"
+      />
+      <DialogActions onCancel={() => setModalVisible(false)} onConfirm={handleSaveCode} confirmLabel="บันทึก" />
+    </Dialog>
   );
 
   const renderModeChangeModal = () => (
-    <Modal
-      animationType="fade"
-      transparent={true}
+    <Dialog
       visible={isModeModalVisible}
-      onRequestClose={() => setModeModalVisible(false)}
+      onClose={() => setModeModalVisible(false)}
+      title="ยืนยันการเปลี่ยนโหมด"
+      subtitle={`จาก ${modeLabel(isModeOne)} เป็น ${modeLabel(!isModeOne)}`}
     >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContainer}>
-          <Text style={styles.modalTitle}>ยืนยันการเปลี่ยนโหมด</Text>
-          <TextInput
-            style={styles.modalInput}
-            placeholder="กรอกรหัสอนุมัติ"
-            value={modeMasterCodeInput}
-            onChangeText={setModeMasterCodeInput}
-            secureTextEntry={true}
-            keyboardType="number-pad"
-          />
-          <View style={styles.modalButtonContainer}>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.cancelButton]}
-              onPress={() => setModeModalVisible(false)}
-            >
-              <Text style={styles.modalButtonText}>ยกเลิก</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.saveButton]}
-              onPress={handleConfirmModeChange}
-            >
-              <Text style={styles.modalButtonText}>ยืนยัน</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
+      <Field
+        label="รหัสอนุมัติ"
+        placeholder="กรอกรหัสอนุมัติ"
+        value={modeMasterCodeInput}
+        onChangeText={setModeMasterCodeInput}
+        secureTextEntry={true}
+        keyboardType="number-pad"
+      />
+      <DialogActions onCancel={() => setModeModalVisible(false)} onConfirm={handleConfirmModeChange} confirmLabel="ยืนยัน" />
+    </Dialog>
   );
 
   const renderEnvironmentModal = () => (
-    <Modal
-      animationType="fade"
-      transparent={true}
+    <Dialog
       visible={isEnvModalVisible}
-      onRequestClose={() => setEnvModalVisible(false)}
+      onClose={() => setEnvModalVisible(false)}
+      title="ยืนยันการเปลี่ยน Environment"
+      subtitle={`ตอนนี้: ${environment === 'prod' ? 'Prod' : 'Test'} → จะเปลี่ยนเป็น ${environment === 'prod' ? 'Test' : 'Prod'}`}
     >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContainer}>
-          <Text style={styles.modalTitle}>ยืนยันการเปลี่ยน Environment</Text>
-          <Text style={styles.modalSubTitle}>
-            {/* แสดงสถานะปัจจุบัน */}
-            Current: {environment === 'prod' ? 'Prod' : 'Test'}
-          </Text>
-          <TextInput
-            style={styles.modalInput}
-            placeholder="กรอกรหัสอนุมัติ"
-            value={envMasterCodeInput}
-            onChangeText={setEnvMasterCodeInput}
-            secureTextEntry={true}
-            keyboardType="number-pad"
-          />
-          <View style={styles.modalButtonContainer}>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.cancelButton]}
-              onPress={() => setEnvModalVisible(false)}
-            >
-              <Text style={styles.modalButtonText}>ยกเลิก</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.saveButton]}
-              onPress={handleConfirmEnvChange} // เรียกใช้ฟังก์ชันที่สร้างใหม่
-            >
-              <Text style={styles.modalButtonText}>ยืนยัน</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
+      <Field
+        label="รหัสอนุมัติ"
+        placeholder="กรอกรหัสอนุมัติ"
+        value={envMasterCodeInput}
+        onChangeText={setEnvMasterCodeInput}
+        secureTextEntry={true}
+        keyboardType="number-pad"
+      />
+      <DialogActions onCancel={() => setEnvModalVisible(false)} onConfirm={handleConfirmEnvChange} confirmLabel="ยืนยัน" />
+    </Dialog>
   );
 
   // ฟังก์ชันจัดการ Export
@@ -849,602 +923,314 @@ export default function SettingsScreen() {
     }
   };
 
-  // Modal สำหรับเลือกวันที่ Export
+  // Modal ยืนยันการ Export
   const renderExportModal = () => (
-    <Modal
-      animationType="fade"
-      transparent={true}
+    <Dialog
       visible={isExportModalVisible}
-      onRequestClose={() => setExportModalVisible(false)}
+      onClose={() => setExportModalVisible(false)}
+      title="Export ฐานข้อมูล"
+      subtitle="ต้องการ Export ฐานข้อมูลทั้งหมดใช่หรือไม่?"
     >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContainer}>
-          <Text style={styles.modalTitle}>📦 Export Database</Text>
-          <Text style={styles.modalSubTitle}>ต้องการ Export ฐานข้อมูลทั้งหมดใช่หรือไม่?</Text>
+      {isExporting && (
+        <View className="flex-row items-center justify-center gap-2">
+          <ActivityIndicator size="small" color={TINT_PRIMARY} />
+          <Text className="text-[13px] text-text-muted">กำลัง Export...</Text>
+        </View>
+      )}
+      <DialogActions
+        onCancel={() => setExportModalVisible(false)}
+        onConfirm={handleExport}
+        confirmLabel="ยืนยัน Export"
+        disabled={isExporting}
+      />
+    </Dialog>
+  );
 
-          {/* ปุ่ม Export ทั้งหมด */}
-          <TouchableOpacity
-            style={[styles.exportOptionButton, styles.exportAllButton]}
-            onPress={handleExport}
-            disabled={isExporting}
-          >
-            <Ionicons name="cloud-download" size={20} color="#fff" />
-            <Text style={styles.exportOptionText}>ยืนยัน Export</Text>
-          </TouchableOpacity>
-
-          {isExporting && (
-            <View style={styles.exportingContainer}>
-              <ActivityIndicator size="small" color="#007AFF" />
-              <Text style={styles.exportingText}>กำลัง Export...</Text>
+  // การ์ดรถหนึ่งคันในรายการ "รถที่เหลือ"
+  const renderRemainingVehicleCard = ({ item }) => {
+    const { phone, raw } = getContactInfo(item);
+    return (
+      <View className="mx-[14px] mb-2 gap-[6px] rounded-[11px] border border-border bg-surface px-3 py-[10px]">
+        <View className="flex-row items-center gap-2">
+          <Text numberOfLines={1} className="flex-1 text-[18px] font-bold text-text">
+            {item.plate_no}{' '}
+            <Text className="text-[14px] font-medium text-text-muted">{item.plate_province || ''}</Text>
+          </Text>
+          {!!item.short_code && (
+            <View className="rounded-[7px] bg-chip px-[7px] py-[3px]">
+              <Text className="text-[12px] font-semibold text-chip-ink">{item.short_code}</Text>
             </View>
           )}
+        </View>
 
-          {/* ปุ่มยกเลิก */}
+        <InfoLine label="ประเภทรถ" value={item.bus_type || '--'} />
+        <InfoLine
+          label="จุดออกรถ"
+          value={`${item.station_name || '--'}${item.station_province ? ` (${item.station_province})` : ''}`}
+        />
+
+        <View className="flex-row items-center gap-2">
+          <Text className="w-[76px] text-[13px] text-text-subtle">เบอร์คนขับ</Text>
+          {phone ? (
+            <TouchableOpacity
+              onPress={() => handleCallDriver(phone)}
+              className="flex-row items-center gap-[6px] rounded-lg bg-success px-[10px] py-[6px]"
+            >
+              <Ionicons name="call" size={14} color={ICON_ON_FILL} />
+              {/* selectable เผื่อเครื่องโทรออกไม่ได้ จะได้กดค้างคัดลอกไปโทรจากมือถือ */}
+              <Text className="text-[14px] font-semibold text-white" selectable>{phone}</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text className="flex-1 text-[13px] text-text-subtle">{raw || 'ไม่มีข้อมูลติดต่อ'}</Text>
+          )}
+        </View>
+
+        {/* ถ้าข้อความต้นทางมีตัวอักษรนอกเหนือจากตัวเบอร์ (เช่นชื่อคนติดต่อ) ให้เห็นด้วย
+            เทียบเฉพาะตัวเลขไม่ได้ เพราะ "โทร 081-xxx หัวหน้าสมชาย" จะได้ตัวเลขชุดเดียวกัน
+            แล้วชื่อจะหายไปทั้งที่เป็นข้อมูลที่ต้องใช้ */}
+        {!!phone && !!raw && /[^\d\s\-+.()]/.test(raw) && (
+          <Text className="text-[12px] leading-[17px] text-text-muted" numberOfLines={2}>{raw}</Text>
+        )}
+      </View>
+    );
+  };
+
+  // รายการยาวทั้งกิจกรรม — เปิดเต็มจอแบบเดียวกับหน้าค้นหาบนเซิร์ฟเวอร์ ไม่ใช่การ์ดกลางจอ
+  const renderRemainingModal = () => (
+    <Modal
+      animationType="slide"
+      visible={isRemainingModalVisible}
+      onRequestClose={() => setRemainingModalVisible(false)}
+    >
+      <View className="flex-1 bg-surface">
+        <View className="flex-row items-center gap-2 border-b border-border px-3 py-[10px]">
           <TouchableOpacity
-            style={styles.exportCancelButton}
-            onPress={() => setExportModalVisible(false)}
-            disabled={isExporting}
+            onPress={() => setRemainingModalVisible(false)}
+            accessibilityLabel="ปิด"
+            className="h-9 w-9 items-center justify-center rounded-lg"
           >
-            <Text style={styles.exportCancelText}>ยกเลิก</Text>
+            <Ionicons name="chevron-back" size={22} color={ICON_TEXT} />
+          </TouchableOpacity>
+          <View className="flex-1">
+            <Text className="text-[17px] font-bold text-text">รถที่เหลือ</Text>
+            <Text numberOfLines={1} className="mt-[1px] text-[12px] text-text-subtle">
+              {currentProject?.name
+                ? `${currentProject.name} · ยังไม่สแกน ${remainingCount} คัน`
+                : `ยังไม่สแกน ${remainingCount} คัน`}
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={loadRemainingVehicles}
+            disabled={remainingLoading}
+            accessibilityLabel="รีเฟรช"
+            className="h-10 w-10 items-center justify-center rounded-[9px] border border-border-strong bg-surface"
+          >
+            <Ionicons name="refresh" size={18} color={remainingLoading ? ICON_FAINT : ICON_TEXT} />
           </TouchableOpacity>
         </View>
+
+        {/* ✅ ข้อมูลมาจาก registers ที่ sync มา ไม่ใช่ check_ins ของเครื่องนี้
+            จึงเห็นการสแกนของเครื่องอื่นด้วย แต่ก็ค้างได้ถ้าเครื่องออฟไลน์ */}
+        <Text className="px-[14px] pb-1 pt-[10px] text-[12px] text-text-subtle">
+          อัปเดตตามรอบ sync ใบ C7 (ทุก 10 วินาที) · รวมการสแกนจากทุกเครื่อง
+        </Text>
+
+        {remainingLoading ? (
+          <View className="flex-1 items-center justify-center">
+            <ActivityIndicator size="large" color={TINT_PRIMARY} />
+          </View>
+        ) : (
+          <SectionList
+            sections={remainingSections}
+            keyExtractor={(item) => String(item.register_id)}
+            renderItem={renderRemainingVehicleCard}
+            renderSectionHeader={({ section: { title, data } }) => (
+              <Text className="bg-surface px-[14px] pb-[6px] pt-3 text-[12px] font-bold text-text-muted">
+                {title} ({data.length})
+              </Text>
+            )}
+            stickySectionHeadersEnabled={false}
+            showsVerticalScrollIndicator={true}
+            className="flex-1"
+            contentContainerStyle={remainingSections.length === 0 ? { flexGrow: 1 } : { paddingBottom: 16 }}
+            ListEmptyComponent={
+              <View className="flex-1 items-center justify-center gap-[10px] px-6">
+                <Ionicons name="checkmark-circle" size={44} color={SUCCESS} />
+                <Text className="text-center text-[15px] text-text-muted">
+                  {currentProject
+                    ? 'สแกนครบทุกคันแล้ว'
+                    : 'ไม่พบกิจกรรมที่กำลังดำเนินอยู่'}
+                </Text>
+              </View>
+            }
+          />
+        )}
       </View>
     </Modal>
   );
 
-  // Modal สำหรับแสดง Version Info
-  const renderVersionModal = () => (
-    <Modal
-      animationType="fade"
-      transparent={true}
-      visible={isVersionModalVisible}
-      onRequestClose={() => setVersionModalVisible(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContainer}>
-          <Text style={styles.modalTitle}>📱 ข้อมูลเวอร์ชัน</Text>
+  const renderVersionModal = () => {
+    const rows = [
+      otaVersion ? { label: 'OTA Version', value: otaVersion, highlight: true } : null,
+      { label: 'App Version', value: appVersion },
+      { label: 'Runtime Version', value: runtimeVersion },
+      { label: 'Update Channel', value: updateChannel },
+      { label: 'Update ID', value: updateId ? updateId.substring(0, 16) + '...' : 'ไม่มี OTA Update' },
+    ].filter(Boolean);
 
-          <View style={styles.versionInfoContainer}>
-            {otaVersion && (
-              <View style={[styles.versionRow, { backgroundColor: '#e8f5e9' }]}>
-                <Text style={[styles.versionLabel, { color: '#2e7d32' }]}>📦 OTA Version:</Text>
-                <Text style={[styles.versionValue, { color: '#2e7d32' }]}>{otaVersion}</Text>
-              </View>
-            )}
-
-            <View style={styles.versionRow}>
-              <Text style={styles.versionLabel}>App Version:</Text>
-              <Text style={styles.versionValue}>{appVersion}</Text>
-            </View>
-
-            <View style={styles.versionRow}>
-              <Text style={styles.versionLabel}>Runtime Version:</Text>
-              <Text style={styles.versionValue}>{runtimeVersion}</Text>
-            </View>
-
-            <View style={styles.versionRow}>
-              <Text style={styles.versionLabel}>Update Channel:</Text>
-              <Text style={styles.versionValue}>{updateChannel}</Text>
-            </View>
-
-            <View style={styles.versionRow}>
-              <Text style={styles.versionLabel}>Update ID:</Text>
-              <Text style={[styles.versionValue, styles.updateIdText]} numberOfLines={1}>
-                {updateId ? updateId.substring(0, 16) + '...' : 'ไม่มี OTA Update'}
+    return (
+      <Dialog
+        visible={isVersionModalVisible}
+        onClose={() => setVersionModalVisible(false)}
+        title="ข้อมูลเวอร์ชัน"
+      >
+        <View className="overflow-hidden rounded-[10px] border border-border">
+          {rows.map((r, i) => (
+            <View
+              key={r.label}
+              className={`flex-row items-center justify-between gap-3 px-3 py-[10px] ${r.highlight ? 'bg-success-bg' : 'bg-surface'} ${i < rows.length - 1 ? 'border-b border-fill' : ''}`}
+            >
+              <Text className={`text-[13px] ${r.highlight ? 'font-semibold text-success-ink' : 'text-text-muted'}`}>{r.label}</Text>
+              {/* selectable — ใช้เทียบ update ID กับ EAS ตอนตามหาว่าเครื่องได้ OTA หรือยัง */}
+              <Text
+                selectable
+                numberOfLines={1}
+                className={`flex-shrink text-right text-[13px] font-semibold ${r.highlight ? 'text-success-ink' : 'text-text'}`}
+              >
+                {r.value}
               </Text>
             </View>
-          </View>
-
-          <TouchableOpacity
-            style={[{ marginTop: 10 }]}
-            onPress={() => setVersionModalVisible(false)}
-          >
-            <Text >ปิด</Text>
-          </TouchableOpacity>
+          ))}
         </View>
-      </View>
-    </Modal>
-  );
+        <TouchableOpacity
+          onPress={() => setVersionModalVisible(false)}
+          activeOpacity={0.7}
+          className="mt-1 h-11 items-center justify-center rounded-[9px] border border-border-strong bg-surface"
+        >
+          <Text className="text-[15px] font-semibold text-text">ปิด</Text>
+        </TouchableOpacity>
+      </Dialog>
+    );
+  };
+
+  // ⚠️ ค่าที่คำนวณตรงนี้เป็นตัวแปรธรรมดา ไม่ใช่ hook — อยู่ใต้ if (loading) ได้
+  const hasMachineCode = machineCode != null && String(machineCode).trim() !== '';
+  const displayName = `${first_name || ''} ${last_name || ''}`.trim() || username || 'ผู้ใช้';
+  const initials = initialsOf(first_name, last_name, username);
+  const refresh = () => refreshCounts();
 
   return (
-    <View style={styles.container}>
-      <View style={styles.tabMobile}>
-      </View>
+    <View className="flex-1 bg-surface">
+      {/* แถบดำคลุมพื้นที่ status bar — ทุกหน้าในแอพมี เพราะ status bar โปร่งใสและเนื้อหาวางทับ */}
+      <View className="h-[25px] bg-black" />
       {renderMachineCodeModal()}
       {renderModeChangeModal()}
       {renderEnvironmentModal()}
       {renderExportModal()}
       {renderVersionModal()}
       {renderClearRegistersModal()}
-      <View style={styles.profileHeader}>
+      {renderRemainingModal()}
 
-        <View style={styles.profileContent}>
-          {/* Avatar */}
-          <View style={[styles.avatarTextContainer, { backgroundColor: '#007AFF' }]}>
-            <Text style={styles.avatarText}>{machineCode}</Text>
-          </View>
-
-          {/* Info */}
-          <View style={styles.profileInfo}>
-            <Text style={styles.username}>{first_name} {last_name}
-              {<View style={[styles.envBadge, environment === 'prod' ? styles.envProdBadge : styles.envTestBadge]}>
-                <Text style={[styles.envText, environment === 'prod' ? styles.envProdText : styles.envTestText]}>
-                  Env: {environment === 'prod' ? 'Prod' : 'Test'}
-                </Text>
-              </View>}
-            </Text>
-
-            {/* Current Project Display */}
-            {currentProject && (
-              <View style={styles.projectBanner}>
-
-                <Text style={styles.projectName} numberOfLines={1} ellipsizeMode="tail">
-                  {currentProject.name}
-                </Text>
-              </View>
-            )}
-          </View>
-
-          {/* ✅ ออกจากระบบ — ย้ายมาไว้มุมขวาบนแทนปุ่มยาวด้านล่าง */}
-          <TouchableOpacity
-            style={styles.logoutIconButton}
-            onPress={handleLogout}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            accessibilityLabel="ออกจากระบบ"
-          >
-            <Ionicons name="log-out-outline" size={26} color="#D32F2F" />
-          </TouchableOpacity>
+      {/* ── ผู้ใช้ · กิจกรรม · ออกจากระบบ ── */}
+      <View className="flex-row items-center gap-[10px] border-b border-border px-[14px] pb-[10px] pt-3">
+        <View className="h-10 w-10 items-center justify-center rounded-[10px] bg-chip">
+          {initials ? (
+            <Text className="text-[16px] font-bold text-chip-ink">{initials}</Text>
+          ) : (
+            <Ionicons name="person-outline" size={18} color={ICON_MUTED} />
+          )}
         </View>
-      </View>
-
-      {/* Dashboard Section: two cards side-by-side to save vertical space */}
-      <View style={styles.dashboardContainerRow}>
+        <View className="flex-1">
+          <Text numberOfLines={1} className="text-[16px] font-bold text-text">{displayName}</Text>
+          <Text numberOfLines={1} className="text-[12px] text-text-subtle">
+            {currentProject?.name || 'ไม่พบกิจกรรมที่กำลังดำเนินอยู่'}
+          </Text>
+        </View>
         <TouchableOpacity
-          style={[styles.dashboardCardRow, styles.dashboardCardLeft]}
-          onPress={() => refreshCounts()}
+          onPress={handleLogout}
+          accessibilityLabel="ออกจากระบบ"
+          className="h-10 w-10 items-center justify-center rounded-[9px] border border-border-strong bg-surface"
         >
-          <View style={styles.dashboardIconContainerRow}>
-            <Ionicons name="clipboard" size={20} color="#007AFF" />
-          </View>
-          <View style={styles.dashboardTextContainerRow}>
-            <Text style={styles.dashboardLabel}>ใบ C7</Text>
-            <Text style={styles.dashboardValue}>{registersCount}</Text>
-          </View>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.dashboardCardRow, styles.dashboardCardRight]}
-          onPress={() => refreshCounts()}
-        >
-          <View style={styles.dashboardIconContainerRow}>
-            <Ionicons name="checkmark-done" size={20} color="#4CAF50" />
-          </View>
-          <View style={styles.dashboardTextContainerRow}>
-            <Text style={styles.dashboardLabel}>ส่งสำเร็จ</Text>
-            <Text style={styles.dashboardValue}>{successCount}</Text>
-          </View>
+          <Ionicons name="log-out-outline" size={19} color={ICON_TEXT} />
         </TouchableOpacity>
       </View>
 
-      {/* Dashboard Section: pending sync and errors - second row */}
-      <View style={styles.dashboardContainerRow}>
-        <TouchableOpacity
-          style={[styles.dashboardCardRow, styles.dashboardCardLeft]}
-          onPress={() => refreshCounts()}
-        >
-          <View style={styles.dashboardIconContainerRow}>
-            <Ionicons name="cloud-upload" size={20} color="#FF9800" />
+      {/* ✅ รหัสเครื่องที่ยังไม่ตั้งทำให้ทุกรายการถูกปฏิเสธ — ขึ้นเป็นแถบบนสุด ไม่ใช่ค่าเล็กๆ ในรายการ */}
+      {!hasMachineCode && (
+        <View className="px-[14px] pt-3">
+          <View className="flex-row items-center gap-[9px] rounded-[10px] border border-danger-bg bg-danger-surface px-3 py-[10px]">
+            <Ionicons name="alert-circle-outline" size={18} color={DANGER_INK} />
+            <View className="flex-1">
+              <Text className="text-[13px] font-bold text-danger-ink">ยังไม่ได้ตั้งรหัสเครื่อง</Text>
+              <Text className="text-[12px] leading-[16px] text-danger-ink">ทุกรายการจะถูกปฏิเสธด้วย 422</Text>
+            </View>
+            <TouchableOpacity
+              onPress={openMachineCode}
+              activeOpacity={0.8}
+              className="h-[34px] justify-center rounded-lg bg-danger px-3"
+            >
+              <Text className="text-[12px] font-bold text-white">ตั้งเลย</Text>
+            </TouchableOpacity>
           </View>
-          <View style={styles.dashboardTextContainerRow}>
-            <Text style={styles.dashboardLabel}>ยังไม่ได้ส่ง</Text>
-            <Text style={styles.dashboardValue}>{pendingSyncCount}</Text>
-          </View>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.dashboardCardRow, styles.dashboardCardRight]}
-          onPress={() => refreshCounts()}
-        >
-          <View style={styles.dashboardIconContainerRow}>
-            <Ionicons name="warning-outline" size={20} color="#F44336" />
-          </View>
-          <View style={styles.dashboardTextContainerRow}>
-            <Text style={styles.dashboardLabel}>พบปัญหา</Text>
-            <Text style={styles.dashboardValue}>{syncErrorCount}</Text>
-          </View>
-        </TouchableOpacity>
-      </View>
+        </View>
+      )}
 
-      {/* --- ส่วน List การตั้งค่า --- */}
-      <SectionList
-        sections={sections}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        renderSectionHeader={renderSectionHeader}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.listContent}
-      />
+      <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 20 }}>
 
+        {/* ── ตัวเลข — แตะเพื่ออ่านใหม่ ── */}
+        <View className="gap-2 px-[14px] pt-3">
+          <View className="flex-row gap-2">
+            <StatCard value={registersCount} label="ใบ C7" edge={EDGE_NEUTRAL} ink="text-text" onPress={refresh} />
+            <StatCard value={successCount} label="ส่งสำเร็จ" edge={EDGE_SUCCESS} ink="text-success-ink" onPress={refresh} />
+          </View>
+          <View className="flex-row gap-2">
+            <StatCard value={pendingSyncCount} label="ยังไม่ได้ส่ง" edge={EDGE_WARNING} ink="text-warning-ink" onPress={refresh} />
+            <StatCard value={syncErrorCount} label="พบปัญหา" edge={EDGE_DANGER} ink="text-danger-ink" onPress={refresh} />
+          </View>
+        </View>
+
+        <View className="gap-[14px] px-[14px] pt-[14px]">
+          <MenuGroup title="งานประจำวัน">
+            <MenuRow
+              icon="bus-outline"
+              label="รถที่เหลือ"
+              value={`${remainingCount} คัน`}
+              valueClass={remainingCount > 0 ? 'text-warning-ink' : 'text-text-muted'}
+              onPress={openRemaining}
+            />
+            <MenuRow icon="refresh-outline" label="อัพเดทข้อมูลกิจกรรม" onPress={getProject} />
+            <MenuRow icon="download-outline" label="Export ฐานข้อมูล" onPress={() => setExportModalVisible(true)} last />
+          </MenuGroup>
+
+          <MenuGroup title="ตั้งค่าเครื่อง">
+            <MenuRow
+              icon="barcode-outline"
+              label="รหัสเครื่อง"
+              value={hasMachineCode ? String(machineCode) : 'ยังไม่ตั้ง'}
+              valueClass={hasMachineCode ? 'text-text-muted' : 'text-danger-ink'}
+              onPress={openMachineCode}
+            />
+            <MenuRow icon="swap-horizontal-outline" label="โหมด" value={modeLabel(isModeOne)} onPress={openModeChange} />
+            {/* Test เป็นสีส้ม — ลงทะเบียนหน้างานบน test คือข้อมูลหายไปจากระบบจริง ต้องเห็นได้ทันที */}
+            <MenuRow
+              icon="server-outline"
+              label="Environment"
+              value={environment === 'prod' ? 'Prod' : 'Test'}
+              valueClass={environment === 'prod' ? 'text-text-muted' : 'text-warning-ink'}
+              onPress={openEnvChange}
+            />
+            <MenuRow
+              icon="information-circle-outline"
+              label="เวอร์ชัน"
+              value={otaVersion || appVersion}
+              onPress={() => setVersionModalVisible(true)}
+              onLongPress={openClearRegisters}
+              last
+            />
+          </MenuGroup>
+        </View>
+      </ScrollView>
     </View>
   );
-
-
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-  },
-  loadingContainer: { // ✅ เพิ่ม Style สำหรับ Loading
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f8f9fa',
-  },
-  loadingText: { // ✅ เพิ่ม Style สำหรับ Loading Text
-    marginTop: 10,
-    fontSize: 16,
-    color: '#555',
-  },
-
-  tabMobile: {
-    height: 25,
-    backgroundColor: 'black',
-    borderBottomWidth: 1,
-    // borderColor:'#e9ecef',
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  profileHeader: {
-    backgroundColor: '#fff',
-    paddingVertical: 0,
-    paddingHorizontal: 0,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  projectBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-
-    borderBottomColor: '#ffffffff',
-  },
-  projectName: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0D47A1',
-  },
-  profileContent: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  profileInfo: {
-    flex: 1,
-    justifyContent: 'space-around',
-  },
-  username: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 2,
-  },
-
-  // SectionList
-  listContent: {
-    paddingTop: 0,
-    paddingHorizontal: 16,
-
-  },
-  sectionHeader: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#888',
-    marginTop: 4,
-    marginBottom: 8,
-
-  },
-  itemContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    marginBottom: 2, // สร้างเส้นคั่นบางๆ
-  },
-  itemIcon: {
-    marginRight: 16,
-  },
-  itemText: {
-    flex: 1,
-    fontSize: 16,
-    color: '#333',
-  },
-  // Logout Button
-  logoutIconButton: {
-    padding: 8,
-    marginLeft: 8,
-  },
-  avatarTextContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#007AFF',
-    marginRight: 12,
-  },
-  avatarText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  itemValueText: {
-    fontSize: 16,
-    color: '#888', // สีเทา
-    marginRight: 8, // ระยะห่างจากลูกศร
-  },
-  modalOverlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-  },
-  modalContainer: {
-    width: '85%',
-    backgroundColor: 'white',
-    borderRadius: 15,
-    padding: 20,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 20,
-  },
-  modalInput: {
-    width: '100%',
-    height: 45,
-    borderColor: '#ddd',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    marginBottom: 15,
-    fontSize: 16,
-  },
-  modalButtonContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-    marginTop: 10,
-  },
-  modalButton: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  cancelButton: {
-    backgroundColor: '#A0A0A0',
-    marginRight: 10,
-  },
-  saveButton: {
-    backgroundColor: '#007AFF', // สีฟ้าแบบ iOS
-    marginLeft: 10,
-  },
-  modalButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  envBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
-    backgroundColor: '#f0f0f0',
-  },
-  envProdBadge: {
-    backgroundColor: '#E8F5E9',
-  },
-  envTestBadge: {
-    backgroundColor: '#FFF3E0',
-  },
-  envText: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#555',
-  },
-  envProdText: {
-    color: '#2e7d32',
-  },
-  envTestText: {
-    color: '#F57C00',
-  },
-  modalSubTitle: {
-    fontSize: 16,
-    color: '#555',
-    marginBottom: 20,
-    textAlign: 'center'
-  },
-  // Export Modal Styles
-  exportOptionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 14,
-    borderRadius: 10,
-    marginBottom: 10,
-    width: '100%',
-  },
-  exportAllButton: {
-    backgroundColor: '#34C759', // สีเขียว
-  },
-  exportTodayButton: {
-    backgroundColor: '#007AFF', // สีฟ้า
-  },
-  exportCustomButton: {
-    backgroundColor: '#5856D6', // สีม่วง
-  },
-  exportOptionText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 16,
-    marginLeft: 10,
-  },
-  dateInputContainer: {
-    width: '100%',
-    marginBottom: 10,
-  },
-  dateLabel: {
-    fontSize: 14,
-    color: '#555',
-    marginBottom: 5,
-  },
-  dateInput: {
-    width: '100%',
-    height: 45,
-    borderColor: '#ddd',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    fontSize: 16,
-    backgroundColor: '#f9f9f9',
-  },
-  exportingContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  exportingText: {
-    marginLeft: 10,
-    color: '#007AFF',
-    fontSize: 14,
-  },
-  exportCancelButton: {
-    marginTop: 15,
-    width: '100%',
-    padding: 14,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#FF3B30',
-    backgroundColor: '#fff',
-    alignItems: 'center',
-  },
-  exportCancelText: {
-    color: '#FF3B30',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  // Version Modal Styles
-  versionInfoContainer: {
-    width: '100%',
-    backgroundColor: '#f8f9fa',
-    borderRadius: 10,
-    padding: 15,
-  },
-  versionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  versionLabel: {
-    fontSize: 14,
-    color: '#666',
-    fontWeight: '500',
-  },
-  versionValue: {
-    fontSize: 14,
-    color: '#333',
-    fontWeight: 'bold',
-  },
-  updateIdText: {
-    fontSize: 12,
-    maxWidth: 150,
-  },
-  // Dashboard Styles
-  dashboardContainer: {
-    padding: 16,
-    paddingBottom: 0,
-  },
-  dashboardContainerRow: {
-    paddingHorizontal: 16,
-    paddingVertical: 5,
-    flexDirection: 'row',
-    justifyContent: 'space-evenly',
-  },
-  dashboardCardRow: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    padding: 12,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  dashboardCardLeft: {
-    marginRight: 8,
-  },
-  dashboardCardRight: {
-    marginLeft: 8,
-  },
-  dashboardIconContainerRow: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#E3F2FD',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  dashboardTextContainerRow: {
-    flex: 1,
-  },
-  dashboardCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    padding: 16,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  dashboardIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#E3F2FD',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  dashboardTextContainer: {
-    flex: 1,
-  },
-  dashboardLabel: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 4,
-  },
-  dashboardValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-});

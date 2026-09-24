@@ -5,7 +5,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
@@ -15,6 +14,20 @@ import { useAuth } from '../contexts/AuthContext';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getActiveSession, saveSession } from "../constants/Database";
 import { useProject } from '../contexts/ProjectContext';
+
+// เงาของกล่องฟอร์ม — ค่าเดียวกับที่เคยอยู่ใน StyleSheet.create เดิมทุกตัว
+//
+// ไม่แปลงเป็น utility class เพราะ RN ใช้ shadowColor/Offset/Opacity/Radius คู่กับ
+// elevation ของ Android ซึ่ง shadow-* ของ Tailwind ให้ค่าคนละชุด และไม่มีตัวไหน
+// ครอบคลุม elevation เลย — scope งานนี้คือหน้าตาต้องไม่เปลี่ยน จึงคงค่าเดิมไว้ตรงๆ
+// ประกาศนอก component เพื่อไม่ให้สร้าง object ใหม่ทุกรอบ render
+const CARD_SHADOW = {
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.1,
+  shadowRadius: 8,
+  elevation: 5,
+};
 
 export default function LoginScreen() {
   const [username, setUsername] = useState('');
@@ -84,7 +97,7 @@ export default function LoginScreen() {
   // ✨ (เพิ่มส่วนนี้) - แสดงหน้าจอ Loading ขณะตรวจสอบข้อมูล
   if (isCheckingStorage) {
     return (
-      <View style={styles.loadingContainer}>
+      <View className="flex-1 justify-center items-center bg-background">
         <ActivityIndicator size="large" color="#3498db" />
       </View>
     );
@@ -93,19 +106,22 @@ export default function LoginScreen() {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={styles.container}
+      className="flex-1 bg-background"
     >
-      <View style={styles.content}>
-        <View style={styles.logoContainer}>
-          <Text style={styles.title}>🚗 </Text>
-          <Text style={styles.title}>ระบบลงทะเบียนรถ</Text>
+      <View className="flex-1 justify-center px-[30px]">
+        <View className="items-center mb-5">
+          <Text className="text-[26px] font-bold text-text mb-px">🚗 </Text>
+          <Text className="text-[26px] font-bold text-text mb-px">ระบบลงทะเบียนรถ</Text>
         </View>
 
-        <View style={styles.formContainer}>
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>ชื่อผู้ใช้</Text>
+        {/* เงายังต้องเขียนเป็น style object — RN ใช้ shadow* + elevation ซึ่งไม่มี
+            utility ของ Tailwind ตัวไหน map ค่าได้ตรง ถ้าใช้ shadow-md แทนจะได้เงาคนละแบบ
+            และ elevation เป็นของ Android โดยเฉพาะที่ NativeWind ไม่ครอบคลุม */}
+        <View className="bg-surface rounded-[20px] p-[25px]" style={CARD_SHADOW}>
+          <View className="mb-5">
+            <Text className="text-[14px] font-semibold text-text mb-2">ชื่อผู้ใช้</Text>
             <TextInput
-              style={styles.input}
+              className="bg-input rounded-xl p-[15px] text-[16px] border border-border"
               placeholder="กรอกชื่อผู้ใช้"
               value={username}
               onChangeText={setUsername}
@@ -114,10 +130,10 @@ export default function LoginScreen() {
             />
           </View>
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>รหัสผ่าน</Text>
+          <View className="mb-5">
+            <Text className="text-[14px] font-semibold text-text mb-2">รหัสผ่าน</Text>
             <TextInput
-              style={styles.input}
+              className="bg-input rounded-xl p-[15px] text-[16px] border border-border"
               placeholder="กรอกรหัสผ่าน"
               value={password}
               onChangeText={setPassword}
@@ -126,15 +142,18 @@ export default function LoginScreen() {
             />
           </View>
 
+          {/* สลับสีพื้นด้วย ternary ไม่ใช่ต่อ class เพิ่มท้าย — ถ้าเขียน
+              "bg-primary ... bg-primary-muted" ตัวที่ชนะคือตัวที่มาทีหลังใน CSS
+              ที่ถูกสร้าง ไม่ใช่ตัวที่มาทีหลังในสตริง ผลลัพธ์จึงคาดเดาไม่ได้ */}
           <TouchableOpacity
-            style={[styles.loginButton, isLoading && styles.loginButtonDisabled]}
+            className={`${isLoading ? 'bg-primary-muted' : 'bg-primary'} rounded-xl p-4 items-center mt-2.5`}
             onPress={handleLogin}
             disabled={isLoading}
           >
             {isLoading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.loginButtonText}>เข้าสู่ระบบ</Text>
+              <Text className="text-surface text-[16px] font-semibold">เข้าสู่ระบบ</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -142,79 +161,3 @@ export default function LoginScreen() {
     </KeyboardAvoidingView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-  },
-  // ✨ (เพิ่มส่วนนี้) - สไตล์สำหรับหน้าจอ Loading
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f8f9fa',
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 30,
-  },
-  logoContainer: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: 'bold',
-    color: '#2c3e50',
-    marginBottom: 1,
-  },
-  subtitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#7f8c8d',
-  },
-  formContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 25,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  inputContainer: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#2c3e50',
-    marginBottom: 8,
-  },
-  input: {
-    backgroundColor: '#f8f9fa',
-    borderRadius: 12,
-    padding: 15,
-    fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#e9ecef',
-  },
-  loginButton: {
-    backgroundColor: '#3498db',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  loginButtonDisabled: {
-    backgroundColor: '#95a5a6',
-  },
-  loginButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-});
