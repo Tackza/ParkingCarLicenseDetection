@@ -6,15 +6,15 @@ export default () => {
   // เราจะใช้ object นี้เป็นค่าตั้งต้น
   let config = {
     "expo": {
-      "name": "Mbus Register", // <-- ชื่อสำหรับ Production
+      "name": "Mbus Scan", // <-- ชื่อสำหรับ Production
       "slug": "tackpongsatorn",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "orientation": "portrait",
       "icon": "./assets/images/c7.png",
       "backgroundColor": "#ffffff",
 
       // --- ⬇️ นี่คือ 2 ส่วนที่ต้องเพิ่มเข้ามา ⬇️ ---
-      "runtimeVersion": "1.0.0",
+      "runtimeVersion": "2.0.0",
       "updates": {
         "enabled": true,
         "checkAutomatically": "ON_LOAD",
@@ -75,7 +75,7 @@ export default () => {
   // ถ้า Profile ที่สั่ง build คือ 'development'
   if (appVariant === 'development') {
     // ให้ทำการแก้ไขค่า config สำหรับเวอร์ชัน Dev
-    config.expo.name = "Mbus Register (Dev)"; // เปลี่ยนชื่อแอป
+    config.expo.name = "Mbus Scan (Dev)"; // เปลี่ยนชื่อแอป
     config.expo.android.package = "com.donnytang.myapp.dev"; // เปลี่ยน Package Name
     config.expo.ios.bundleIdentifier = "com.donnytang.myapp.dev"; // เปลี่ยน Bundle ID
   }

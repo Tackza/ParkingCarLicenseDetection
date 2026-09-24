@@ -54,5 +54,6 @@ yarn-error.*
 
 expo-env.d.ts
 # @end expo-cli
-# สคริปต์ของสกิลสร้าง cache ตอนรัน ไม่ต้องเก็บ
+# Python cache — สคริปต์ของสกิล ui-ux-pro-max และเครื่องมือใน tools/ondevice-ocr สร้างตอนรัน
 __pycache__/
+*.pyc

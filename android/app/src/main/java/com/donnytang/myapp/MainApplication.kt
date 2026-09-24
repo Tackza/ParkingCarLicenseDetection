@@ -15,6 +15,8 @@ import com.facebook.soloader.SoLoader
 import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ReactNativeHostWrapper
 
+import com.donnytang.myapp.lpr.LprOcrPackage
+
 class MainApplication : Application(), ReactApplication {
 
   override val reactNativeHost: ReactNativeHost = ReactNativeHostWrapper(
@@ -23,7 +25,11 @@ class MainApplication : Application(), ReactApplication {
           override fun getPackages(): List<ReactPackage> {
             // Packages that cannot be autolinked yet can be added manually here, for example:
             // packages.add(new MyReactNativePackage());
-            return PackageList(this).packages
+            // LprOcr lives inside this app rather than in node_modules, so autolinking never
+            // sees it — it has to be added by hand.
+            return PackageList(this).packages.toMutableList().apply {
+              add(LprOcrPackage())
+            }
           }
 
           override fun getJSMainModuleName(): String = ".expo/.virtual-metro-entry"

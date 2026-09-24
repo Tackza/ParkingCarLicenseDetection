@@ -67,7 +67,7 @@ app/passenger_count.js ──→ Database.js (receipt เขียน inline ไ
 ## Data Flow
 ```
 แตะแท็บสแกน → preventDefault → เปิดกล้อง → ส่ง imageUri เป็น route param
-  → scan.js: POST multipart ไป OCR → อ่าน plate/province
+  → scan.js: detectPlate() — OCR บนเครื่องก่อน ถ้าใช้ไม่ได้ค่อย POST ไป Cloud Run → อ่าน plate/province
   → findRegisterByPlate() เทียบใบ C7 ในเครื่อง
   → โหมดหนึ่ง: push ไป passenger_count.js แล้ว insert ที่นั่น
      โหมดสอง: insertCheckIn() ที่ scan.js เลย
@@ -93,7 +93,7 @@ app/passenger_count.js ──→ Database.js (receipt เขียน inline ไ
 ## Build & Deploy
 - **Build output**: APK ผ่าน EAS Build profile `production`
 - **Container**: ไม่มี
-- **Deploy target**: ติดตั้งบนแท็บเล็ต Android ที่จุดตรวจ; อัปเดตรายวันผ่าน OTA `eas update --branch production`
+- **Deploy target**: ติดตั้งบน SUNMI V3 ที่จุดตรวจ; อัปเดตรายวันผ่าน OTA `eas update --branch production`
 
 ## Styling Layout (บริบทของงาน nativewind-migration)
 
