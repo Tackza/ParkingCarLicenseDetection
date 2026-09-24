@@ -12,11 +12,13 @@ module.exports = {
   // (RN ไม่มี CSS ครบเหมือนเว็บ เช่นไม่มี cascade ไม่มี pseudo-element)
   presets: [require('nativewind/preset')],
 
-  // ต้องครอบคลุมทุกที่ที่เขียน className ไม่งั้น class จะถูก purge ทิ้งตอน build
-  // components/ ยังไม่มีไฟล์ไหนใช้ แต่ใส่ไว้ล่วงหน้าสำหรับการแปลงหน้าอื่นในอนาคต
+  // ต้องครอบคลุมทุกที่ที่มีชื่อ class อยู่ในโค้ด — ไม่ใช่แค่ที่เขียน className=
+  // class ที่ไม่ถูกสแกนเจอจะไม่ถูกสร้าง แล้ว NativeWind หา style ไม่เจอตอนรัน สีหายเงียบๆ
+  // utils/ อยู่ในนี้เพราะ utils/checkInFormat.js เก็บ class ของสถานะ sync ไว้ใน SYNC_STATES
   content: [
     './app/**/*.{js,jsx,ts,tsx}',
     './components/**/*.{js,jsx,ts,tsx}',
+    './utils/**/*.{js,jsx,ts,tsx}',
   ],
 
   theme: {

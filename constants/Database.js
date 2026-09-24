@@ -998,6 +998,20 @@ export const getScanHistory = async (id, searchQuery = '') => {
   }
 };
 
+/**
+ * 🚀 อ่าน check-in แถวเดียวสำหรับหน้ารายละเอียด (app/checkin-detail.js)
+ * ไม่กรองตามโหมด — id มาจากการ์ดในหน้าหลักซึ่งผ่าน getScopeField() มาแล้ว
+ * throw เมื่อฐานข้อมูลพัง เพื่อให้หน้าจอแยก "หาไม่เจอ" (null) ออกจาก "อ่านไม่ได้" แล้วลง error_logs เอง
+ * @param {number|string} id - check_ins.id
+ * @returns {Promise<object|null>}
+ */
+export const getCheckInById = async (id) => {
+  if (!id) return null;
+  const db = await getDb();
+  const row = await db.getFirstAsync('SELECT * FROM check_ins WHERE id = ?;', [id]);
+  return row || null;
+};
+
 export const insertCheckIn = async (checkInData) => {
   const db = await getDb();
   const newId = ulid();
@@ -1189,6 +1203,32 @@ export const backfillCheckInCompId = async (compId) => {
     console.error('Error backfilling comp_id:', error);
     return 0;
   }
+};
+
+/**
+ * 🚀 ให้แถวนี้ถูกส่งใหม่ในรอบ sync ถัดไป ไม่ต้องรอ backoff (ปุ่ม "ลองส่งใหม่" ในหน้ารายละเอียด)
+ *
+ * เดิมทางเดียวที่บังคับส่งทันทีได้คือบันทึกรหัสเครื่อง (backfillCheckInCompId) นอกนั้นต้องแก้
+ * next_retry_at ด้วยมือ — แถวที่ server ปฏิเสธเพราะเหตุอื่นแล้วถูกแก้ที่ฝั่ง server ไปแล้ว
+ * จึงต้องรอ backoff ที่อาจยาวถึง 6 ชั่วโมง
+ *
+ * รีเซ็ต retry_count ด้วยเหมือน backfillCheckInCompId: ถ้าถูกปฏิเสธอีก จะเริ่มถอยจาก 1 นาทีใหม่
+ * ไม่ได้เรียก CheckInSyncManager โดยตรง — แค่ปลดล็อก แล้วให้รอบ 10 วินาทีตามปกติหยิบไปเอง
+ * แตะเฉพาะแถวที่ยังส่งไม่สำเร็จ
+ *
+ * @param {number} checkInId - check_ins.id
+ * @returns {Promise<number>} - จำนวนแถวที่เปลี่ยน (0 = ส่งสำเร็จไปแล้ว หรือไม่มีแถวนี้)
+ */
+export const retryCheckInNow = async (checkInId) => {
+  if (!checkInId) return 0;
+  const db = await getDb();
+  const result = await db.runAsync(
+    `UPDATE check_ins
+        SET retry_count = 0, next_retry_at = NULL
+      WHERE id = ? AND sync_status != 2;`,
+    [checkInId]
+  );
+  return result.changes || 0;
 };
 
 // ตารางถอยเวลา (นาที) สำหรับการส่งซ้ำครั้งที่ 1, 2, 3, ... ครั้งหลังๆ ใช้ค่าสุดท้ายซ้ำไปเรื่อยๆ

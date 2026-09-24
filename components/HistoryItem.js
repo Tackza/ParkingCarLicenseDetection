@@ -1,67 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Image, Text, TouchableOpacity, View } from 'react-native';
+import { explainError, formatPassengerInfo, syncStateOf } from '../utils/checkInFormat';
 
 // สีที่ต้องส่งเป็น prop ให้ Ionicons — component ตัวนี้รับ color เป็นค่า ไม่ใช่ className
 // ค่าต้องตรงกับ token ใน tailwind.config.js
 const ICON_SEARCH = '#1a6296';   // primary-ink
 const ICON_DANGER = '#8f2020';   // danger-ink
 
-const formatPassengerInfo = (passengerString) => {
-  if (!passengerString || typeof passengerString !== 'string') return '';
-  const parts = passengerString.split('|');
-  if (parts.length < 4) return '';
-
-  const segments = [];
-  const people = parseInt(parts[0] || 0) + parseInt(parts[1] || 0); // ผู้ใหญ่ + เด็ก
-  const monks = parseInt(parts[2] || 0);
-  const novices = parseInt(parts[3] || 0);
-
-  if (people > 0) segments.push(`${people}คน`);
-  if (monks > 0) segments.push(`${monks}รูป`);
-  if (novices > 0) segments.push(`สณ${novices}รูป`);
-
-  // ✅ เดิมคืน '-- คน' เมื่อไม่มีใครเลย แล้วเงื่อนไขกรองข้างล่างปล่อยผ่าน
-  //    ชิปนี้จึงขึ้นทุกใบทั้งที่ไม่ได้บอกอะไร และกินพื้นที่ในคอลัมน์ที่กว้างแค่ 200dp
-  //    คืนค่าว่างแทน เพื่อให้ชิปหายไปเมื่อไม่มีข้อมูลจริง
-  return segments.join('/');
-};
-
-// สถานะการส่งขึ้น server — ดู CLAUDE.md § sync_status
-// 0 = ยังไม่ได้ลอง · 2 = สำเร็จ · 3 = ล้มเหลวแบบลองใหม่ได้ · 4 = server ปฏิเสธ
-const SYNC_STATES = {
-  sent: { label: 'ส่งแล้ว', box: 'bg-success-bg', dot: 'bg-success', text: 'text-success-ink' },
-  waiting: { label: 'รอส่ง', box: 'bg-warning-bg', dot: 'bg-warning', text: 'text-warning-ink' },
-  failed: { label: 'ติดปัญหา', box: 'bg-danger-bg', dot: 'bg-danger', text: 'text-danger-ink' },
-};
-
-const syncStateOf = (status) => {
-  if (status == 2) return SYNC_STATES.sent;
-  if (status == 4) return SYNC_STATES.failed;
-  return SYNC_STATES.waiting;
-};
-
-// ข้อความจาก server เป็นภาษาอังกฤษและบอกแต่ชื่อฟิลด์ เจ้าหน้าที่หน้างานอ่านแล้วไม่รู้ต้องทำอะไร
-// แปลเฉพาะเคสที่เจอจริง ที่เหลือคืนข้อความเดิมไว้ ดีกว่าซ่อนสิ่งที่เรายังไม่รู้จัก
-const explainError = (raw) => {
-  if (!raw) return null;
-
-  let message = raw;
-  try {
-    if (typeof raw === 'string') message = JSON.parse(raw)?.message || raw;
-    else message = raw?.message || raw;
-  } catch (e) {
-    message = raw;
-  }
-  if (typeof message !== 'string') message = String(message);
-
-  if (/comp[_ ]?id/i.test(message)) {
-    return 'ยังไม่ได้ตั้งรหัสเครื่อง — เซิร์ฟเวอร์ปฏิเสธรายการนี้ ตั้งรหัสในหน้าตั้งค่าแล้วระบบจะส่งให้เอง';
-  }
-  return message;
-};
-
-const HistoryItem = ({ item, index, numberPlate, openImageModal, onQuickSearch }) => {
+const HistoryItem = ({ item, index, numberPlate, openImageModal, onQuickSearch, onOpenDetail }) => {
   if (!item) return null;
 
   const passengerText = formatPassengerInfo(item.passenger);
@@ -73,7 +20,15 @@ const HistoryItem = ({ item, index, numberPlate, openImageModal, onQuickSearch }
   const errorText = explainError(item.error_msg);
 
   return (
-    <View className="mx-[14px] my-1 overflow-hidden rounded-[11px] border border-border bg-surface">
+    // ✅ แตะตรงไหนของการ์ดก็ได้ → หน้ารายละเอียด
+    //    รูปกับปุ่มแว่นขยายข้างในยังทำงานของตัวเองเหมือนเดิม เพราะ touchable ชั้นในสุดได้สัมผัสก่อน
+    <TouchableOpacity
+      activeOpacity={0.7}
+      onPress={() => onOpenDetail && onOpenDetail(item)}
+      accessibilityRole="button"
+      accessibilityLabel={`ดูรายละเอียด ${item.plate_no || ''}`}
+      className="mx-[14px] my-1 overflow-hidden rounded-[11px] border border-border bg-surface"
+    >
 
       <View className="flex-row gap-[10px] p-[10px]">
 
@@ -170,7 +125,7 @@ const HistoryItem = ({ item, index, numberPlate, openImageModal, onQuickSearch }
         </View>
       )}
 
-    </View>
+    </TouchableOpacity>
   );
 };
 
