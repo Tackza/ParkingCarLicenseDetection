@@ -49,7 +49,7 @@
 - **Tool**: EAS (ไม่มี CI ในรีโป ไม่มี GitHub Actions)
 - **Stages**: build ด้วยมือ → OTA ด้วยมือ
 - **Deploy target**: APK ติดตั้งบนแท็บเล็ต + OTA ผ่าน channel `production` (`checkAutomatically: ON_LOAD`, `runtimeVersion` 1.0.0)
-- **ผลต่องานนี้**: NativeWind อยู่ที่ชั้น babel/metro ผลลัพธ์ยังเป็น JS bundle จึง**คาดว่า** OTA ได้ ต้องพิสูจน์
+- **ผลต่องานนี้**: NativeWind อยู่ที่ชั้น babel/metro ผลลัพธ์ยังเป็น JS bundle — **ยืนยันแล้วว่าไปกับ OTA ได้** (2026-09-24 update group `70ce04e7`) การเพิ่ม/แก้ style จึงไม่ต้อง build APK ใหม่ แต่ bundle android โตขึ้น **+810 KB (3.07 → 3.88 MB)** ซึ่งทุกเครื่องต้องโหลด
 
 ## Dependency Management
 - **Lockfile**: `package-lock.json`

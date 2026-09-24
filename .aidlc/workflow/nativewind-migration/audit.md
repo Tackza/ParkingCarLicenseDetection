@@ -108,3 +108,17 @@
 **Action**: task 2.3, 2.4 implemented; wave 2 complete (standard mode)
 **Artifacts**: `global.css`, `app/_layout.tsx`, และไฟล์จาก task 2.1–2.2b
 **Outcome**: pass, 0 tests, 42% overall progress — `npx expo export --platform android` ผ่าน `app/login.js` ไม่ถูกแตะตามเงื่อนไข วัดขนาด bundle เทียบด้วยคำสั่งเดียวกัน: ไม่มี NativeWind 3.07 MB → มี NativeWind 3.88 MB คือ +810 KB (+26%) ตัวเลข 2 MB ที่เคยเห็นตอน eas update เป็นคนละคำสั่ง เทียบกันไม่ได้
+
+### [2026-09-24T05:26:01Z] Task Complete: 3.1 — OTA ขึ้น production
+
+**Phase**: implementation
+**Action**: task 3.1 implemented (standard mode)
+**Artifacts**: EAS update group `70ce04e7-3b6a-4d2d-89ff-d38364636626` (commit `87eeb0e`)
+**Outcome**: pass (publish สำเร็จ), 47% overall progress — ยืนยัน Group ID เดิมเป็น 55bbdb85 ก่อน publish ตามขั้นตอนบังคับ จุดย้อนกลับยังเป็น 55bbdb85 **การพิสูจน์สมมติฐาน OTA ยังไม่จบ** ต้องรอ task 3.2 ที่คนหน้างานเปิดแอพจริง
+
+### [2026-09-24T05:29:42Z] Wave Complete: 3 — พิสูจน์ OTA
+
+**Phase**: implementation
+**Action**: task 3.2 verified by on-site device; wave 3 complete
+**Artifacts**: `design.md`, `blueprints/product.md`, `blueprints/tech.md` (อัปเดตสมมติฐานเป็นข้อเท็จจริง)
+**Outcome**: pass, 53% overall progress — **สมมติฐานใหญ่ที่สุดของงานนี้ได้รับการพิสูจน์แล้ว**: NativeWind ไปกับ OTA ได้ ไม่ต้อง build APK ใหม่ คนหน้างานยืนยันว่าแอพเปิดขึ้น เข้าสู่ระบบ สแกน และพิมพ์สลิปได้ตามปกติ และ global.css ไม่กระทบสลิปที่พิมพ์ ความเสี่ยง "OTA ใช้ไม่ได้" ถูกปิด

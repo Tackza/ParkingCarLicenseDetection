@@ -40,3 +40,18 @@ npx eas update:republish --group 55bbdb85-98b0-42e7-b437-a4ef5f1854c1
 2. ยืนยันเงื่อนไขของ task 1.3 ซ้ำ (ไม่มีกิจกรรมที่ active อยู่)
 3. เตรียมคำสั่ง republish ไว้ในหน้าต่างที่พร้อมกด
 4. จึง publish
+
+---
+
+## อัปเดต — หลัง task 3.1 (2026-09-24)
+
+publish ขึ้น production แล้วด้วย group **`70ce04e7-3b6a-4d2d-89ff-d38364636626`**
+(message: "NativeWind toolchain only, no visual change", commit `87eeb0e`)
+
+**จุดย้อนกลับยังเป็น `55bbdb85` เหมือนเดิม** — คือสถานะก่อนหน้าที่ยังไม่มี NativeWind
+
+```bash
+npx eas update:republish --group 55bbdb85-98b0-42e7-b437-a4ef5f1854c1
+```
+
+ใช้คำสั่งนี้ถ้า task 3.2 พบว่าแอพเปิดไม่ขึ้นหรือทำงานผิดปกติ

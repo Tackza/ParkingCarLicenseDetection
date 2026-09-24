@@ -32,7 +32,7 @@
 
 ## Success Criteria
 - หน้า `login.js` หลังแปลงต้อง**ดูและทำงานเหมือนเดิมทุกประการ** — ไม่มีการเปลี่ยนแปลงที่ผู้ใช้สังเกตได้
-- พิสูจน์ได้ว่า NativeWind deploy ผ่าน OTA (`eas update`) ได้ ไม่ต้อง build APK ใหม่
+- ✅ พิสูจน์แล้วว่า NativeWind deploy ผ่าน OTA (`eas update`) ได้ ไม่ต้อง build APK ใหม่ (2026-09-24)
 - มี palette กลางที่ใช้อ้างอิงได้ แทนการเขียน hex ซ้ำ
 
 ## Constraints & Assumptions
@@ -43,8 +43,8 @@
 - UI เป็นภาษาไทย hardcode ไม่มี i18n
 
 **Assumptions**
-- NativeWind v4 เข้ากันได้กับ Expo SDK 51 / RN 0.74 — **ยังไม่ได้พิสูจน์ ต้องยืนยันในเฟส implement**
-- NativeWind ทำงานที่ชั้น babel + metro เท่านั้น ไม่มี native module จึงน่าจะ OTA ได้ — **ยังไม่ได้พิสูจน์**
+- ~~NativeWind v4 เข้ากันได้กับ Expo SDK 51 / RN 0.74~~ → **ยืนยันแล้ว** (2026-09-24) bundle ผ่านและแอพรันได้จริงบนเครื่องหน้างาน
+- ~~NativeWind ... จึงน่าจะ OTA ได้~~ → **ยืนยันแล้ว** (2026-09-24) update group `70ce04e7` ถึงเครื่องหน้างานและทำงานปกติ ไม่ต้อง build APK
 
 ## Existing User Journeys
 - **Flow ปัจจุบัน**: เปิดแอพ → login (ข้ามอัตโนมัติถ้ามี session) → เชื่อมเครื่องพิมพ์ → หน้าหลัก → แตะแท็บสแกน → กล้อง → ยืนยัน → บันทึก+พิมพ์
