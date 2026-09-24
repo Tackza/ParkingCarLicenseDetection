@@ -29,7 +29,7 @@ import { THAI_PROVINCES } from '../../constants/provinces';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 // import CheckInSyncManager from '../../components/CheckInSyncManager';
 import HistoryItem from '../../components/HistoryItem';
-import { getActiveSession, getScanHistory, getScopeId, insertErrorLog } from '../../constants/Database';
+import { getActiveSession, getScanHistory, getScopeId, getSetting, insertErrorLog } from '../../constants/Database';
 import { useAuth } from '../../contexts/AuthContext';
 import { useMode } from '../../contexts/ModeContext';
 import { useProject } from '../../contexts/ProjectContext';
@@ -43,6 +43,14 @@ const windowHeight = Dimensions.get('window').height;
 //    CheckInSyncManager เขียน sync_status ลง SQLite ทุก 10 วิ แต่หน้านี้อ่านใหม่เฉพาะตอน focus
 //    เดิมจึงต้องสลับหน้าไปมาถึงจะเห็นสถานะเปลี่ยน
 const HISTORY_REFRESH_INTERVAL = 5000;
+
+// Ionicons และ RefreshControl รับสีเป็น prop ไม่ใช่ className
+// ค่าต้องตรงกับ token ใน tailwind.config.js
+const ICON_MUTED = '#6e7580';   // text-subtle
+const ICON_FAINT = '#8f959e';   // icon-faint — ไอคอนประดับในสถานะว่าง
+const ICON_ON_FILL = '#ffffff'; // บนพื้นสีทึบ
+const TINT_PRIMARY = '#217cba'; // primary
+
 
 // เทียบเฉพาะฟิลด์ที่เปลี่ยนได้จากการ sync เพื่อไม่ต้อง setState ทุกรอบ
 const historySignature = (rows) =>
@@ -73,6 +81,7 @@ export default function HistoryScreen() {
   const [printData, setPrintData] = useState(null);
   const [printLoading, setPrintLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [machineCode, setMachineCode] = useState(null);
   const [searchImageModalVisible, setSearchImageModalVisible] = useState(false);
   const [selectedSearchImage, setSelectedSearchImage] = useState(null);
   const receiptRef = useRef();
@@ -352,6 +361,16 @@ export default function HistoryScreen() {
     searchQueryRef.current = searchQuery;
   });
 
+  // ✅ รหัสเครื่องตั้งได้จากหน้า Settings จึงอ่านใหม่ทุกครั้งที่กลับเข้าหน้านี้
+  //    ไม่ได้มีไว้ประดับ — ถ้ายังไม่ตั้ง server จะปฏิเสธทุกรายการด้วย 422
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      getSetting('machineCode').then(v => { if (alive) setMachineCode(v); });
+      return () => { alive = false; };
+    }, [])
+  );
+
   // ✅ รีเฟรชอัตโนมัติเฉพาะตอนที่หน้านี้ถูกเปิดอยู่ แล้วหยุดทันทีที่ออกจากหน้า
   //    ใช้ setInterval ธรรมดา ไม่ใช่ BackgroundTimer เพราะเป็นการรีเฟรช UI
   //    ที่ไม่มีประโยชน์เลยเมื่อผู้ใช้มองไม่เห็นหน้าจอ
@@ -443,59 +462,108 @@ export default function HistoryScreen() {
   }
 
 
+  // ค้นหาในเครื่อง — ช่องนี้ผูกกับ searchQuery ที่มีอยู่แล้วแต่ไม่มี UI มาก่อน
+  //
+  // หน่วง 250 มิลลิวินาทีก่อนยิง query จริง เพราะ getScanHistory ตัด LIMIT ทิ้ง
+  // เมื่อมีคำค้น การพิมพ์ตัวแรก (เช่น "ก") จึงดึงได้ทั้งวันและ re-render ทั้งลิสต์
+  // — ถ้ายิงทุกตัวอักษรบนเครื่อง V3 จะรู้สึกหน่วง
+  const searchDebounceRef = useRef(null);
+  const handleLocalSearch = (text) => {
+    setSearchQuery(text);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => loadHistoryRef.current?.(text), 250);
+  };
+
+  // กัน timer ค้างเมื่อออกจากหน้าไปกลางคัน
+  useEffect(() => () => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+  }, []);
+
   return (
-    <View style={styles.container}>
-      <View style={styles.tabMobile}>
+    <View className="flex-1 bg-surface">
+      {/* แถบดำคลุมพื้นที่ status bar — ของเดิม เก็บไว้เพราะเลย์เอาต์ทั้งหน้าวางทับพื้นที่นั้น */}
+      <View className="h-[25px] bg-black" />
 
+      {/* ── หัวเรื่อง: กิจกรรม · รหัสเครื่อง · สถานะเครือข่าย ── */}
+      <View className="flex-row items-center gap-2 border-b border-border px-[14px] pb-2 pt-[10px]">
+        <View className="flex-1">
+          <Text numberOfLines={1} className="text-[15px] font-bold text-text">
+            {activeProject?.name || 'ไม่พบข้อมูลกิจกรรม'}
+          </Text>
+          {/* ✅ รหัสเครื่องอยู่ตรงนี้เพราะเป็นสาเหตุอันดับหนึ่งที่รายการถูกปฏิเสธ
+              เดิมต้องเข้าหน้า Settings ถึงจะรู้ว่าตั้งไว้หรือยัง */}
+          <Text
+            numberOfLines={1}
+            className={`mt-[1px] text-[12px] ${machineCode ? 'text-text-subtle' : 'font-semibold text-danger-ink'}`}
+          >
+            {machineCode ? `เครื่อง ${machineCode}` : 'ยังไม่ได้ตั้งรหัสเครื่อง'}
+          </Text>
+        </View>
+
+        {/* ✅ เดิมเป็นไอคอนเมฆเปล่าๆ ซึ่งไม่มีใครรู้ว่าแปลว่าอะไร — ใส่จุดสีคู่กับคำ */}
+        <View className={`flex-row items-center gap-1 rounded-[7px] px-2 py-1 ${isOnline ? 'bg-success-bg' : 'bg-danger-bg'}`}>
+          <View className={`h-[7px] w-[7px] rounded-full ${isOnline ? 'bg-success' : 'bg-danger'}`} />
+          <Text className={`text-[12px] font-semibold ${isOnline ? 'text-success-ink' : 'text-danger-ink'}`}>
+            {isOnline ? 'ออนไลน์' : 'ออฟไลน์'}
+          </Text>
+        </View>
       </View>
-      <View style={styles.header}>
-        <Text style={styles.title}>{activeProject?.name || 'ไม่พบข้อมูลกิจกรรม'}</Text>
-
-        <Ionicons
-          name={isOnline ? "cloud-done" : "cloud-offline"}
-          size={22}
-          color={isOnline ? '#27ae60' : '#e74c3c'} // เขียวเมื่อ Online, แดงเมื่อ Offline
-        />
-
-      </View>
-
 
       {/* ✅ เตือนค้างไว้เมื่อยังเชื่อมเครื่องพิมพ์ไม่ได้ — ลงทะเบียนต่อได้ แต่จะพิมพ์ไม่ออก
           แตะเพื่อกลับไปเลือก/เชื่อมเครื่องพิมพ์ (manual=1 บอกให้หน้านั้นแสดงรายการแทนการ auto-connect) */}
       {!isPrinterConnected && (
         <TouchableOpacity
-          style={styles.printerWarningBanner}
+          className="mx-[14px] mt-[10px] flex-row items-center gap-2 rounded-[9px] bg-warning px-3 py-[9px]"
           onPress={() => router.push('/bluetooth-setup?manual=1')}
           activeOpacity={0.8}
         >
-          <Ionicons name="print-outline" size={18} color="#fff" />
-          <Text style={styles.printerWarningText}>
+          <Ionicons name="print-outline" size={17} color={ICON_ON_FILL} />
+          <Text className="flex-1 text-[13px] font-semibold text-white">
             {hasSavedPrinter
               ? 'ยังไม่ได้เชื่อมเครื่องพิมพ์ — แตะเพื่อเชื่อมใหม่'
               : 'ยังไม่ได้ตั้งเครื่องพิมพ์ — แตะเพื่อเลือก'}
           </Text>
-          <Ionicons name="chevron-forward" size={18} color="#fff" />
+          <Ionicons name="chevron-forward" size={17} color={ICON_ON_FILL} />
         </TouchableOpacity>
       )}
 
-      {/* ✅ ADD: Online Search Button */}
-      <TouchableOpacity
-        style={[styles.onlineSearchButton, !isOnline && styles.onlineSearchButtonDisabled]}
-        onPress={() => {
-          if (!isOnline) {
-            Alert.alert('ไม่มีอินเทอร์เน็ต', 'ต้องมีการเชื่อมต่ออินเทอร์เน็ตเพื่อใช้ฟีเจอร์ค้นหาออนไลน์');
-            return;
-          }
-          setSearchModalVisible(true);
-        }}
-        activeOpacity={isOnline ? 0.7 : 1}
-      >
-        <Ionicons name="search-circle" size={24} color="#fff" />
-        <Text style={styles.onlineSearchButtonText}>ค้นหาทะเบียน (Online)</Text>
-      </TouchableOpacity>
+      {/* ── ค้นหา: ช่องซ้ายกรองในเครื่อง ปุ่มขวาถามเซิร์ฟเวอร์ ── */}
+      <View className="flex-row gap-2 px-[14px] pt-[10px]">
+        <View className="flex-1">
+          <TextInput
+            value={searchQuery}
+            onChangeText={handleLocalSearch}
+            placeholder="ค้นหาทะเบียน"
+            placeholderTextColor={ICON_MUTED}
+            returnKeyType="search"
+            onSubmitEditing={() => Keyboard.dismiss()}
+            className="h-[42px] rounded-[9px] border border-border-strong bg-surface py-0 pl-[34px] pr-3 text-[15px] text-text"
+          />
+          {/* วางไอคอนไว้หลัง TextInput เพื่อให้ทับด้านบนโดยไม่ต้องพึ่ง zIndex
+              (บน Android zIndex ระหว่าง sibling เอาแน่ไม่ได้) และปิดการรับสัมผัสไว้ */}
+          <View pointerEvents="none" className="absolute left-[11px] top-[12px]">
+            <Ionicons name="search" size={17} color={ICON_MUTED} />
+          </View>
+        </View>
 
+        {/* ปุ่มนี้ไม่ใช่การ submit ช่องซ้าย แต่เป็นการถามเซิร์ฟเวอร์ — ไอคอนเมฆบอกความต่าง */}
+        <TouchableOpacity
+          className={`h-[42px] flex-row items-center gap-[5px] rounded-[9px] px-[14px] ${isOnline ? 'bg-primary' : 'bg-primary-muted'}`}
+          onPress={() => {
+            if (!isOnline) {
+              Alert.alert('ไม่มีอินเทอร์เน็ต', 'ต้องมีการเชื่อมต่ออินเทอร์เน็ตเพื่อใช้ฟีเจอร์ค้นหาออนไลน์');
+              return;
+            }
+            setSearchModalVisible(true);
+          }}
+          activeOpacity={isOnline ? 0.7 : 1}
+        >
+          <Ionicons name="cloud-outline" size={16} color={ICON_ON_FILL} />
+          <Text className="text-[14px] font-semibold text-white">ค้นหา</Text>
+        </TouchableOpacity>
+      </View>
 
-      <View style={styles.content}>
+      <View className="flex-1 pt-[10px]">
         {/* ✅ render FlatList เสมอ แล้วใช้ ListEmptyComponent แทนการสลับ View
             เพื่อให้ "ดึงลงเพื่อรีเฟรช" ใช้ได้ตอนลิสต์ว่างด้วย ซึ่งเป็นตอนที่อยากรีเฟรชที่สุด */}
         <FlatList
@@ -511,21 +579,31 @@ export default function HistoryScreen() {
             />
           )}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ flexGrow: 1 }}
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: 12 }}
           refreshControl={
             <RefreshControl
               refreshing={isRefreshing}
               onRefresh={handlePullToRefresh}
-              colors={['#3498db']}
-              tintColor="#3498db"
+              colors={[TINT_PRIMARY]}
+              tintColor={TINT_PRIMARY}
             />
           }
           ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>
-                {!activeProject ? 'ไม่พบข้อมูลกิจกรรม' : (searchQuery.length > 0 ? 'ไม่พบข้อมูลที่ตรงกัน' : 'ไม่มีข้อมูล')}
+            <View className="flex-1 items-center justify-center px-6 py-10">
+              <Ionicons name="documents-outline" size={38} color={ICON_FAINT} />
+              <Text className="mt-[10px] text-[15px] text-text-muted">
+                {!activeProject ? 'ไม่พบข้อมูลกิจกรรม' : (searchQuery.length > 0 ? 'ไม่พบข้อมูลที่ตรงกัน' : 'ยังไม่มีรายการลงทะเบียน')}
               </Text>
             </View>
+          }
+          ListFooterComponent={
+            // ✅ getScanHistory ใส่ LIMIT 5 ไว้เมื่อไม่ได้ค้นหา — เดิมไม่มีอะไรบอก
+            //    เจ้าหน้าที่จึงเข้าใจว่าวันนี้ลงทะเบียนไปแค่ 5 คัน
+            !searchQuery && history.length >= 5 ? (
+              <Text className="px-[14px] pb-1 pt-2 text-center text-[12px] text-text-subtle">
+                แสดง 5 รายการล่าสุด · พิมพ์ทะเบียนเพื่อค้นหารายการก่อนหน้า
+              </Text>
+            ) : null
           }
         />
       </View>
@@ -761,92 +839,7 @@ export default function HistoryScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 15,
-    paddingTop: 0,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderColor: '#e9ecef',
-    height: 50,
-  },
-  tabMobile: {
-    height: 25,
-    backgroundColor: 'black',
-    borderBottomWidth: 1,
-    // borderColor:'#e9ecef',
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: '650',
-    color: '#055bb5',
-    fontFamily: 'Kanit-Regular',
-  },
-  clearButton: {
-    fontSize: 14,
-    color: '#e74c3c',
-    fontWeight: '600',
-  },
-  content: {
-    flex: 1,
-  },
-  listContainer: {
-    padding: 15,
-  },
 
-
-
-
-
-
-
-
-
-
-  detailLabel: {
-    fontWeight: '300',
-    color: '#7f8c8d',
-  },
-
-  printerWarningBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#f39c12',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    marginHorizontal: 12,
-    marginTop: 8,
-    borderRadius: 10,
-  },
-  printerWarningText: {
-    flex: 1,
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  emptyIcon: {
-    fontSize: 80,
-    marginBottom: 20,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#e02329ff',
-  },
   modalContainer: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.9)',
@@ -911,25 +904,6 @@ const styles = StyleSheet.create({
   },
 
   // --- New Styles ---
-  onlineSearchButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#3498db',
-    padding: 10,
-    marginHorizontal: 10,
-    marginVertical: 10,
-    borderRadius: 10,
-  },
-  onlineSearchButtonDisabled: {
-    backgroundColor: '#95a5a6',
-  },
-  onlineSearchButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginLeft: 10,
-  },
   searchModalContent: {
     width: '100%',
     backgroundColor: '#fff',
