@@ -67,18 +67,18 @@ Phase 3 ส่ง OTA ขึ้น production ทั้งที่**ยัง�
     - คนที่หน้างานเปิดแอพหนึ่งเครื่อง ยืนยันว่าเข้าสู่ระบบได้ สแกนได้ พิมพ์สลิปได้
     - **ถ้าพัง**: republish ทันที แล้วกลับไปทบทวน phase 2 — แผน deploy ทั้งหมดต้องเปลี่ยนเป็น build APK
 
-- [ ] 4. Design tokens
-  - [ ] 4.1 **เติม** semantic token เข้า `tailwind.config.js` ที่สร้างไว้แล้วที่ 2.2b
+- [x] 4. Design tokens
+  - [x] 4.1 **เติม** semantic token เข้า `tailwind.config.js` ที่สร้างไว้แล้วที่ 2.2b
     - **Deps**: 3.2 | **Ref**: `design.md` — C1, Design Tokens
     - ใส่ token 10 ตัวตามตารางในเอกสาร design ค่า hex ต้องตรงของเดิมทุกตัว
     - `content` ต้องครอบคลุม `./app/**/*.{js,jsx,ts,tsx}` และ `./components/**/*.{js,jsx,ts,tsx}`
     - ตั้ง `input` เป็น alias ของ `background` (ทั้งคู่คือ `#f8f9fa`) เพื่อให้แยกแก้ได้ทีหลัง
     - **ไม่ต้องใส่ครบ 54 สี** — ใส่เฉพาะที่หน้า login ใช้ ที่เหลือทยอยเพิ่มเมื่อแปลงหน้าอื่น
-  - [ ] 4.2 **ยืนยัน**ว่า `nativewind-env.d.ts` ถูกสร้างอัตโนมัติ
+  - [x] 4.2 **ยืนยัน**ว่า `nativewind-env.d.ts` ถูกสร้างอัตโนมัติ
     - **Deps**: 4.1 | **Ref**: `design.md` — C3 (D3-9)
     - `withNativeWind` มี `typescriptEnvPath = "nativewind-env.d.ts"` และ `disableTypeScriptGeneration = false` จึงสร้างให้เองตอน metro รัน
     - ถ้าไม่ถูกสร้างจริง ค่อยเขียนเอง
-  - [ ] 4.3 ยืนยันว่า bundle ยังผ่านหลังเพิ่ม token
+  - [x] 4.3 ยืนยันว่า bundle ยังผ่านหลังเพิ่ม token
     - **Deps**: 4.2 | **Ref**: `design.md` — Implementation
 
 - [ ] 5. แปลง UI — pilot ที่ `login.js`
@@ -126,9 +126,9 @@ Phase 3 ส่ง OTA ขึ้น production ทั้งที่**ยัง�
 | 2.4 | ยืนยัน bundle ผ่าน (ยังไม่แตะ UI) | 2.3 | ✅ |
 | 3.1 | OTA ขึ้น production (ไม่มีการเปลี่ยนแปลงที่เห็น) | 2.4 | ✅ |
 | 3.2 | ยืนยันแอพยังทำงานปกติ | 3.1 | ✅ |
-| 4.1 | เติม token เข้า tailwind.config.js | 3.2 | ⬜ |
-| 4.2 | ยืนยัน nativewind-env.d.ts ถูกสร้างเอง | 4.1 | ⬜ |
-| 4.3 | ยืนยัน bundle หลังเพิ่ม token | 4.2 | ⬜ |
+| 4.1 | เติม token เข้า tailwind.config.js | 3.2 | ✅ |
+| 4.2 | ยืนยัน nativewind-env.d.ts ถูกสร้างเอง | 4.1 | ✅ |
+| 4.3 | ยืนยัน bundle หลังเพิ่ม token | 4.2 | ✅ |
 | 5.1 | แปลง 13 style key เป็น className | 4.3 | ⬜ |
 | 5.2 | จัดการเงากล่องฟอร์ม | 5.1 | ⬜ |
 | 5.3 | ลบ StyleSheet.create | 5.2 | ⬜ |

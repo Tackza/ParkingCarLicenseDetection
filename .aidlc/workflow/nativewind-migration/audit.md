@@ -122,3 +122,10 @@
 **Action**: task 3.2 verified by on-site device; wave 3 complete
 **Artifacts**: `design.md`, `blueprints/product.md`, `blueprints/tech.md` (อัปเดตสมมติฐานเป็นข้อเท็จจริง)
 **Outcome**: pass, 53% overall progress — **สมมติฐานใหญ่ที่สุดของงานนี้ได้รับการพิสูจน์แล้ว**: NativeWind ไปกับ OTA ได้ ไม่ต้อง build APK ใหม่ คนหน้างานยืนยันว่าแอพเปิดขึ้น เข้าสู่ระบบ สแกน และพิมพ์สลิปได้ตามปกติ และ global.css ไม่กระทบสลิปที่พิมพ์ ความเสี่ยง "OTA ใช้ไม่ได้" ถูกปิด
+
+### [2026-09-24T05:32:07Z] Wave Complete: 4 — Design tokens
+
+**Phase**: implementation
+**Action**: task 4.1, 4.2, 4.3 implemented; wave 4 complete
+**Artifacts**: `tailwind.config.js`
+**Outcome**: pass, 68% overall progress — เติม semantic token 11 ตัว (10 ตามตาราง design + input alias) ยืนยันด้วย resolveConfig ว่าค่าตรง hex เดิมทุกตัวและสีมาตรฐานของ Tailwind ไม่ถูกทับ `nativewind-env.d.ts` ถูกสร้างอัตโนมัติและ commit ไปแล้วที่ 87eeb0e จึงไม่ต้องเขียนเอง bundle ผ่านและได้ **hash เดิมเป๊ะ** (entry-cf9783a7) เพราะยังไม่มีไฟล์ไหนใช้ class เหล่านี้ Tailwind จึง purge ทิ้ง — ยืนยันว่า wave นี้ไม่มีผลต่อ runtime
