@@ -67,7 +67,7 @@ EnvironmentProvider → AuthProvider → SyncProvider → ProjectProvider → Mo
 - [app/(tabs)/main.js](app/(tabs)/main.js) — local check-in history, plus a server-side plate search modal that can reprint
 - [app/(tabs)/scan.js](app/(tabs)/scan.js) — OCR → manual correction → register lookup → save/print (mode two) or hand off to passenger_count (mode one)
 - [app/passenger_count.js](app/passenger_count.js) — mode-one only: passenger counters, then insert + print
-- [app/(tabs)/settings.js](app/(tabs)/settings.js) — mode toggle, environment switch, machine code, DB export, sync counters, logout, OTA info
+- [app/(tabs)/settings.js](app/(tabs)/settings.js) — mode toggle, environment switch, machine code, DB export, sync counters, logout, OTA info, and the **"รถที่เหลือ"** list of not-yet-scanned vehicles
 
 ### `activeProject` is chosen by wall-clock time, not by the user
 
@@ -98,6 +98,27 @@ The difference between `3` and `4` is **who is at fault**, and it drives the ret
 - **`4` backs off** through `SYNC_RETRY_BACKOFF_MINUTES` (1m → 5m → 15m → 1h → 3h → 6h, then held at 6h), tracked in `retry_count` / `next_retry_at`. Retrying a payload the server just rejected is pointless, so a permanently-rejected row costs ~5 requests a day instead of ~8,600. There is deliberately **no hard cap**: the row is never abandoned, in case the cause is fixed server-side later.
 
 Both counters reset on success.
+
+### Both sync loops stop when the screen goes off
+
+Despite the library's name, `react-native-background-timer` buys this app **nothing** in the background on Android. `BackgroundTimer.setTimeout()` maps to a native method that is only this:
+
+```java
+Handler handler = new Handler();
+handler.postDelayed(runnable, (long) timeout);
+```
+
+No wake lock, no `AlarmManager`, no foreground service. The library *does* have a wake-lock-holding API — `start()` / `runBackgroundTimer()` — but the app never calls it (only `setTimeout` and `clearTimeout`), and `WAKE_LOCK` is not among the permissions in `android/app/src/main/AndroidManifest.xml`, so calling it would throw `SecurityException` anyway. Nothing anywhere holds a wake lock or keeps the screen on.
+
+`postDelayed` schedules against `uptimeMillis()`, which stops advancing while the device is in deep sleep. So once the screen goes off and the device suspends, **both timer chains freeze** and resume only when the device wakes. Backgrounding the app with the screen still on is fine — it is the screen going off that stops the sync.
+
+Nothing is lost when this happens: queued check-ins keep `sync_status` 0/3 and upload once the device wakes. What is lost is **freshness**, and that has teeth — the registers pull stalls, so `findRegisterByPlate()` answers "ไม่พบซีเจ็ด" for any vehicle registered during the gap, and mode one hard-disables saving without a C7.
+
+The fix is operational, not code: a checkpoint tablet is plugged in anyway, so set it to never sleep (Display → Sleep → Never, or Developer options → Stay awake while charging). `expo-keep-awake@13.0.1` is already installed as a transitive dependency of `expo` (not declared in `package.json`) if that needs enforcing from inside the app instead. Genuine background execution would need a foreground service plus `WAKE_LOCK` — native changes, so a rebuild rather than an OTA, and `android/` is committed here so a config plugin will not apply itself.
+
+Related: **`BackgroundTimer.clearTimeout()` does not cancel anything natively.** The native `clearTimeout` is commented out in the module, and the JS side only does `delete this.callbacks[id]`. The pending `Handler` still fires and still crosses the bridge; the emitter then finds no registered callback and drops it. The callback genuinely will not run, so the cleanup paths are correct — but a "cleared" timer still costs a wakeup, and clearing cannot stop a sync that has already passed its first `await`. That is what `currentSyncSessionId` is for.
+
+All of the above is read from the library source and the manifest; it has **not** been verified on a physical tablet, and OEM battery managers (common on cheap Android tablets) can be more aggressive still.
 
 ### How the registers pull stays (or fails to stay) in step with the server
 
@@ -142,6 +163,20 @@ Never inline the `appMode` comparison again: the old `appMode == "true" ? 'proje
 The mode also keys the `<Tabs>` element (`key={isModeOne ? ... }`), so toggling it remounts the whole tab navigator.
 
 `passenger` is a pipe-delimited string, `adults|children|monks|novices` (default `'0|0|0|0'`), written by `passenger_count.js` and re-parsed by each receipt's `formatPassengerInfo`. Per-project flags `not_show_child_qty` / `not_show_novice_qty` hide counters, and `show_slip_section_2` (default **on**, hidden only when the API explicitly sends `false`) gates the second slip section.
+
+### The "รถที่เหลือ" list
+
+`getUnscannedRegisters(currentId, seqNo)` backs a menu in Settings that lists the registered vehicles nobody has scanned yet — the roster minus the ones already seen. Staff otherwise have no end condition for sweeping the parking area, and at close of day the leftovers are the "did not arrive" list.
+
+Three things about it are load-bearing:
+
+1. **It reads `registers`, not `check_ins`.** `checkin_date` / `activity1_date` / `activity2_date` come from the server, so the list reflects scans from *every* device rather than just this one — which is the whole point, since lanes work in parallel. The cost is that it is only as fresh as the last registers pull, and goes stale outright when the device is asleep or offline (see **Both sync loops stop when the screen goes off**). The screen states the sync cadence for that reason.
+2. **The date column must track `scan.js`.** `getScanDateField()` mirrors the duplicate-scan guard in [app/(tabs)/scan.js](app/(tabs)/scan.js) exactly — `!seqNo || 0` → `checkin_date`, `1` → `activity1_date`, `2` → `activity2_date`, truthy test so `''` counts as unscanned. If the two ever disagree, a row reads as unscanned here and then warns "ลงทะเบียนแล้ว" at the vehicle, and staff stop trusting the screen. Change them together.
+3. **Scoping matches `getRegistersCountForId()`**, including the activity-mode detour: `registers` stores only `project_id`, so activity mode has to map `activity_id` → the set of `project_id`s first. Sharing that logic is what keeps the new total and the "ใบ C7" counter on the same screen referring to the same base.
+
+Rows are grouped by `station_name` because vehicles from one station travel together and park together, so the ones already found narrow down where the missing ones are.
+
+**There is no driver phone column.** `registers` has 28 columns and none of them is a phone or a driver name (`activity1_user` / `activity1_name` are the staff member who performed activity 1). Until the backend sends one, the contact line falls back to `note` / `alert_message` — both synced to the device on every pull and, before this, displayed nowhere in the app. `extractPhone()` in `settings.js` pulls a Thai-format number out of either; a hit becomes a call button, anything else renders as text. Adding the real field means two edits: the `columns` list in `getUnscannedRegisters()` and the `candidates` array in `getContactInfo()`. Note that tablets without a SIM cannot dial, so the number is kept readable and `selectable` rather than living only behind the button — and that a phone column will also start riding along in the Settings DB export, which is a PDPA question for the org, not a technical one.
 
 ### Printer connection
 
@@ -227,7 +262,7 @@ In sync code, callbacks are `useCallback`-wrapped and long-lived values are read
 - **The API base URL is duplicated as an inline ternary in seven files** — `contexts/AuthContext.js`, `contexts/ProjectContext.js`, `components/CheckInSyncManager.js`, `app/(tabs)/_layout.js`, `app/(tabs)/scan.js`, `app/(tabs)/main.js`, `app/(tabs)/settings.js`. Changing or adding an environment means editing all of them (or centralizing them deliberately, in one change).
 - **No `.env` files.** Runtime config (environment, mode, machine code, printer) lives in the SQLite `settings` table. Build-time variants come from `APP_VARIANT` in eas.json. Default environment is `prod`.
 - **Imports mix `@/...` and relative paths** within the same directory. Match whatever the file already uses.
-- **Background timers** use `react-native-background-timer`, not `setTimeout`/`setInterval` — required for the sync loops to keep running when the app is backgrounded.
+- **Background timers** use `react-native-background-timer`, not `setTimeout`/`setInterval`. Match that in sync code for consistency, but do not believe the name: on Android it is a bare `Handler.postDelayed` with no wake lock, so it survives the app being backgrounded with the screen on and nothing more. See **Both sync loops stop when the screen goes off**.
 - **Thai TTS** for plate readback maps characters to spoken words in [utils/speechUtils.js](utils/speechUtils.js) (`กค583` → "กอ ไก่ คอ ควาย ห้า แปด สาม"). Don't replace it with `Speech.speak()` of the raw plate.
 
 ## Dead code and known warts
@@ -247,6 +282,7 @@ Several files look live but aren't — check before editing:
 - `CheckInSyncManager` reads `useAuth()` for `user?.id` on its error logs, but it is mounted above the login screen, so early-startup logs can carry a null user.
 - **`AuthContext.logout()` is never called.** The Settings logout only does `clearSession()` on the database, so the context keeps the previous `user` until the app restarts — later error logs carry the stale id, and logging in as a different account hits the broken `saveSession(user.id, user.username)` call above.
 - Logging out does not warn when check-ins are still queued, even though the count is displayed directly above the button. Nothing is lost (the rows keep `sync_status` 0/3) but they stay stuck until someone logs back in. `getTotalUnsyncedCheckInsCount()` exists for exactly this warning — the environment switch already uses it.
+- `settings.js` has an `if (loading) return <spinner>` roughly a third of the way down, with every hook above it. **A hook added below that line crashes the screen** with "rendered more hooks than during the previous render" the instant `loading` flips false — same trap as `ProjectProvider`, but here it fires for real rather than being masked by a guard higher up. The `useMemo` backing the "รถที่เหลือ" grouping sits just above the return for this reason.
 - The master approval code `8989` is hardcoded at four separate call sites in `settings.js`.
 - `handleClearRegisters` does not refresh the counters, so "ใบ C7" keeps showing the pre-delete number.
 - `exportStartDate` / `exportEndDate` are dead state — the export modal never renders date inputs and `exportDatabaseFile()` takes no range. `exportDatabaseToJSON(start, end)` in [utils/exportUtils.js](utils/exportUtils.js) would accept one but is not imported.
