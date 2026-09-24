@@ -43,7 +43,7 @@
 |---|---|---|
 | `app/_layout.tsx` | Root layout | ประกอบ provider 6 ชั้น, `setupDatabase()`, mount `CheckInSyncManager` |
 | `app/index.js` | Redirect | ไปหน้า `/login` เสมอในทางปฏิบัติ |
-| `app/(tabs)/_layout.js` | Tabs + sync | registers pull ทุก 30 วิ, intercept แท็บสแกนเพื่อเปิดกล้อง |
+| `app/(tabs)/_layout.js` | Tabs + sync | registers pull ทุก 10 วิ, intercept แท็บสแกนเพื่อเปิดกล้อง |
 | `components/CheckInSyncManager.js` | Headless | check-ins push ทุก 10 วิ |
 
 ## Module Dependencies
