@@ -142,3 +142,10 @@
 2. `text-sm`/`text-base` แถม line-height ที่ของเดิมไม่เคยตั้ง → เปลี่ยนเป็น `text-[14px]`/`text-[16px]`
 
 แก้เอกสาร baseline ให้ตรงความจริงแล้ว พร้อมบทเรียนสำหรับการแปลงอีก 21 ไฟล์ `app/login.js` เหลือ 163 บรรทัด (จาก 219) ไม่มี StyleSheet ยังเป็น .js diff ไม่มีไฟล์นอกขอบเขต
+
+### [2026-09-24T06:09:01Z] Task Complete: 6.2 — deploy
+
+**Phase**: implementation
+**Action**: task 6.2 implemented (standard mode)
+**Artifacts**: EAS update group `be660547-5f27-41fc-9bc3-60cf8b6787f5` (commit `d4a44d5`)
+**Outcome**: pass (publish สำเร็จ), 95% overall progress — ยืนยัน Group ID สดก่อน publish ได้ 70ce04e7 ซึ่งกลายเป็นจุดย้อนกลับใหม่ (ดีกว่า 55bbdb85 เพราะพิสูจน์แล้วว่าทำงานได้และมี toolchain อยู่แล้ว การย้อนกลับจึงถอนเฉพาะ UI) เหลือ task 6.3 ที่ต้องให้คนหน้างานยืนยัน

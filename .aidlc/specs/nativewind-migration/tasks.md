@@ -101,7 +101,7 @@ Phase 3 ส่ง OTA ขึ้น production ทั้งที่**ยัง�
     - **Deps**: 5.3 | **Ref**: task 1.1
     - ไล่ทีละ key เทียบกับตารางจาก 1.1 ว่าทุกค่าตรงกัน
     - ตรวจ `git diff --stat` ว่าไม่มีไฟล์นอก C1–C8 ถูกแตะ
-  - [ ] 6.2 ยืนยันว่า bundle ผ่านและ deploy
+  - [x] 6.2 ยืนยันว่า bundle ผ่านและ deploy
     - **Deps**: 6.1 | **Ref**: `decisions-design.md` — D3-7
     - ทวนเงื่อนไข 1.3 ซ้ำ (ไม่มีกิจกรรม active) และเตรียม rollback ใหม่จาก group id ล่าสุด
     - `eas update --branch production`
@@ -133,7 +133,7 @@ Phase 3 ส่ง OTA ขึ้น production ทั้งที่**ยัง�
 | 5.2 | จัดการเงากล่องฟอร์ม | 5.1 | ✅ |
 | 5.3 | ลบ StyleSheet.create | 5.2 | ✅ |
 | 6.1 | เทียบผลกับ baseline | 5.3 | ✅ |
-| 6.2 | bundle + deploy | 6.1 | ⬜ |
+| 6.2 | bundle + deploy | 6.1 | ✅ |
 | 6.3 | คนหน้างานยืนยัน | 6.2 | ⬜ |
 
 *(18 task — phase 1 มี 3, phase 2 มี 4, phase 3 มี 2, phase 4 มี 3, phase 5 มี 3, phase 6 มี 3)*
