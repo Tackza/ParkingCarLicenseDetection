@@ -38,7 +38,7 @@ KNOWN = {
 }
 
 
-def run_baseline(images):
+def run_baseline(images, ocr_pt="model/data_plate.pt"):
     """Ultralytics .pt, decision-for-decision the same as server.py."""
     from ultralytics import YOLO
 
@@ -46,7 +46,7 @@ def run_baseline(images):
     from function.helper import data_province, get_thai_character
 
     region = YOLO(str(DETECTOR / "model/license_plate.pt"))
-    ocr = YOLO(str(DETECTOR / "model/data_plate.pt"))
+    ocr = YOLO(str(DETECTOR / ocr_pt))
 
     out = {}
     for path in images:
@@ -84,8 +84,8 @@ def run_baseline(images):
     return out
 
 
-def run_onnx(images, precision):
-    engine = LprOnnx(ONNX_DIR, precision=precision)
+def run_onnx(images, precision, onnx_dir=ONNX_DIR):
+    engine = LprOnnx(onnx_dir, precision=precision)
     out = {}
     for path in images:
         d = engine.detect_file(path)
@@ -106,7 +106,10 @@ def main():
     ap.add_argument("--images", default=str(DETECTOR / "license-car"))
     ap.add_argument("--warmup", type=int, default=2, help="untimed runs before measuring")
     ap.add_argument("--out", default=str(Path(__file__).parent / "phase0_results.json"))
+    ap.add_argument("--ocr-pt", default="model/data_plate.pt", help="stage-2 .pt for the baseline")
+    ap.add_argument("--onnx-dir", default=str(ONNX_DIR), help="folder written by export_models.py")
     args = ap.parse_args()
+    onnx_dir = Path(args.onnx_dir)
 
     images = sorted(Path(args.images).glob("*.jpg"))
     if not images:
@@ -114,13 +117,13 @@ def main():
     print(f"{len(images)} images from {args.images}\n")
 
     for _ in range(args.warmup):  # first ORT run pays graph-optimisation cost
-        run_onnx(images[:1], "fp16")
+        run_onnx(images[:1], "fp16", onnx_dir)
 
     runs = {}
     for name, fn in (
-        ("baseline", lambda: run_baseline(images)),
-        ("onnx-fp32", lambda: run_onnx(images, "fp32")),
-        ("onnx-fp16", lambda: run_onnx(images, "fp16")),
+        ("baseline", lambda: run_baseline(images, args.ocr_pt)),
+        ("onnx-fp32", lambda: run_onnx(images, "fp32", onnx_dir)),
+        ("onnx-fp16", lambda: run_onnx(images, "fp16", onnx_dir)),
     ):
         t = time.perf_counter()
         runs[name] = fn()

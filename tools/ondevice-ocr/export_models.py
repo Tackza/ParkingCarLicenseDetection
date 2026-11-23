@@ -57,7 +57,10 @@ def export_one(name: str, pt_rel: str, out_dir: Path) -> dict:
         format="onnx",
         imgsz=IMGSZ,
         opset=OPSET,
-        dynamic=False,   # fixed 1x3x640x640 — mobile runtimes prefer static shapes
+        # Dynamic H/W: the pipeline feeds rect-letterboxed inputs (long side 640, the other
+        # padded only to a multiple of 32), exactly like ultralytics' .pt inference. A static
+        # 640x640 export forces square padding and misreads some wide plate crops.
+        dynamic=True,
         simplify=True,
         half=False,      # FP16 is done below; ultralytics refuses half=True on CPU export
         device="cpu",
@@ -136,7 +139,10 @@ def build_label_table(ocr_names: dict) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(DETECTOR / "model" / "onnx"))
+    ap.add_argument("--ocr-pt", default=MODELS["plate_ocr"],
+                    help="stage-2 weights, relative to the detector folder (e.g. model/data_plate_ft1.pt)")
     args = ap.parse_args()
+    MODELS["plate_ocr"] = args.ocr_pt
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)

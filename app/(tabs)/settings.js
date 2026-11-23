@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Modal, ScrollView, SectionList, Text, TextInput, TouchableOpacity, View } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons'; // Import ไอคอน
@@ -11,6 +11,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
 import { exportDatabaseFile } from '../../utils/exportUtils';
+import { getInnerPrinterStatus, printReceiptImage } from '../../utils/printer';
+import { captureRef } from 'react-native-view-shot';
 
 
 // ✅ registers ยังไม่มีคอลัมน์เบอร์โทร (ต้องให้ backend ส่งมาก่อน — ดูแผน 1b)
@@ -162,6 +164,8 @@ export default function SettingsScreen() {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(true);
   const [machineCode, setMachineCode] = useState(null);
+  const testSlipRef = useRef(null);
+  const [testSlipTime, setTestSlipTime] = useState('');
   const router = useRouter();
   const [isModalVisible, setModalVisible] = useState(false);
   const [masterCodeInput, setMasterCodeInput] = useState('');
@@ -375,6 +379,34 @@ export default function SettingsScreen() {
   const API_BASE_URL = environment === 'prod'
     ? 'https://mbus.dhammakaya.network/api' // <-- ❗️ URL ของ Prod
     : 'https://mbus-test.dhammakaya.network/api'; // <-- URL ของ Test
+
+  // ทดสอบเครื่องพิมพ์โดยไม่ต้องมีข้อมูลเช็กอิน: ใช้เส้นทางเดียวกับใบเสร็จจริง (utils/printer.js)
+  const handlePrinterTest = async () => {
+    try {
+      const status = await getInnerPrinterStatus();
+      if (status && !status.ok) {
+        Alert.alert('เครื่องพิมพ์ไม่พร้อม', status.message);
+        return;
+      }
+      setTestSlipTime(new Date().toLocaleString('th-TH'));
+      // รอให้เวลาใหม่ render ลงสลิปก่อนจับภาพ
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const uri = await captureRef(testSlipRef, { format: 'png', quality: 1.0, result: 'base64' });
+      const via = await printReceiptImage(uri);
+      Alert.alert('พิมพ์สำเร็จ', via === 'sunmi' ? 'พิมพ์ผ่านเครื่องพิมพ์ในตัว (SUNMI)' : 'พิมพ์ผ่าน Bluetooth');
+    } catch (error) {
+      Alert.alert('พิมพ์ไม่สำเร็จ', error?.message || 'ไม่สามารถพิมพ์ได้');
+      insertErrorLog({
+        comp_id: machineCode || null,
+        error_type: 'PRINT_ERROR',
+        error_message: error?.message || 'Printer test failed',
+        error_code: error?.code || null,
+        page_name: 'settings',
+        action_name: 'handlePrinterTest',
+        user_id: null,
+      }).catch(() => {});
+    }
+  };
 
   const handleLogout = async () => {
     Alert.alert(
@@ -1211,6 +1243,7 @@ export default function SettingsScreen() {
               onPress={openMachineCode}
             />
             <MenuRow icon="swap-horizontal-outline" label="โหมด" value={modeLabel(isModeOne)} onPress={openModeChange} />
+            <MenuRow icon="print-outline" label="ทดสอบเครื่องพิมพ์" onPress={handlePrinterTest} />
             {/* Test เป็นสีส้ม — ลงทะเบียนหน้างานบน test คือข้อมูลหายไปจากระบบจริง ต้องเห็นได้ทันที */}
             <MenuRow
               icon="server-outline"
@@ -1230,6 +1263,19 @@ export default function SettingsScreen() {
           </MenuGroup>
         </View>
       </ScrollView>
+
+      {/* สลิปทดสอบ วางไว้นอกจอ ใช้จับภาพสำหรับ "ทดสอบเครื่องพิมพ์" เท่านั้น */}
+      <View
+        ref={testSlipRef}
+        collapsable={false}
+        style={{ position: 'absolute', left: -2000, top: 0, width: 384, padding: 16, backgroundColor: '#fff', alignItems: 'center' }}
+      >
+        <Text style={{ fontSize: 28, fontWeight: 'bold', color: '#000' }}>ทดสอบเครื่องพิมพ์</Text>
+        <Text style={{ fontSize: 20, color: '#000', marginTop: 4 }}>Mbus Scan {Constants.expoConfig?.version}</Text>
+        <Text style={{ fontSize: 20, color: '#000', marginTop: 4 }}>{testSlipTime}</Text>
+        <Text style={{ fontSize: 20, color: '#000', marginTop: 4 }}>กขคง 0123456789</Text>
+        <View style={{ width: '100%', borderTopWidth: 2, borderColor: '#000', marginTop: 12 }} />
+      </View>
     </View>
   );
 }
