@@ -13,6 +13,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { DeviceEventEmitter, NativeEventEmitter, Platform } from 'react-native';
 import { BluetoothManager } from 'react-native-bluetooth-escpos-printer';
 import { getSetting } from '../constants/Database';
+import { INNER_PRINTER_DEVICE, isInnerPrinterAvailable } from '../utils/printer';
 
 const SAVED_PRINTER_KEY = 'saved_printer';
 
@@ -54,6 +55,17 @@ export const PrinterProvider = ({ children }) => {
     refreshSavedPrinter();
   }, [refreshSavedPrinter]);
 
+  // เครื่อง SUNMI: เครื่องพิมพ์ในตัวพร้อมเสมอ ไม่ต้องผ่าน Bluetooth
+  // ไม่งั้นเปิดแอปใหม่ (มี session อยู่แล้ว ไม่ผ่านหน้า bluetooth-setup) หน้าหลักจะขึ้นแถบเตือนว่ายังไม่ได้ต่อเครื่องพิมพ์
+  useEffect(() => {
+    isInnerPrinterAvailable().then((available) => {
+      if (!available) return;
+      setIsConnected(true);
+      setHasSavedPrinter(true);
+      setPrinterName(INNER_PRINTER_DEVICE.name);
+    });
+  }, []);
+
   // ฟังการหลุดการเชื่อมต่อจากทุกหน้า ไม่ใช่เฉพาะตอนอยู่หน้าตั้งค่าเครื่องพิมพ์
   // เครื่องพิมพ์ออกนอกระยะกลางกะจะได้ขึ้นเตือนทันที
   useEffect(() => {
@@ -62,8 +74,10 @@ export const PrinterProvider = ({ children }) => {
       : DeviceEventEmitter;
     const subscription = emitter.addListener(
       BluetoothManager.EVENT_CONNECTION_LOST,
-      () => {
+      async () => {
         console.log('🖨️ Printer connection lost');
+        // เครื่องพิมพ์ในตัวไม่ได้ใช้ Bluetooth การหลุดของ Bluetooth จึงไม่กระทบ
+        if (await isInnerPrinterAvailable()) return;
         setIsConnected(false);
       }
     );

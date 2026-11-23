@@ -13,10 +13,10 @@ import {
   View
 } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BluetoothEscposPrinter } from 'react-native-bluetooth-escpos-printer';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import { insertCheckIn, insertErrorLog, updateCheckInPrintedStatus } from '../constants/Database';
 import { useProject } from '../contexts/ProjectContext';
+import { printReceiptImage } from '../utils/printer';
 
 // route params ของ expo-router เป็น string เสมอ และค่า null จะกลายเป็นข้อความ "null"
 // ถ้าปล่อยผ่านไปตรงๆ จะได้ register_id = "null" (truthy) ส่งขึ้น server
@@ -167,8 +167,7 @@ export default function PassengerCountScreen() {
       const uri = await captureRef(receiptRef, {
         format: 'png', quality: 1.0, result: 'base64',
       });
-      await BluetoothEscposPrinter.printPic(uri, { width: 520, left: 0 });
-      await BluetoothEscposPrinter.printText('\r\n\r\n', {});
+      await printReceiptImage(uri);
 
       // ✅ ยืนยันว่าพิมพ์สำเร็จจริง (สำคัญกรณีกด "ลองพิมพ์อีกครั้ง" หลังเคยถูก mark เป็น 0)
       await updateCheckInPrintedStatus(checkInId, 1);
@@ -190,7 +189,9 @@ export default function PassengerCountScreen() {
 
       Alert.alert(
         'พิมพ์ไม่สำเร็จ',
-        'บันทึกข้อมูลลงเครื่องเรียบร้อยแล้ว แต่พิมพ์ใบลงทะเบียนไม่สำเร็จ\nตรวจสอบเครื่องพิมพ์แล้วลองอีกครั้งได้',
+        // PRINTER_* (กระดาษหมด ฝาเปิด…) จากเครื่องพิมพ์ในตัวบอกสาเหตุได้ตรงๆ — ดู utils/printer.js
+        'บันทึกข้อมูลลงเครื่องเรียบร้อยแล้ว แต่พิมพ์ใบลงทะเบียนไม่สำเร็จ\n'
+          + (printError?.code?.startsWith?.('PRINTER_') ? printError.message : 'ตรวจสอบเครื่องพิมพ์แล้วลองอีกครั้งได้'),
         [
           { text: 'ไม่พิมพ์', style: 'cancel', onPress: () => resetForm() },
           { text: 'ลองพิมพ์อีกครั้ง', onPress: () => printSavedCheckIn(checkInId) },

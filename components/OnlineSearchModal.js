@@ -13,11 +13,11 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { BluetoothEscposPrinter } from 'react-native-bluetooth-escpos-printer';
 import DropDownPicker from 'react-native-dropdown-picker';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import { getActiveSession, insertErrorLog } from '../constants/Database';
 import { THAI_PROVINCES } from '../constants/provinces';
+import { printReceiptImage } from '../utils/printer';
 import { useAuth } from '../contexts/AuthContext';
 import { useEnvironment } from '../contexts/EnvironmentContext';
 import { useProject } from '../contexts/ProjectContext';
@@ -232,9 +232,7 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
             quality: 1.0,
             result: 'base64',
           });
-          await BluetoothEscposPrinter.printPic(uri, { width: 520, left: 0 });
-          await BluetoothEscposPrinter.printerAlign(BluetoothEscposPrinter.ALIGN.CENTER);
-          await BluetoothEscposPrinter.printText('\r\n\r\n', {});
+          await printReceiptImage(uri);
 
           // ปิดหน้าค้นหาหลังพิมพ์เสร็จ แล้วให้หน้าที่เปิดไว้อ่านสถานะใหม่
           resetQuery();
@@ -248,13 +246,13 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
             comp_id: item?.comp_id || null,
             error_type: 'PRINT_ERROR',
             error_message: error.message || 'ไม่สามารถพิมพ์ได้',
-            error_code: error.code || 'BLUETOOTH_PRINT_ERROR',
+            error_code: error.code || 'PRINT_ERROR',
             page_name: 'OnlineSearchModal.js',
-            action_name: 'handlePrint - Bluetooth print',
+            action_name: 'handlePrint - print',
             user_id: user?.id || null
           });
 
-          Alert.alert('ข้อผิดพลาด', 'ไม่สามารถพิมพ์ได้');
+          Alert.alert('ข้อผิดพลาด', error?.code?.startsWith?.('PRINTER_') ? error.message : 'ไม่สามารถพิมพ์ได้');
         } finally {
           setPrintData(null);
           setPrintLoading(false);

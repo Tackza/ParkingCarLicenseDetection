@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 // import * as ImagePicker from 'expo-image-picker';
 import { useMode } from "@/contexts/ModeContext";
 import { detectPlate } from '@/utils/lprOcr';
+import { printReceiptImage } from '@/utils/printer';
 import { createSpokenPlate } from '@/utils/speechUtils';
 import axios from 'axios';
 import {
@@ -24,7 +25,6 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import { BluetoothEscposPrinter } from 'react-native-bluetooth-escpos-printer';
 import DropDownPicker from 'react-native-dropdown-picker';
 import ImageZoom from 'react-native-image-pan-zoom';
 import ViewShot, { captureRef } from 'react-native-view-shot';
@@ -498,14 +498,8 @@ export default function ScanScreen() {
         result: 'base64',
       });
 
-      // Print via Bluetooth
-      await BluetoothEscposPrinter.printPic(uri, {
-        width: 520,
-        left: 0,
-      });
-      await BluetoothEscposPrinter.printerAlign(BluetoothEscposPrinter.ALIGN.CENTER);
-
-      await BluetoothEscposPrinter.printText('\r\n\r\n', {});
+      // SUNMI built-in printer when present, Bluetooth otherwise
+      await printReceiptImage(uri);
 
       // ✅ ยืนยันว่าพิมพ์สำเร็จจริง (สำคัญกรณีกด "ลองพิมพ์อีกครั้ง" หลังเคยถูก mark เป็น 0)
       await updateCheckInPrintedStatus(checkInId, 1);
@@ -530,7 +524,9 @@ export default function ScanScreen() {
       //    ให้ลองพิมพ์ใหม่จากแถวเดิม หรือจบงานแล้วกลับหน้าหลัก
       Alert.alert(
         'พิมพ์ไม่สำเร็จ',
-        'บันทึกข้อมูลลงเครื่องเรียบร้อยแล้ว แต่พิมพ์ใบลงทะเบียนไม่สำเร็จ\nตรวจสอบเครื่องพิมพ์แล้วลองอีกครั้งได้',
+        // PRINTER_* (กระดาษหมด ฝาเปิด…) จากเครื่องพิมพ์ในตัวบอกสาเหตุได้ตรงๆ — ดู utils/printer.js
+        'บันทึกข้อมูลลงเครื่องเรียบร้อยแล้ว แต่พิมพ์ใบลงทะเบียนไม่สำเร็จ\n'
+          + (error?.code?.startsWith?.('PRINTER_') ? error.message : 'ตรวจสอบเครื่องพิมพ์แล้วลองอีกครั้งได้'),
         [
           { text: 'ไม่พิมพ์', style: 'cancel', onPress: () => resetForm() },
           { text: 'ลองพิมพ์อีกครั้ง', onPress: () => generateAndPrint(checkInId) },
