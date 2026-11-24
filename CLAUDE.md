@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-**Mbus Register** — an Expo / React Native (SDK 51, RN 0.74) Android app used at Dhammakaya parking checkpoints, shown on the launcher as **Mbus Scan**. The workflow is: log in → connect a Bluetooth ESC/POS thermal printer → photograph a vehicle's license plate (OCR on the device, falling back to an external service) → confirm vehicle/passenger details → save the check-in locally → upload to the API in the background → print a paper receipt.
+**Mbus Register** — an Expo / React Native (SDK 51, RN 0.74) Android app used at Dhammakaya parking checkpoints, shown on the launcher as **Mbus Scan**. The workflow is: log in → connect the printer (the SUNMI's built-in one, else a Bluetooth ESC/POS printer) → photograph a vehicle's license plate (OCR on the device, falling back to an external service) → confirm vehicle/passenger details → save the check-in locally → upload to the API in the background → print a paper receipt.
 
-**The device is a SUNMI V3 handheld POS terminal, not a tablet**: 6.75", 720×1600 px = **360×800 dp**, about 420 nits and used outdoors. Its built-in thermal printer is reached over Bluetooth like an external one. Design every screen for that width and brightness — a first round of mockups was drawn at 820×1180 because this file used to say "tablet", and all of it had to be redrawn.
+**The device is a SUNMI V3 handheld POS terminal, not a tablet**: 6.75", 720×1600 px = **360×800 dp**, about 420 nits and used outdoors. Its built-in 58 mm thermal printer is driven through SUNMI's own print service (`SunmiPrinterModule.kt`), not Bluetooth — see **Receipt printing**. Design every screen for that width and brightness — a first round of mockups was drawn at 820×1180 because this file used to say "tablet", and all of it had to be redrawn.
 
 The UI is hardcoded Thai (no i18n layer). Dates use the Buddhist calendar (`toLocaleString('th-TH-u-ca-buddhist')`). Code comments are mostly Thai — match that when editing a file that already uses it.
 
@@ -36,7 +36,7 @@ There is also a **third** party neither repo owns: the **Mbus backend API** at `
  │  SQLite check_ins│─────────────────────────── POST /api/lpr/checkins ──▶ ┌──────────┐
  │  CheckInSyncMgr  │◀────────────────────────── GET  /api/lpr/registers ── │ Mbus API │
  │        ↓         │                                                       └──────────┘
- │  Bluetooth ESC/POS receipt
+ │  receipt: SUNMI print service, else Bluetooth ESC/POS
  └──────────────────┘
 ```
 
@@ -134,7 +134,7 @@ This is the single most expensive thing to forget in this repo. It has produced 
 
 Set **both** sides: the native file is what ships today, `app.config.js` covers iOS, EAS metadata and any future prebuild.
 
-**Do not "fix" this by running `expo prebuild`.** It rewrites the whole `android/` folder and would drop the hand-registered `LprOcrPackage`, the release `abiFilters`, the `settings.gradle` dev-client exclusion and the `noCompress` rule. Edit the native files directly, then confirm against a built APK rather than trusting the config:
+**Do not "fix" this by running `expo prebuild`.** It rewrites the whole `android/` folder and would drop the hand-registered `LprOcrPackage`, the release `abiFilters`, the `settings.gradle` dev-client exclusion the `noCompress` rule and the hand-registered `SunmiPrinterPackage` + its `<queries>` entry. Edit the native files directly, then confirm against a built APK rather than trusting the config:
 
 ```bash
 cd android && ./gradlew :app:assembleRelease
@@ -146,10 +146,14 @@ aapt2 dump badging app/build/outputs/apk/release/app-release.apk | grep -E "^pac
 - **expo-dev-client is excluded from release builds** in [android/settings.gradle](android/settings.gradle). Without it a release APK compiles, installs, then dies building React Native's module registry: `IllegalStateException: Native module ExpoDevMenuExtensions tried to override DevMenuExtension`. expo-dev-menu declares `debugOnly` for iOS but not Android, and its `DevMenuPackage` returns a `DevMenuExtension` in every variant. `settings.gradle` runs before variants exist, so the build type is inferred from the requested task names; override with `-Pmbus.excludeDevClient=true|false` when that guess is wrong (e.g. a bare `./gradlew assemble`, which builds both variants at once).
 - **Release ships only `arm64-v8a` and `armeabi-v7a`** (`abiFilters` in `build.gradle`). The x86/x86_64 slices were ~75 MB of native libraries no checkpoint device will ever load — they exist for x86_64 emulators, which is a debug concern, so debug builds deliberately keep all four. Release APK is ~86 MB. Keep `armeabi-v7a`: the SUNMI V3 is arm64 but older fleet units may be 32-bit.
 - **Local release builds need a working `git`** — see the Xcode note under Conventions.
+- **Testing a local build on a fleet device without losing its data:** `./gradlew :app:assembleRelease -Pmbus.appIdSuffix=.dev` builds `com.donnytang.myapp.dev`, which installs *beside* the EAS-signed app. A plain local build is signed with the debug key and cannot update the EAS app; uninstalling that app to make room wipes its SQLite check-ins. The same property works for `connectedDebugAndroidTest`.
+- **A local build can ship a stale expo-updates manifest.** Gradle sometimes treats `createReleaseUpdatesResources` as up to date and reuses an old `app.manifest`. The APK then carries an update id the device has already stored, so expo-updates launches the *previously installed* bundle — the new JS silently never runs. It showed up as Settings → เวอร์ชัน reading a weeks-old date. Delete `app/build/generated/assets/createReleaseUpdatesResources` and `app/build/intermediates/assets/release/app.manifest` before a release build, and check `unzip -p <apk> assets/app.manifest | head -c 80` shows a fresh `commitTime`.
+- **A full rebuild needs ~5 GB free.** The Gradle cache corrupted when this Mac's disk filled, and the re-download took ~3 GB on top of the build. Gradle inside the Claude Code sandbox also failed with `No route to host` while `curl` worked; run it outside the sandbox.
+- **`node_modules` must match the branch.** Switching to a branch with NativeWind without `npm install` fails the JS bundle step with `Cannot find module 'nativewind/metro'`.
 
 ### Versioning and getting a build onto fleet devices
 
-Current: `versionCode` 2, `versionName` 2.0.0, `runtimeVersion` 2.0.0. Everything before this shipped `versionCode` 1, so older devices cannot be told apart by number.
+Current: `versionCode` 3, `versionName` 2.1.0, `runtimeVersion` 2.1.0 (SUNMI print service + the ft1 OCR model, both native). 2.0.0 was `versionCode` 2; everything before that shipped `versionCode` 1, so older devices cannot be told apart by number. The version also lives in `app.json`, which is what `Constants.expoConfig.version` reports at runtime — keep it in step with `app.config.js`.
 
 All EAS production builds use the same managed keystore (`qnchy5_CNe`), so a new APK **installs over the existing one — no uninstall, and SQLite check-ins, session and paired printer survive**. The exception is a device that has a locally built debug APK on it: different signing key, so that one must be uninstalled first (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`).
 
@@ -162,7 +166,7 @@ All EAS production builds use the same managed keystore (`qnchy5_CNe`), so a new
 Confirming a device actually updated:
 
 ```bash
-adb shell dumpsys package com.donnytang.myapp | grep versionName   # expect 2.0.0
+adb shell dumpsys package com.donnytang.myapp | grep versionName   # expect 2.1.0
 ```
 
 The decisive functional check is different: **turn the network off and scan.** If it reads the plate, the on-device path is live; if it falls back, it is not.
@@ -215,9 +219,10 @@ The same two YOLO models the Cloud Run service runs are embedded in the APK and 
 | engine | [android/app/src/main/java/com/donnytang/myapp/lpr/LprOcr.kt](android/app/src/main/java/com/donnytang/myapp/lpr/LprOcr.kt) |
 | bridge | `LprOcrModule.kt` → `NativeModules.LprOcr`, registered by hand in `MainApplication.kt` (it is not in `node_modules`, so autolinking never sees it) |
 | JS entry | [utils/lprOcr.js](utils/lprOcr.js) — `detectPlate(uri)`, `warmUpOnDeviceOcr()` |
-| weights | `android/app/src/main/assets/plate_{region,ocr}.fp16.onnx` + `labels.json` (11.7 MB total) |
+| weights | `android/app/src/main/assets/plate_{region,ocr}.fp16.onnx` + `labels.json` (12.1 MB total). Stage 2 is **`data_plate_ft1.pt`** (since 2.1.0): `data_plate.pt` fine-tuned on 4,380 field crops, same 125 classes, so `labels.json` is unchanged. Stage 1 is still `license_plate.pt`. Both exported with **dynamic H/W** |
 | runtime | `onnxruntime-android:1.20.0`, **CPU provider, 4 intra-op threads** |
 
+- **Rect letterbox, not a 640×640 square.** The long side goes to 640 and the other is padded only up to a multiple of 32 — ultralytics' rect inference, which is what `server.py` gets from a `.pt`. The first port padded to a full square, which misread wide plate crops (`นง70910` for `นง7010` with the old model; province `ฮกรุงเทพมหานคร` for `32-1527` with ft1). With rect padding both models match the `.pt` on 33/33 desktop images, and stage 2 runs faster because the crop tensor is smaller. It requires the dynamic export: a static 640×640 model rejects rect inputs. Export with `tools/ondevice-ocr/export_models.py --ocr-pt <pt> --out <dir>` (it never writes into the detector's `model/onnx`), compare with `compare_accuracy.py --ocr-pt <pt> --onnx-dir <dir>`, in the venv described in `tools/ondevice-ocr/README.md`.
 - **`lpr_onnx.py` is the specification.** [tools/ondevice-ocr/lpr_onnx.py](tools/ondevice-ocr/lpr_onnx.py) and `LprOcr.kt` are the same algorithm written twice — letterbox, output decode, per-class NMS, box rescaling, left-to-right character ordering, single highest-confidence province, split at the last digit. Change one, change the other, then re-run `tools/ondevice-ocr/compare_accuracy.py` and the instrumented test.
 - **The ORT version is pinned at 1.20.0 for a reason.** 1.21.0+ declare `minSdkVersion 24`; this app declares 23, and taking a newer ORT would silently drop Android 6.0 devices. Don't bump it without deciding that on purpose.
 - **Do not enable NNAPI.** Measured on the checkpoint's SUNMI V3 it made FP32 3.5× slower and did nothing for FP16.
@@ -231,8 +236,12 @@ Verify a change with the instrumented test — it runs the real engine on the re
 ```bash
 adb shell mkdir -p /data/local/tmp/lprtest
 adb push <detector>/license-car/338111_0.jpg /data/local/tmp/lprtest/   # and the other four
-cd android && ./gradlew :app:connectedDebugAndroidTest
+cd android && ./gradlew :app:connectedDebugAndroidTest -Pmbus.appIdSuffix=.dev   # suffix: see Release-build specifics
 ```
+
+Last run (24 Nov 2026, ft1 + rect letterbox, SUNMI V3): 5/5, 591–840 ms per plate, model load 450 ms.
+
+Mbus Plate Sync (`~/Documents/project/mbus-plate-sync`) carries its own copy of `LprOcr.kt` and its own assets; it still has the old model and square letterbox until it is updated the same way.
 
 ### Two independent sync loops
 
@@ -339,7 +348,7 @@ Rows are grouped by `station_name` because vehicles from one station travel toge
 
 ### Printer connection
 
-Login goes `login → bluetooth-setup → main` and **the printer screen is never meant to be interacted with**. It connects the saved printer, or — with none saved, or when the saved one is unreachable — scans and takes the **first device**, preferring an already-paired one, then saves it. Picking the first entry is what operators did manually every single time, so the list was a step to tap through, not a choice.
+Login goes `login → bluetooth-setup → main` and **the printer screen is never meant to be interacted with**. **On a SUNMI it does nothing at all:** if `isInnerPrinterAvailable()` it marks the built-in printer connected and goes straight to `/main` — no Bluetooth, no permissions, no dialog. `PrinterProvider` does the same check at mount (a resumed session skips `bluetooth-setup`) and ignores `EVENT_CONNECTION_LOST`, so `main.js` never shows the not-connected banner there. Everything below is the Bluetooth path for other devices: it connects the saved printer, or — with none saved, or when the saved one is unreachable — scans and takes the **first device**, preferring an already-paired one, then saves it. Picking the first entry is what operators did manually every single time, so the list was a step to tap through, not a choice.
 
 - Device lists arrive by event, so they cannot be read straight after `scanDevices()`. `pairedDevicesRef` / `foundDevicesRef` shadow the state and `waitForFirstDevice()` polls them for up to 8 s; the found ref is cleared on each scan so a device from a previous scan cannot be picked.
 - Connecting is retried twice — a printer that has just been powered on often refuses the first attempt.
@@ -350,13 +359,22 @@ Login goes `login → bluetooth-setup → main` and **the printer screen is neve
 
 [contexts/PrinterContext.js](contexts/PrinterContext.js) holds `isConnected` / `printerName` / `hasSavedPrinter` and listens for `EVENT_CONNECTION_LOST` globally, so a printer leaving range mid-shift is noticed rather than only while the setup screen is open. It is mounted **once** at root — do not repeat the `SyncProvider` mistake. When not connected, `main.js` shows a persistent banner that opens `bluetooth-setup?manual=1`; that flag makes the screen show the picker instead of auto-connecting, and without it the picker would now be unreachable.
 
-### Receipt printing (Bluetooth ESC/POS)
+### Receipt printing
 
-Uses [`react-native-bluetooth-escpos-printer`](https://github.com/detanx/react-native-bluetooth-escpos-printer) (git fork). The pattern is **render-then-capture**, not text commands:
+Every print site calls `printReceiptImage(base64)` in [utils/printer.js](utils/printer.js), which picks the transport:
+
+- **SUNMI built-in printer** — [SunmiPrinterModule.kt](android/app/src/main/java/com/donnytang/myapp/sunmi/SunmiPrinterModule.kt) → `NativeModules.SunmiPrinter`, using `com.sunmi:printerlibrary:1.0.24` to bind SUNMI's print service (`woyou.aidlservice.jiuiv5`, declared in the manifest `<queries>`; Android 11+ package visibility hides it otherwise). It checks `updatePrinterState()` first, scales the image to the paper (384 dots on 58 mm), prints as a **transaction** and resolves only when the service reports the slip came out. Failures reject with `PRINTER_<state>` and a Thai message (`PRINTER_4` paper out, `PRINTER_6` cover open — codes from SUNMI's docs; 4 is confirmed on the V3). Registered by hand in `MainApplication.kt`, like `LprOcrPackage`.
+- **Bluetooth ESC/POS** everywhere else — [`react-native-bluetooth-escpos-printer`](https://github.com/detanx/react-native-bluetooth-escpos-printer) (git fork), exactly as before. It cannot see paper or cover state, so a slip can still vanish silently on that path. The SUNMI's "InnerPrinter" (`00:11:22:33:44:55`) is a virtual Bluetooth device for the same printer; the app no longer uses it.
+
+**An empty printer holds the operator instead of saving.** `waitForPrinterReady()` runs *before* `insertCheckIn()` in `scan.js` (mode two) and `passenger_count.js`, and before `print-slip` in `OnlineSearchModal` (which counts the print server-side the moment it is called). If the built-in printer is not ready it shows "เครื่องพิมพ์ไม่พร้อม … ยังไม่ได้บันทึกข้อมูล" with พิมพ์อีกครั้ง / ยกเลิก and loops until the printer is ready; cancel saves nothing. Paper running out *mid-slip* still lands in the retry alert below, with the row already saved. Settings → **ทดสอบเครื่องพิมพ์** prints a sample through the same path and says which transport answered, with no check-in data needed.
+
+The printable width is the hardware's: 384 dots ≈ 48 mm of the 58 mm roll, ~5 mm unprintable each side. `Receipt.js` already has `padding: 0`, so the slip uses all of it.
+
+The pattern is **render-then-capture**, not text commands:
 
 1. The receipt is rendered as a React Native view inside a `<ViewShot>` parked off-screen (`position: 'absolute', left: -10000`), mounted only while a print is pending.
 2. A short `setTimeout` (~500 ms) lets React commit the new props — capturing too early prints stale data.
-3. `captureRef(ref, { format: 'png', result: 'base64' })` → `BluetoothEscposPrinter.printPic(uri, { width: 520, left: 0 })` → a couple of `\r\n` to feed the paper.
+3. `captureRef(ref, { format: 'png', result: 'base64' })` → `printReceiptImage(uri)`. On Bluetooth that is `printPic(uri, { width: 520 })`, which the library clamps to its 58 mm width (384), plus two `\r\n`; on SUNMI the module feeds two lines.
 
 `printed` is written optimistically at insert time, then reconciled with `updateCheckInPrintedStatus()` — set to `1` after the print resolves, or back to `0` if it throws. A failed print raises a retry/give-up alert that re-prints **the same row** rather than re-running the save, because a second `insertCheckIn` would create a new `uid` that the server cannot dedupe. Keep that shape when touching either print path: never re-enter the save handler to retry a print. (If the row happens to sync in the gap, the correction does not reach the server — printing resolves in ~1–2 s against a 10 s sync interval, so this is rare rather than impossible.)
 

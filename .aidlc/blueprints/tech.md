@@ -48,7 +48,7 @@
 ## CI/CD Pipeline
 - **Tool**: EAS (ไม่มี CI ในรีโป ไม่มี GitHub Actions)
 - **Stages**: build ด้วยมือ → OTA ด้วยมือ
-- **Deploy target**: APK ติดตั้งบน SUNMI V3 + OTA ผ่าน channel `production` (`checkAutomatically: ON_LOAD`, `runtimeVersion` 2.0.0 — ระหว่างเปลี่ยน APK มี OTA สองสาย 1.0.0 / 2.0.0 ดู CLAUDE.md § Versioning)
+- **Deploy target**: APK ติดตั้งบน SUNMI V3 + OTA ผ่าน channel `production` (`checkAutomatically: ON_LOAD`, `runtimeVersion` 2.1.0 — ระหว่างเปลี่ยน APK มี OTA หลายสายตาม runtime ที่ติดตั้งอยู่ ดู CLAUDE.md § Versioning)
 - **ผลต่องานนี้**: NativeWind อยู่ที่ชั้น babel/metro ผลลัพธ์ยังเป็น JS bundle — **ยืนยันแล้วว่าไปกับ OTA ได้** (2026-09-24 update group `70ce04e7`) การเพิ่ม/แก้ style จึงไม่ต้อง build APK ใหม่ แต่ bundle android โตขึ้น **+810 KB (3.07 → 3.88 MB)** ซึ่งทุกเครื่องต้องโหลด
 
 ## Dependency Management
