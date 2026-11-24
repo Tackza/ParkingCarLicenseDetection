@@ -13,6 +13,12 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { useEnvironment } from '@/contexts/EnvironmentContext';
 import { useProject } from '@/contexts/ProjectContext';
+import {
+  buildCheckInFields,
+  classifyUploadError,
+  classifyUploadResponse,
+  describeUploadError,
+} from '@/utils/checkInUpload';
 import axios from 'axios';
 import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -57,65 +63,6 @@ const CheckInSyncManager = () => {
   const API_URL = environment === 'prod' ?
     "https://mbus.dhammakaya.network/api" :
     "https://mbus-test.dhammakaya.network/api";
-
-  // ✅ axios ใส่แค่ข้อความสำเร็จรูปไว้ใน .message ("Request failed with status code 422")
-  //    เหตุผลจริงที่ server ส่งมาอยู่ใน response.data ซึ่งเดิมถูกทิ้งทั้งหมด
-  //    ผลคือหน้ารายการขึ้นแค่เลข status ดูไม่ออกว่าฟิลด์ไหนไม่ผ่าน validation
-  //    รองรับรูปแบบ { message, errors: { field: [...] } } ที่ API ใช้ และ fallback เป็น JSON ดิบ
-  const describeUploadError = (error) => {
-    const fallback = error?.message || String(error);
-    const status = error?.response?.status;
-    const body = error?.response?.data;
-
-    if (body === undefined || body === null || body === '') return fallback;
-
-    const prefix = status ? `[${status}] ` : '';
-
-    if (typeof body === 'string') {
-      return `${prefix}${body}`.slice(0, 2000);
-    }
-
-    const parts = [];
-    if (body.message) parts.push(body.message);
-    if (body.errors && typeof body.errors === 'object') {
-      for (const [field, msgs] of Object.entries(body.errors)) {
-        parts.push(`${field}: ${Array.isArray(msgs) ? msgs.join(', ') : msgs}`);
-      }
-    }
-    if (parts.length > 0) return `${prefix}${parts.join(' | ')}`.slice(0, 2000);
-
-    try {
-      return `${prefix}${JSON.stringify(body)}`.slice(0, 2000);
-    } catch (e) {
-      return fallback;
-    }
-  };
-
-  const isDuplicateError = (errorMessage) => {
-    console.log('errorMessage 44 :>> ', errorMessage);
-    if (!errorMessage) return false;
-
-    // ✅ สร้าง string จาก error ทุกแบบ
-    let errorText = '';
-
-    if (typeof errorMessage === 'string') {
-      errorText = errorMessage;
-    } else if (errorMessage instanceof Error) {
-      errorText = errorMessage.message;
-    } else if (errorMessage.message) {
-      errorText = errorMessage.message;
-    } else {
-      errorText = JSON.stringify(errorMessage);
-    }
-
-    // ✅ แปลงเป็นตัวพิมพ์เล็กเพื่อให้ match ง่ายขึ้น
-    errorText = errorText.toLowerCase();
-    console.log('errorText to check :>> ', errorText);
-
-
-    return errorText.includes('duplicate') || errorText.includes('already exists');
-  };
-
 
   // ✅ Ref for tracking the current unique session of the effect/timer
   const currentSyncSessionId = useRef(0);
@@ -201,12 +148,15 @@ const CheckInSyncManager = () => {
         //    ทำให้รายการที่ไม่มีรูป/รูปหายจาก cache ถูกแนบรูปของคันก่อนหน้าไปแทน
         //    ประกาศนอก try เพื่อให้ finally ลบไฟล์ชั่วคราวได้
         let processedPhotoUri = null;
+        // ไฟล์รูปต้นฉบับยังอยู่จริงไหม — ใช้ตัดสินว่าจะแนบตัวต้นฉบับแทนได้หรือเปล่า
+        let photoExists = false;
 
         try {
 
           if (checkIn.photo_path) {
             const fileInfo = await FileSystem.getInfoAsync(checkIn.photo_path);
             if (fileInfo.exists) {
+              photoExists = true;
 
               const manipulateResult = await ImageManipulator.manipulateAsync(
                 checkIn.photo_path,
@@ -237,37 +187,10 @@ const CheckInSyncManager = () => {
 
           const formData = new FormData();
 
-          formData.append('uid', checkIn.uid);
-          formData.append('local_id', checkIn.id.toString());
-          formData.append('project_id', checkIn.project_id);
-          formData.append('activity_id', checkIn.activity_id === null ? "" : checkIn.activity_id);
-          formData.append('register_id', checkIn.register_id || ''); // ถ้า register_id เป็น null/undefined ส่งเป็น empty string
-          formData.append('detect_plate_no', checkIn.detect_plate_no);
-          formData.append('detect_plate_province', checkIn.detect_plate_province);
-          formData.append('plate_no', checkIn.plate_no || '');
-          formData.append('plate_province', checkIn.plate_province || '');
-          formData.append('is_manual', checkIn.is_plate_manual ? '1' : '0'); // แปลง boolean/integer เป็น string '1'/'0'
-          formData.append('bus_type', checkIn.bus_type || '');
-          formData.append('passenger', checkIn.passenger || '');
-          formData.append('mileage', checkIn.mileage || '');
-          formData.append('sticker_no', checkIn.sticker_no === null ? "" : checkIn.sticker_no);
-          formData.append('note', checkIn.note || '');
-          formData.append('comp_id', checkIn.comp_id || '');
-          // ✅ ส่งค่าที่บันทึกไว้ตอนสแกน ไม่ใช่ค่าที่คำนวณใหม่ตอนอัปโหลด
-          //    เดิมใช้ checkOCRConnection() ซึ่งคืน string "0"/"1" แล้วเช็คด้วย ternary
-          //    ทั้งสองค่าเป็น truthy จึงส่ง '1' เสมอ สถิติ OCR ล่มจึงว่างเปล่ามาตลอด
-          formData.append('ocr_connected', checkIn.ocr_connected ? '1' : '0');
-          // พิกัดตอนถ่ายรูป (migration v10) ไม่มี = ส่งว่าง server รับเป็น null
-          // เดิมส่ง 0 ตายตัวทุกแถว ซึ่งบน server กลายเป็นจุด 0,0 กลางทะเล
-          formData.append('lat', checkIn.latitude ?? '');
-          formData.append('long', checkIn.longitude ?? '');
-          // ✅ seq_no ต้องมาจากแถวนั้น ไม่ใช่โปรเจกต์ที่ active ตอนอัปโหลด
-          //    ค้างออฟไลน์ข้ามคืนแล้วส่งตอนเช้าจะได้ seq_no ของกิจกรรมใหม่ติดไปกับข้อมูลเก่า
-          //    (และถ้าตอนนั้นไม่มีโปรเจกต์ที่ active เลย โค้ดเดิมจะ TypeError ทุกแถว)
-          formData.append('seq_no', checkIn.seq_no ?? "");
-          formData.append('printed', checkIn.printed ? '1' : '0');
-          formData.append('created_at', checkIn.created_at || new Date().toISOString()); // ใช้ ISO string หรือรูปแบบที่ server ต้องการ
-          formData.append('created_by', checkIn.created_by || '');
+          // ฟิลด์ทั้งหมดมาจากแถว check_ins เอง (รายละเอียดใน utils/checkInUpload.js)
+          for (const [name, value] of buildCheckInFields(checkIn)) {
+            formData.append(name, value);
+          }
 
           if (processedPhotoUri) { // ✅ ใช้ processedPhotoUri ที่ถูกลดขนาดแล้ว
             const filename = processedPhotoUri.split('/').pop();
@@ -278,8 +201,11 @@ const CheckInSyncManager = () => {
               type: fileType,
             });
             console.log(`Attached processed photo_file: ${filename}`);
-          } else if (checkIn.photo_path) {
-            // กรณีลดขนาดไม่ได้ แต่มี photo_path เดิมอยู่ ก็พยายามส่งตัวเดิมไป
+          } else if (photoExists) {
+            // กรณีลดขนาดไม่ได้ แต่ไฟล์เดิมยังอยู่ ก็ส่งตัวเดิมไป
+            // ✅ ต้องเช็คว่าไฟล์ยังอยู่ — เดิมเช็คแค่ photo_path จึงแนบ path ของไฟล์ที่ถูกลบไปแล้วด้วย
+            //    บนเครื่องจริงการแนบไฟล์ที่ไม่มีอยู่ล้มแบบ network error → ถูกมองว่าออฟไลน์ หยุดทั้ง batch
+            //    แถวนี้จึงล้มซ้ำทุกรอบ และแถวที่ต่อคิวหลังมันไม่เคยถูกส่ง
             const filename = checkIn.photo_path.split('/').pop();
             const fileType = 'image/jpeg'; // หรือ 'image/png'
             formData.append('photo_file', {
@@ -320,31 +246,23 @@ const CheckInSyncManager = () => {
           console.log('responseData :>> ', responseData);
           // --- สิ้นสุดโค้ดจริง --- 
 
-          if (responseData.status === "success") {
-            console.log(`Check-in uid ${checkIn.uid} uploaded successfully. Marking as synced.`);
+          const { outcome, message: errorMessage } = classifyUploadResponse(responseData);
+          if (outcome === 'synced') {
+            // success หรือ server บอกว่ามีแถวนี้แล้ว (uid ซ้ำ)
+            console.log(`Check-in uid ${checkIn.uid} synced${errorMessage ? ` (${errorMessage})` : ''}.`);
             await markCheckInAsSynced(checkIn.id, 2);
             successfulUploads++;
             setUploadedCount(successfulUploads); // ✅ อัปเดตเคาน์เตอร์
           } else {
-            const errorMessage = responseData.message || "Unknown error from server.";
-
-            if (isDuplicateError(errorMessage)) {
-              console.log(`✅ UID ${checkIn.uid} already exists (from response). Marking as synced.`);
-              await markCheckInAsSynced(checkIn.id, 2);
-              successfulUploads++;
-              setUploadedCount(successfulUploads);
-            } else {
-              console.log(`Server reported an error for check-in uid ${checkIn.uid}:`, errorMessage);
-              setSyncError(`บางรายการมีปัญหา: ${errorMessage.substring(0, 50)}...`);
-              await markCheckInAsSyncedError(checkIn.id, errorMessage, 4);
-            }
+            console.log(`Server reported an error for check-in uid ${checkIn.uid}:`, errorMessage);
+            setSyncError(`บางรายการมีปัญหา: ${errorMessage.substring(0, 50)}...`);
+            await markCheckInAsSyncedError(checkIn.id, errorMessage, 4);
           }
         } catch (itemError) {
           // เก็บเหตุผลจาก server ด้วย ไม่ใช่แค่ข้อความสำเร็จรูปของ axios
           const errorMsg = describeUploadError(itemError);
           console.log(`Failed to upload check-in uid ${checkIn.uid}:`, errorMsg);
           console.log('itemError message :>> ', itemError);
-          console.log('isDuplicateError(errorMessage) :>> ', isDuplicateError(errorMsg));
 
           // ✅ Log error to database (throttled — ทุกแถวที่ล้มจะให้ error เดียวกันตอนออฟไลน์)
           try {
@@ -361,47 +279,21 @@ const CheckInSyncManager = () => {
             console.error('Failed to log error:', logError);
           }
 
-          // ✅ Token หมดอายุ/ถูกเพิกถอน: ไม่ใช่ความผิดของข้อมูลแถวนี้
-          //    คงไว้ที่ 3 (รอส่งใหม่) แล้วหยุดลูปทันที ไม่ต้องยิงต่อด้วย token ที่ใช้ไม่ได้แล้ว
-          //    ถ้า mark เป็น 4 ข้อมูลจะค้างถาวรแม้ login ใหม่สำเร็จ
-          const httpStatus = itemError.response?.status || itemError.status;
-          if (httpStatus === 401 || httpStatus === 403) {
-            console.log(`🔐 Token invalid (${httpStatus}) while uploading uid ${checkIn.uid}. Aborting batch.`);
+          // ตัดสินด้วย classifyUploadError (utils/checkInUpload.js): 401/403 → หยุดทั้ง batch คงที่ 3
+          //   4xx → 4 (ถอยเวลา) / 5xx, timeout, ออฟไลน์ → 3 (ส่งใหม่รอบหน้าทันที) / ซ้ำ → สำเร็จ
+          const { authExpired: isAuthError, duplicate, syncStatus, networkFailure: isNetworkFailure } =
+            classifyUploadError(itemError, errorMsg);
+
+          if (isAuthError) {
+            // ถ้า mark เป็น 4 ข้อมูลจะค้างถาวรแม้ login ใหม่สำเร็จ
+            console.log(`🔐 Token invalid while uploading uid ${checkIn.uid}. Aborting batch.`);
             await markCheckInAsSyncedError(checkIn.id, errorMsg, 3);
             setSyncError('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่');
             authExpired = true;
             break;
           }
 
-          // ✅ ตรวจสอบ Network Error แลา HTTP Status Code อย่างละเอียด
-          let syncStatus = 3; // ค่าเริ่มต้นสำหรับ Network/Server Error
-          let isNetworkFailure = false; // ยิงไม่ถึง server เลย (ไม่ใช่ server ตอบกลับมาว่าผิด)
-
-          if (itemError.response?.status) {
-            // ✅ ถ้ามี HTTP status code จาก axios response
-            console.log('itemError.response.status :>> ', itemError.response.status);
-            if (itemError.response.status >= 400 && itemError.response.status < 500) syncStatus = 4;
-            else if (itemError.response.status >= 500) syncStatus = 3;
-          } else if (itemError.code === 'ECONNABORTED' || errorMsg.includes('timeout')) {
-            // ✅ Request timeout
-            syncStatus = 3;
-            isNetworkFailure = true;
-            console.log('Network timeout detected');
-          } else if (itemError.code === 'ENOTFOUND' || itemError.code === 'ERR_NETWORK' || errorMsg.includes('Network')) {
-            // ✅ Network Error (No Internet)
-            syncStatus = 3;
-            isNetworkFailure = true;
-            console.log('Network connection error detected');
-          } else {
-            console.log('itemError.status :>> ', itemError.status);
-            if (itemError.status) {
-              if (itemError.status >= 400 && itemError.status < 500) syncStatus = 4;
-              else if (itemError.status >= 500) syncStatus = 3;
-            }
-          }
-
-          // ✅ ตรวจสอบว่าเป็น error ซ้ำหรือไม่
-          if (isDuplicateError(errorMsg)) {
+          if (duplicate) {
             console.log(`✅ UID ${checkIn.uid} already exists on server. Marking as synced.`);
             await markCheckInAsSynced(checkIn.id, 2);
             successfulUploads++;
@@ -409,7 +301,6 @@ const CheckInSyncManager = () => {
           } else {
             setSyncError(`บางรายการมีปัญหา: ${errorMsg.substring(0, 50)}...`);
             await markCheckInAsSyncedError(checkIn.id, errorMsg, syncStatus);
-            // setIsOnline(false);
           }
 
           // ✅ ยิงไม่ถึง server แปลว่าแถวที่เหลือใน batch ก็จะพังเหมือนกัน — หยุดแล้วรอรอบหน้า

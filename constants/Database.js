@@ -5,6 +5,7 @@ import 'react-native-get-random-values';
 
 // 2. ค่อย Import uuid
 import { ulid } from "ulid";
+import { retryDelayMinutes } from '../utils/checkInUpload';
 
 // 1. การเปิดฐานข้อมูลจะคืนค่าเป็น Promise
 // เราจะเปิดมันแค่ครั้งเดียว แล้วนำไปใช้ในฟังก์ชันต่างๆ
@@ -1286,10 +1287,9 @@ export const retryCheckInNow = async (checkInId) => {
   return result.changes || 0;
 };
 
-// ตารางถอยเวลา (นาที) สำหรับการส่งซ้ำครั้งที่ 1, 2, 3, ... ครั้งหลังๆ ใช้ค่าสุดท้ายซ้ำไปเรื่อยๆ
+// ตารางถอยเวลา (นาที) อยู่ที่ SYNC_RETRY_BACKOFF_MINUTES ใน utils/checkInUpload.js
 // ไม่มีเพดานจำนวนครั้งโดยตั้งใจ: แถวจะไม่ถูกทิ้งถาวร เผื่อปัญหาถูกแก้ที่ฝั่ง server ภายหลัง
 // แถวที่ค้างจึงเปลือง request จาก ~8,600 ครั้ง/วัน เหลือ ~5 ครั้ง/วัน
-const SYNC_RETRY_BACKOFF_MINUTES = [1, 5, 15, 60, 180, 360];
 
 export const markCheckInAsSyncedError = async (checkInId, errorMsg, status = 3) => {
   const db = await getDb(); // ✅ ใช้ getDb()
@@ -1309,9 +1309,7 @@ export const markCheckInAsSyncedError = async (checkInId, errorMsg, status = 3) 
       [checkInId]
     );
     const nextRetryCount = (row?.retry_count || 0) + 1;
-    const delayMinutes = SYNC_RETRY_BACKOFF_MINUTES[
-      Math.min(nextRetryCount - 1, SYNC_RETRY_BACKOFF_MINUTES.length - 1)
-    ];
+    const delayMinutes = retryDelayMinutes(nextRetryCount);
 
     const result = await db.runAsync(
       `UPDATE check_ins
