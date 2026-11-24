@@ -39,3 +39,25 @@ allprojects {
         maven { url 'https://www.jitpack.io' }
     }
 }
+
+// expo-sqlite ดาวน์โหลด SQLite amalgamation จาก www.sqlite.org ทุกครั้งที่ build บนเครื่องใหม่
+// (task :expo-sqlite:downloadSQLite) — บน EAS ต่อไม่ได้ ("java.net.SocketException: Network is
+// unreachable") build 2.2.0 ล้มสองครั้งติดที่ขั้นนี้ ทั้งที่โค้ดไม่ผิด
+// ไฟล์เดียวกันเก็บไว้ใน android/vendor/ แล้วคัดลอกไปไว้ที่ปลายทางก่อน task ทำงาน task ตั้ง
+// overwrite(false) ไว้ จึงข้ามการดาวน์โหลดเมื่อมีไฟล์อยู่แล้ว ถ้าอัปเกรด expo-sqlite แล้วชื่อไฟล์
+// เปลี่ยน (เวอร์ชัน SQLite ใหม่) จะไม่เจอไฟล์ใน vendor และกลับไปดาวน์โหลดตามปกติ — วางไฟล์ใหม่ไว้ด้วย
+// SHA-256 ของ sqlite-amalgamation-3450300.zip: ea170e73e447703e8359308ca2e4366a3ae0c4304a8665896f068c736781c651
+subprojects { sub ->
+    if (sub.name == 'expo-sqlite') {
+        // คัดลอกตอน configure ไม่ใช่ใน doFirst — onlyIf ของ task (เช่นเช็ค offline) ถูกประเมินก่อน doFirst
+        sub.afterEvaluate {
+            def dest = sub.tasks.named('downloadSQLite').get().dest
+            def vendored = rootProject.file("vendor/${dest.name}")
+            if (vendored.isFile() && !dest.isFile()) {
+                dest.parentFile.mkdirs()
+                java.nio.file.Files.copy(vendored.toPath(), dest.toPath())
+                logger.lifecycle("expo-sqlite: using vendored ${vendored.name}")
+            }
+        }
+    }
+}
