@@ -17,7 +17,7 @@ import DropDownPicker from 'react-native-dropdown-picker';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import { getActiveSession, insertErrorLog } from '../constants/Database';
 import { THAI_PROVINCES } from '../constants/provinces';
-import { printReceiptImage } from '../utils/printer';
+import { printReceiptImage, waitForPrinterReady } from '../utils/printer';
 import { useAuth } from '../contexts/AuthContext';
 import { useEnvironment } from '../contexts/EnvironmentContext';
 import { useProject } from '../contexts/ProjectContext';
@@ -182,6 +182,10 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
 
   const handlePrint = async (item) => {
     if (!item.register_id || item.printed !== false || printLoading) return;
+
+    // ✅ เช็กเครื่องพิมพ์ก่อนเรียก print-slip — API บันทึกฝั่งเซิร์ฟเวอร์ว่าพิมพ์แล้วทันที
+    //    ถ้ากระดาษหมดแล้วยังเรียก รายการนั้นจะถูกนับว่าพิมพ์ทั้งที่ไม่มีสลิป และพิมพ์ซ้ำไม่ได้อีก
+    if (!(await waitForPrinterReady())) return;
 
     setPrintLoading(true);
     setPrintData(item);

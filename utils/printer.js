@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { Alert, NativeModules, Platform } from 'react-native';
 import { BluetoothEscposPrinter } from 'react-native-bluetooth-escpos-printer';
 
 const { SunmiPrinter } = NativeModules;
@@ -44,6 +44,39 @@ export async function isInnerPrinterAvailable() {
 export async function getInnerPrinterStatus() {
   if (!(await isInnerPrinterAvailable())) return null;
   return SunmiPrinter.getStatus();
+}
+
+/**
+ * Holds the operator at a "printer not ready" prompt until the built-in printer is ready —
+ * paper loaded, cover closed — or they cancel. Call it *before* saving a check-in that will be
+ * printed, so an empty roll never produces a saved check-in without its slip.
+ *
+ * Resolves true when printing can go ahead, false when the operator cancelled (nothing saved).
+ * Without a built-in printer it resolves true at once: Bluetooth cannot report paper state.
+ */
+export async function waitForPrinterReady() {
+  for (;;) {
+    let status = null;
+    try {
+      status = await getInnerPrinterStatus();
+    } catch (e) {
+      return true; // cannot ask — let the print itself report the failure
+    }
+    if (!status || status.ok) return true;
+
+    const retry = await new Promise((resolve) =>
+      Alert.alert(
+        'เครื่องพิมพ์ไม่พร้อม',
+        `${status.message}\nยังไม่ได้บันทึกข้อมูล แก้ไขแล้วกด "พิมพ์อีกครั้ง"`,
+        [
+          { text: 'ยกเลิก', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'พิมพ์อีกครั้ง', onPress: () => resolve(true) },
+        ],
+        { cancelable: false }
+      )
+    );
+    if (!retry) return false;
+  }
 }
 
 /**

@@ -16,7 +16,7 @@ import {
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import { insertCheckIn, insertErrorLog, updateCheckInPrintedStatus } from '../constants/Database';
 import { useProject } from '../contexts/ProjectContext';
-import { printReceiptImage } from '../utils/printer';
+import { printReceiptImage, waitForPrinterReady } from '../utils/printer';
 
 // route params ของ expo-router เป็น string เสมอ และค่า null จะกลายเป็นข้อความ "null"
 // ถ้าปล่อยผ่านไปตรงๆ จะได้ register_id = "null" (truthy) ส่งขึ้น server
@@ -110,6 +110,13 @@ export default function PassengerCountScreen() {
 
     setIsSubmitting(true);
     Keyboard.dismiss();
+
+    // ✅ เครื่องพิมพ์ไม่พร้อม (กระดาษหมด ฝาเปิด) → ค้างไว้ที่หน้านี้ ยังไม่บันทึก
+    //    ให้เจ้าหน้าที่เติมกระดาษแล้วกดพิมพ์อีกครั้ง จะได้ไม่มีเช็กอินที่ไม่มีสลิป
+    if (!(await waitForPrinterReady())) {
+      setIsSubmitting(false);
+      return;
+    }
 
     try {
       const plateProvinceBKK = params.plate_province == 'กรุงเทพมหานคร' ? 'กทม.' : params.plate_province;

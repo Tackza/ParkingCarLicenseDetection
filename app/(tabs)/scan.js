@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 // import * as ImagePicker from 'expo-image-picker';
 import { useMode } from "@/contexts/ModeContext";
 import { detectPlate } from '@/utils/lprOcr';
-import { printReceiptImage } from '@/utils/printer';
+import { printReceiptImage, waitForPrinterReady } from '@/utils/printer';
 import { createSpokenPlate } from '@/utils/speechUtils';
 import axios from 'axios';
 import {
@@ -400,6 +400,13 @@ export default function ScanScreen() {
         });
         setIsSubmitting(false);
         return
+      }
+
+      // ✅ เครื่องพิมพ์ไม่พร้อม (กระดาษหมด ฝาเปิด) → ค้างไว้ที่นี่ ยังไม่บันทึก
+      //    ให้เจ้าหน้าที่เติมกระดาษแล้วกดพิมพ์อีกครั้ง จะได้ไม่มีเช็กอินที่ไม่มีสลิป
+      if (shouldPrint && !(await waitForPrinterReady())) {
+        setIsSubmitting(false);
+        return;
       }
 
       // ✅ เรียกใช้ฟังก์ชัน insertCheckIn เพื่อบันทึกลง SQLite
