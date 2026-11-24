@@ -10,7 +10,7 @@
 - **Frameworks**: Expo 51.0.5, React Native 0.74.1, React 18.2.0, Expo Router 3.5, expo-sqlite 14
 - **Build system**: npm; EAS Build (`production` → release APK)
 - **Package manager**: npm (`package-lock.json`); `postinstall` เรียก `patch-package` แต่ยังไม่มีโฟลเดอร์ `patches/`
-- **Testing**: `jest-expo` — มีเทสต์เดียวที่เหลือจาก template **ถือว่าไม่มี test suite**
+- **Testing**: `jest-expo` — `npm run test:ci` 93 เทสต์ ครอบคลุม data path (migration บน SQLite จริง, ลูปส่งเช็กอิน, ดึงใบ C7 ใหม่) **ไม่ครอบคลุมหน้าจอ** ดู CLAUDE.md § Tests
 
 ## Architecture
 - **Pattern**: Layered แบบบาง — screen (Expo Router) → context → `constants/Database.js` → SQLite; ไม่มี service/repository layer
@@ -57,7 +57,7 @@
 - **Monorepo tooling**: ไม่มี
 
 ## Known Technical Debt
-- **ไม่มี test suite** — ความเสี่ยงสูงสุดของงาน refactor นี้
+- **หน้าจอไม่มีเทสต์** — เทสต์มีแค่ data path (CLAUDE.md § Tests) การ refactor style ยังต้องยืนยันด้วยตา
 - `android/` และ `ios/` ถูก commit ไว้ → **config plugin ของ Expo จะไม่ apply เอง** ต้องแก้ manifest ด้วยมือ
 - `settings.js` มี `if (loading) return` กลางไฟล์ โดยมี hook ทั้งหมดอยู่เหนือมัน — เติม hook ใต้บรรทัดนั้นจอพังทันที
 - `ProjectProvider` ประกาศ hook ใต้ early return รอดอยู่ได้เพราะ `AuthProvider` กันไว้ชั้นบน
