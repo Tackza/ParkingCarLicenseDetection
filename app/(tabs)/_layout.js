@@ -19,6 +19,7 @@ import { ActivityIndicator, Alert, LogBox } from "react-native";
 import BackgroundTimer from 'react-native-background-timer';
 import SyncStatus from "../../components/SyncStatus";
 import { useAuth } from "@/contexts/AuthContext";
+import { registerLockOwner, releaseRegisterLock, tryAcquireRegisterLock } from "@/utils/registerSync";
 
 
 LogBox.ignoreLogs([
@@ -31,8 +32,8 @@ LogBox.ignoreLogs([
 //    รอบที่ไม่มีข้อมูลใหม่คือ GET เดียวที่ server ตอบ list ว่าง
 const SYNC_INTERVAL = 10000;
 
-// ✅ Module-level lock เพื่อป้องกัน sync ซ้ำซ้อนข้าม component re-renders
-let globalSyncLock = false;
+// ✅ ล็อกกัน sync ซ้อน อยู่ใน utils/registerSync.js — ใช้ร่วมกับปุ่ม "ดึงใบ C7 ใหม่ทั้งหมด"
+//    ในหน้าตั้งค่า ทั้งสองต้องไม่เขียนตาราง registers พร้อมกัน
 
 
 function TabLogic() {
@@ -64,8 +65,15 @@ function TabLogic() {
     }
 
     // ✅ ใช้ global lock แทน ref เพื่อป้องกัน sync ซ้ำข้าม re-renders
-    if (globalSyncLock) {
-      console.log("Sync skipped: Global lock is active.");
+    if (registerLockOwner()) {
+      // ถ้าคนถือล็อกคือการ "ดึงใหม่ทั้งหมด" มันไม่ได้ schedule รอบถัดไปให้ลูปนี้
+      // ต้อง schedule เอง ไม่งั้นลูปดับไปเลยหลังกดปุ่ม
+      if (registerLockOwner() === 'resync') {
+        console.log("Sync skipped: full resync in progress.");
+        scheduleNextSync(sessionId);
+      } else {
+        console.log("Sync skipped: Global lock is active.");
+      }
       return; // ไม่ schedule ใหม่ตรงนี้ ให้ sync ที่กำลังทำงานอยู่ schedule เอง
     }
 
@@ -75,7 +83,7 @@ function TabLogic() {
       return;
     }
 
-    globalSyncLock = true;
+    tryAcquireRegisterLock('loop');
     setIsSyncing(true);
 
     console.log("Starting sync for project:", activeProject?.project_id);
@@ -84,7 +92,7 @@ function TabLogic() {
       // ✅ ถ้าไม่มี token (เช่นตอน logout) ให้หยุดอย่างสงบ ไม่ throw error
       if (!session?.lpr_token) {
         console.log("Register Sync skipped: No LprToken (user logged out).");
-        globalSyncLock = false;
+        releaseRegisterLock('loop');
         setIsSyncing(false);
         return;
       }
@@ -141,7 +149,7 @@ function TabLogic() {
       setIsOnline(false);
       return false;
     } finally {
-      globalSyncLock = false;
+      releaseRegisterLock('loop');
       setIsSyncing(false);
       scheduleNextSync(sessionId);
     }

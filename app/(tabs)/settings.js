@@ -12,6 +12,7 @@ import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
 import { exportDatabaseFile } from '../../utils/exportUtils';
 import { getInnerPrinterStatus, printReceiptImage } from '../../utils/printer';
+import { fullResyncRegisters } from '../../utils/registerSync';
 import { captureRef } from 'react-native-view-shot';
 
 
@@ -190,6 +191,8 @@ export default function SettingsScreen() {
   // Clear Registers Modal States
   const [isClearRegistersModalVisible, setClearRegistersModalVisible] = useState(false);
   const [clearRegistersCodeInput, setClearRegistersCodeInput] = useState('');
+  // ความคืบหน้าของ "ดึงใบ C7 ใหม่ทั้งหมด" — null = ไม่ได้ดึงอยู่
+  const [resyncProgress, setResyncProgress] = useState(null);
   const { environment, updateEnvironment, isLoading: isEnvLoading } = useEnvironment();
 
   // Export Modal States
@@ -626,27 +629,44 @@ export default function SettingsScreen() {
 
 
 
+  // ✅ ดึงใบ C7 ใหม่ทั้งหมด (แทนการ "ลบแล้วรอลูปดึง" แบบเดิม)
+  //    ดึงครบทุกหน้าก่อนแล้วค่อยแทนที่ — ถ้าล้มกลางทาง ข้อมูลเดิมยังอยู่ ดู utils/registerSync.js
   const handleClearRegisters = async () => {
     if (clearRegistersCodeInput !== '8989') {
       Alert.alert("ผิดพลาด", "รหัสอนุมัติไม่ถูกต้อง.");
       return;
     }
+    setClearRegistersModalVisible(false);
+    setClearRegistersCodeInput('');
 
+    setResyncProgress(0);
     try {
-      await clearRegistersTable();
-      Alert.alert("สำเร็จ", "ลบข้อมูล Registers ทั้งหมดเรียบร้อยแล้ว!");
-      setClearRegistersModalVisible(false);
-      setClearRegistersCodeInput('');
+      const projectData = await getCurrentProject();
+      const result = await fullResyncRegisters({
+        apiBaseUrl: API_BASE_URL,
+        projectId: projectData?.project_id,
+        onProgress: setResyncProgress,
+      });
+      setResyncProgress(null);
+      await refreshCounts();
+      const time = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+      Alert.alert(
+        "ดึงใบ C7 เสร็จแล้ว",
+        `ได้รับ ${result.received.toLocaleString()} ใบ · บันทึก ${result.saved.toLocaleString()} ใบ · ${time} น.`
+          + (result.skipped > 0 ? `\nข้าม ${result.skipped} ใบที่ข้อมูลไม่ครบ (ดู error log)` : '')
+          + `\n\nเทียบตัวเลขนี้กับจำนวนในระบบหลังบ้านได้`
+      );
     } catch (e) {
-      console.error("Failed to clear registers:", e);
+      setResyncProgress(null);
+      console.error("Failed to resync registers:", e);
 
       // Log error to database
       try {
         await insertErrorLog({
           comp_id: null,
-          error_type: 'DATABASE_ERROR',
-          error_message: e.message || 'Failed to clear registers',
-          error_code: e.code || 'CLEAR_REGISTERS_ERROR',
+          error_type: 'REGISTER_RESYNC_ERROR',
+          error_message: e.message || 'Failed to resync registers',
+          error_code: e.response?.status?.toString() || e.code || 'RESYNC_REGISTERS_ERROR',
           page_name: 'settings.js',
           action_name: 'handleClearRegisters',
           user_id: user?.id || null
@@ -655,7 +675,7 @@ export default function SettingsScreen() {
         console.error('Failed to log error:', logError);
       }
 
-      Alert.alert("ผิดพลาด", "ไม่สามารถลบข้อมูลได้.");
+      Alert.alert("ดึงใบ C7 ไม่สำเร็จ", `${e.message || 'ไม่สามารถดึงข้อมูลได้'}\n\nข้อมูลเดิมในเครื่องยังอยู่ครบ`);
     }
   };
 
@@ -663,9 +683,8 @@ export default function SettingsScreen() {
     <Dialog
       visible={isClearRegistersModalVisible}
       onClose={() => setClearRegistersModalVisible(false)}
-      title="ลบข้อมูล Registers"
-      subtitle="การกระทำนี้จะลบข้อมูลทะเบียนรถทั้งหมดในเครื่อง กรุณากรอกรหัสเพื่อยืนยัน"
-      tone="danger"
+      title="ดึงใบ C7 ใหม่ทั้งหมด"
+      subtitle="ดึงใบ C7 ของกิจกรรมนี้จาก server ใหม่ทั้งชุด แล้วแทนที่ข้อมูลในเครื่อง ใช้เวลาประมาณครึ่งนาทีถึงไม่กี่นาที ระหว่างนั้นห้ามสแกน ถ้าดึงไม่สำเร็จ ข้อมูลเดิมยังอยู่ กรุณากรอกรหัสเพื่อยืนยัน"
     >
       <Field
         label="รหัสอนุมัติ"
@@ -678,9 +697,23 @@ export default function SettingsScreen() {
       <DialogActions
         onCancel={() => setClearRegistersModalVisible(false)}
         onConfirm={handleClearRegisters}
-        confirmLabel="ลบข้อมูล"
-        tone="danger"
+        confirmLabel="ดึงใหม่"
       />
+    </Dialog>
+  );
+
+  // กล่องค้างระหว่างดึง — ปิดไม่ได้ (onClose ว่าง) กันไม่ให้ไปสแกนระหว่างที่ข้อมูลกำลังถูกแทนที่
+  const renderResyncProgress = () => (
+    <Dialog
+      visible={resyncProgress !== null}
+      onClose={() => { }}
+      title="กำลังดึงใบ C7…"
+      subtitle="ห้ามปิดแอปหรือสแกนระหว่างนี้"
+    >
+      <View className="flex-row items-center gap-3">
+        <ActivityIndicator size="small" color={ICON_MUTED} />
+        <Text className="text-[15px] text-text">ได้รับแล้ว {(resyncProgress || 0).toLocaleString()} ใบ</Text>
+      </View>
     </Dialog>
   );
 
@@ -750,7 +783,7 @@ export default function SettingsScreen() {
     setEnvMasterCodeInput('');
     setEnvModalVisible(true);
   };
-  // ซ่อนไว้หลังการกดค้างที่แถวเวอร์ชันโดยตั้งใจ — ลบใบ C7 ทั้งหมดในเครื่อง (ดู CLAUDE.md)
+  // "ดึงใบ C7 ใหม่ทั้งหมด" — เปิดได้จากเมนูงานประจำวัน และยังเปิดได้จากการกดค้างที่แถวเวอร์ชันแบบเดิม
   const openClearRegisters = () => {
     setClearRegistersCodeInput('');
     setClearRegistersModalVisible(true);
@@ -1161,6 +1194,7 @@ export default function SettingsScreen() {
       {renderExportModal()}
       {renderVersionModal()}
       {renderClearRegistersModal()}
+      {renderResyncProgress()}
       {renderRemainingModal()}
 
       {/* ── ผู้ใช้ · กิจกรรม · ออกจากระบบ ── */}
@@ -1231,6 +1265,7 @@ export default function SettingsScreen() {
               onPress={openRemaining}
             />
             <MenuRow icon="refresh-outline" label="อัพเดทข้อมูลกิจกรรม" onPress={getProject} />
+            <MenuRow icon="cloud-download-outline" label="ดึงใบ C7 ใหม่ทั้งหมด" onPress={openClearRegisters} />
             <MenuRow icon="download-outline" label="Export ฐานข้อมูล" onPress={() => setExportModalVisible(true)} last />
           </MenuGroup>
 
