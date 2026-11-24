@@ -1,0 +1,21 @@
+# ตั้งค่า → ทดสอบเครื่องพิมพ์: ต้องพิมพ์ผ่าน print service ของ SUNMI (ไม่ใช่ Bluetooth)
+# ⚠️ มีสลิปออกมา 1 ใบ — ต้องมีกระดาษในเครื่อง
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+name: ทดสอบเครื่องพิมพ์ผ่านเครื่องพิมพ์ในตัว
+---
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible: "ค้นหาทะเบียน"
+    timeout: 20000
+- runFlow: subflows/open_settings.yaml
+- scrollUntilVisible:
+    element: "ทดสอบเครื่องพิมพ์"
+- tapOn: "ทดสอบเครื่องพิมพ์"
+- extendedWaitUntil:
+    visible: "พิมพ์สำเร็จ|เครื่องพิมพ์ไม่พร้อม|พิมพ์ไม่สำเร็จ"
+    timeout: 20000
+- takeScreenshot: printer_test_result
+- assertVisible: "พิมพ์สำเร็จ"
+- assertVisible: "พิมพ์ผ่านเครื่องพิมพ์ในตัว \\(SUNMI\\)"
+- tapOn: "OK"

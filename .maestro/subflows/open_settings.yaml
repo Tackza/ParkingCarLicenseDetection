@@ -1,0 +1,8 @@
+# แท็บตั้งค่า (ขวาสุด) — แท็บไม่มีข้อความ จึงแตะตามตำแหน่ง
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+---
+- tapOn:
+    point: "83%,91%"
+- extendedWaitUntil:
+    visible: "งานประจำวัน"
+    timeout: 10000
