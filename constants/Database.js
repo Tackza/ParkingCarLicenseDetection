@@ -322,6 +322,22 @@ export const setupDatabase = async () => {
       }
     }
 
+    if (user_version < 10) {
+      console.log("Migrating to version 10: Adding latitude / longitude / location_accuracy to check_ins...");
+      try {
+        const ciCols = await db.getAllAsync(`PRAGMA table_info('check_ins');`);
+        const has = (name) => Array.isArray(ciCols) && ciCols.some(col => col.name === name);
+        // ✅ NULL = ไม่มีพิกัด (ไม่มีสัญญาณ / ไม่ได้อนุญาต) — ห้ามใช้ 0 แทน เพราะ 0,0 คือจุดจริงกลางทะเล
+        if (!has('latitude')) await db.runAsync(`ALTER TABLE check_ins ADD COLUMN latitude REAL;`);
+        if (!has('longitude')) await db.runAsync(`ALTER TABLE check_ins ADD COLUMN longitude REAL;`);
+        if (!has('location_accuracy')) await db.runAsync(`ALTER TABLE check_ins ADD COLUMN location_accuracy REAL;`);
+        user_version = 10;
+      } catch (e) {
+        console.error('❌ Error during version 10 migration:', e);
+        throw e;
+      }
+    }
+
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
     // This handles cases where the database was created before version tracking was added
     try {
@@ -1041,6 +1057,12 @@ export const getCheckInById = async (id) => {
   return row || null;
 };
 
+const toNumberOrNull = (v) => {
+  if (v === null || v === undefined || v === '' || v === 'null' || v === 'undefined') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
 export const insertCheckIn = async (checkInData) => {
   const db = await getDb();
   const newId = ulid();
@@ -1051,8 +1073,8 @@ export const insertCheckIn = async (checkInData) => {
          uid, project_id, register_id, activity_id, seq_no, detect_plate_no, detect_plate_province,
          plate_no, plate_province, is_plate_manual, photo_path, bus_type,
          passenger, mileage, sticker_no, note, comp_id, printed, error_msg, ocr_connected,
-         created_by 
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+         created_by, latitude, longitude, location_accuracy
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         newId, // ลบขีดกลางออกจาก ULID
         checkInData.project_id,
@@ -1078,6 +1100,10 @@ export const insertCheckIn = async (checkInData) => {
         checkInData.error_msg || null,
         checkInData.ocr_connected !== undefined ? checkInData.ocr_connected : 1, // ✅ Default to 1 if undefined
         checkInData.created_by,
+        // พิกัดตอนถ่ายรูป — mode one มาทาง route params จึงเป็นสตริง ('' / 'null' = ไม่มี)
+        toNumberOrNull(checkInData.latitude),
+        toNumberOrNull(checkInData.longitude),
+        toNumberOrNull(checkInData.location_accuracy),
       ]
     );
 

@@ -257,8 +257,10 @@ const CheckInSyncManager = () => {
           //    เดิมใช้ checkOCRConnection() ซึ่งคืน string "0"/"1" แล้วเช็คด้วย ternary
           //    ทั้งสองค่าเป็น truthy จึงส่ง '1' เสมอ สถิติ OCR ล่มจึงว่างเปล่ามาตลอด
           formData.append('ocr_connected', checkIn.ocr_connected ? '1' : '0');
-          formData.append('lat', 0);
-          formData.append('long', 0);
+          // พิกัดตอนถ่ายรูป (migration v10) ไม่มี = ส่งว่าง server รับเป็น null
+          // เดิมส่ง 0 ตายตัวทุกแถว ซึ่งบน server กลายเป็นจุด 0,0 กลางทะเล
+          formData.append('lat', checkIn.latitude ?? '');
+          formData.append('long', checkIn.longitude ?? '');
           // ✅ seq_no ต้องมาจากแถวนั้น ไม่ใช่โปรเจกต์ที่ active ตอนอัปโหลด
           //    ค้างออฟไลน์ข้ามคืนแล้วส่งตอนเช้าจะได้ seq_no ของกิจกรรมใหม่ติดไปกับข้อมูลเก่า
           //    (และถ้าตอนนั้นไม่มีโปรเจกต์ที่ active เลย โค้ดเดิมจะ TypeError ทุกแถว)

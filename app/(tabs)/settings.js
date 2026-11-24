@@ -188,11 +188,9 @@ export default function SettingsScreen() {
   const [currentId, setCurrentId] = useState(null); // project_id or activity_id depending on mode
   const [currentProject, setCurrentProject] = useState(null); // Store current project info
 
-  // Clear Registers Modal States
-  const [isClearRegistersModalVisible, setClearRegistersModalVisible] = useState(false);
-  const [clearRegistersCodeInput, setClearRegistersCodeInput] = useState('');
   // ความคืบหน้าของ "ดึงใบ C7 ใหม่ทั้งหมด" — null = ไม่ได้ดึงอยู่
   const [resyncProgress, setResyncProgress] = useState(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const { environment, updateEnvironment, isLoading: isEnvLoading } = useEnvironment();
 
   // Export Modal States
@@ -629,16 +627,49 @@ export default function SettingsScreen() {
 
 
 
+  // ✅ ตรวจหาอัปเดต (OTA) แล้วใช้ทันที
+  //    ปกติ expo-updates โหลดอัปเดตเบื้องหลังตอนเปิดแอป แต่จะใช้ก็ต่อเมื่อเปิดแอป "ครั้งถัดไป"
+  //    หน้างานจึงต้องปิด-เปิดสองรอบ และไม่รู้ว่าได้แล้วหรือยัง ปุ่มนี้โหลดแล้วรีสตาร์ทให้เลย
+  //    ข้อมูลไม่หาย — check-in อยู่ใน SQLite ส่วนที่ยังไม่ได้ส่งจะส่งต่อหลังรีสตาร์ท
+  const handleCheckUpdate = async () => {
+    if (isCheckingUpdate) return;
+    if (!Updates.isEnabled) {
+      Alert.alert('ตรวจหาอัปเดตไม่ได้', 'แอปตัวนี้ไม่ได้เปิดระบบอัปเดต (เช่น build สำหรับพัฒนา)');
+      return;
+    }
+    setIsCheckingUpdate(true);
+    try {
+      const check = await Updates.checkForUpdateAsync();
+      if (!check.isAvailable) {
+        Alert.alert('เป็นเวอร์ชันล่าสุดแล้ว', `เวอร์ชัน ${otaVersion || appVersion}`);
+        return;
+      }
+      await Updates.fetchUpdateAsync();
+      Alert.alert(
+        'ดาวน์โหลดอัปเดตเสร็จแล้ว',
+        'แอปจะเริ่มใหม่เพื่อใช้เวอร์ชันใหม่ ข้อมูลในเครื่องไม่หาย',
+        [{ text: 'เริ่มใหม่เลย', onPress: () => Updates.reloadAsync() }],
+        { cancelable: false }
+      );
+    } catch (e) {
+      insertErrorLog({
+        comp_id: machineCode || null,
+        error_type: 'OTA_UPDATE_ERROR',
+        error_message: e?.message || 'Failed to check for update',
+        error_code: e?.code || null,
+        page_name: 'settings.js',
+        action_name: 'handleCheckUpdate',
+        user_id: user?.id || null,
+      }).catch(() => { });
+      Alert.alert('ตรวจหาอัปเดตไม่สำเร็จ', `${e?.message || 'เชื่อมต่อไม่ได้'}\nตรวจสอบอินเทอร์เน็ตแล้วลองใหม่`);
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
   // ✅ ดึงใบ C7 ใหม่ทั้งหมด (แทนการ "ลบแล้วรอลูปดึง" แบบเดิม)
   //    ดึงครบทุกหน้าก่อนแล้วค่อยแทนที่ — ถ้าล้มกลางทาง ข้อมูลเดิมยังอยู่ ดู utils/registerSync.js
   const handleClearRegisters = async () => {
-    if (clearRegistersCodeInput !== '8989') {
-      Alert.alert("ผิดพลาด", "รหัสอนุมัติไม่ถูกต้อง.");
-      return;
-    }
-    setClearRegistersModalVisible(false);
-    setClearRegistersCodeInput('');
-
     setResyncProgress(0);
     try {
       const projectData = await getCurrentProject();
@@ -678,29 +709,6 @@ export default function SettingsScreen() {
       Alert.alert("ดึงใบ C7 ไม่สำเร็จ", `${e.message || 'ไม่สามารถดึงข้อมูลได้'}\n\nข้อมูลเดิมในเครื่องยังอยู่ครบ`);
     }
   };
-
-  const renderClearRegistersModal = () => (
-    <Dialog
-      visible={isClearRegistersModalVisible}
-      onClose={() => setClearRegistersModalVisible(false)}
-      title="ดึงใบ C7 ใหม่ทั้งหมด"
-      subtitle="ดึงใบ C7 ของกิจกรรมนี้จาก server ใหม่ทั้งชุด แล้วแทนที่ข้อมูลในเครื่อง ใช้เวลาประมาณครึ่งนาทีถึงไม่กี่นาที ระหว่างนั้นห้ามสแกน ถ้าดึงไม่สำเร็จ ข้อมูลเดิมยังอยู่ กรุณากรอกรหัสเพื่อยืนยัน"
-    >
-      <Field
-        label="รหัสอนุมัติ"
-        placeholder="กรอกรหัสอนุมัติ"
-        value={clearRegistersCodeInput}
-        onChangeText={setClearRegistersCodeInput}
-        secureTextEntry={true}
-        keyboardType="number-pad"
-      />
-      <DialogActions
-        onCancel={() => setClearRegistersModalVisible(false)}
-        onConfirm={handleClearRegisters}
-        confirmLabel="ดึงใหม่"
-      />
-    </Dialog>
-  );
 
   // กล่องค้างระหว่างดึง — ปิดไม่ได้ (onClose ว่าง) กันไม่ให้ไปสแกนระหว่างที่ข้อมูลกำลังถูกแทนที่
   const renderResyncProgress = () => (
@@ -784,9 +792,16 @@ export default function SettingsScreen() {
     setEnvModalVisible(true);
   };
   // "ดึงใบ C7 ใหม่ทั้งหมด" — เปิดได้จากเมนูงานประจำวัน และยังเปิดได้จากการกดค้างที่แถวเวอร์ชันแบบเดิม
+  //    ไม่ต้องใส่รหัส — ไม่มีอะไรเสียหายถ้ากด (ข้อมูลเดิมอยู่จนกว่าจะดึงครบ) แค่ยืนยันกันกดพลาด
   const openClearRegisters = () => {
-    setClearRegistersCodeInput('');
-    setClearRegistersModalVisible(true);
+    Alert.alert(
+      'ดึงใบ C7 ใหม่ทั้งหมด',
+      'ดึงใบ C7 ของกิจกรรมนี้จาก server ใหม่ทั้งชุด แล้วแทนที่ข้อมูลในเครื่อง\nใช้เวลาครึ่งนาทีถึงไม่กี่นาที ระหว่างนั้นห้ามสแกน\nถ้าดึงไม่สำเร็จ ข้อมูลเดิมยังอยู่ครบ',
+      [
+        { text: 'ยกเลิก', style: 'cancel' },
+        { text: 'ดึงใหม่', onPress: handleClearRegisters },
+      ]
+    );
   };
 
   // ✅ สลับ environment ต้องล้างข้อมูลที่ผูกกับ server เดิมออกให้หมด
@@ -1193,7 +1208,6 @@ export default function SettingsScreen() {
       {renderEnvironmentModal()}
       {renderExportModal()}
       {renderVersionModal()}
-      {renderClearRegistersModal()}
       {renderResyncProgress()}
       {renderRemainingModal()}
 
@@ -1265,7 +1279,7 @@ export default function SettingsScreen() {
               onPress={openRemaining}
             />
             <MenuRow icon="refresh-outline" label="อัพเดทข้อมูลกิจกรรม" onPress={getProject} />
-            <MenuRow icon="cloud-download-outline" label="ดึงใบ C7 ใหม่ทั้งหมด" onPress={openClearRegisters} />
+            <MenuRow icon="sync-outline" label="ดึงใบ C7 ใหม่ทั้งหมด" onPress={openClearRegisters} />
             <MenuRow icon="download-outline" label="Export ฐานข้อมูล" onPress={() => setExportModalVisible(true)} last />
           </MenuGroup>
 
@@ -1286,6 +1300,12 @@ export default function SettingsScreen() {
               value={environment === 'prod' ? 'Prod' : 'Test'}
               valueClass={environment === 'prod' ? 'text-text-muted' : 'text-warning-ink'}
               onPress={openEnvChange}
+            />
+            <MenuRow
+              icon="cloud-download-outline"
+              label="ตรวจหาอัปเดต"
+              value={isCheckingUpdate ? 'กำลังตรวจ…' : ''}
+              onPress={handleCheckUpdate}
             />
             <MenuRow
               icon="information-circle-outline"

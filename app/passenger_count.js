@@ -142,6 +142,10 @@ export default function PassengerCountScreen() {
         // ✅ เคยตกหล่นเช่นกัน ทำให้ insertCheckIn ใส่ default 1 เสมอ สถิติ OCR ล่มของโหมด 1 จึงผิดทั้งหมด
         ocr_connected: paramToIntOrNull(params.ocr_connected) ?? 1,
         created_by: params.created_by,
+        // พิกัดตอนถ่ายรูป มาจาก scan.js ผ่าน params (เป็นสตริง insertCheckIn แปลงเอง)
+        latitude: params.latitude,
+        longitude: params.longitude,
+        location_accuracy: params.location_accuracy,
       };
 
 

@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 // import * as ImagePicker from 'expo-image-picker';
 import { useMode } from "@/contexts/ModeContext";
+import { getCheckInLocation } from '@/utils/location';
 import { detectPlate } from '@/utils/lprOcr';
 import { printReceiptImage, waitForPrinterReady } from '@/utils/printer';
 import { createSpokenPlate } from '@/utils/speechUtils';
@@ -11,7 +12,7 @@ import {
   useRouter
 } from 'expo-router';
 import * as Speech from 'expo-speech';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -89,6 +90,8 @@ export default function ScanScreen() {
   const { isModeOne } = useMode();
   const { environment } = useEnvironment();
   const [ocrConnected, setOcrConnected] = useState(1); // ✅ เพิ่ม state สำหรับเก็บสถานะ OCR
+  // พิกัดตอนถ่ายรูป — หาไปพร้อมกับการอ่านป้าย ไม่ทำให้สแกนช้าลง (utils/location.js)
+  const locationRef = useRef(null);
   const { user } = useAuth();
 
   const API_URL = environment === 'prod' ?
@@ -155,6 +158,9 @@ export default function ScanScreen() {
     setFoundRegisterData(null); // เคลียร์ข้อมูล C7 เก่าทุกครั้งที่สแกนใหม่
     setIsManualEdit(false); // รีเซ็ตสถานะการแก้ไข
     setOcrConnected(1); // ✅ รีเซ็ตสถานะ OCR เป็น 1 (Connected) ก่อนเริ่ม
+
+    // เริ่มหาพิกัดคู่ขนานกับ OCR — ไม่ await ตรงนี้ ผลจะมาเก็บใน ref ก่อนผู้ใช้กดบันทึก
+    locationRef.current = getCheckInLocation();
 
     try {
       // อ่านทะเบียนบนเครื่องก่อน (~0.9 วิ ไม่ต้องใช้เน็ต) แล้วค่อย fallback ไป Cloud Run
@@ -350,6 +356,9 @@ export default function ScanScreen() {
       console.log('activeProject :>> ', activeProject);
       console.log('foundRegisterData :>> ', foundRegisterData);
 
+      // ปกติได้ผลไปนานแล้วระหว่างที่ผู้ใช้ตรวจข้อมูล — ถ้ายังไม่เสร็จ getCheckInLocation รอไม่เกิน 4 วิ
+      const location = await (locationRef.current ?? Promise.resolve(null));
+
       // ✅ คำนวณว่าควรเก็บค่า mileage หรือไม่
       const shouldShowMileage = !isModeOne && (
         (activeProject?.seq_no === 1 && foundRegisterData?.activity1_checkmile === 1) ||
@@ -380,6 +389,10 @@ export default function ScanScreen() {
         printed: shouldPrint ? 1 : 0, // ✅ ใช้ shouldPrint แทน isVerified
         error_msg: '',
         ocr_connected: ocrConnected, // ✅ ส่งค่า ocrConnected ไปบันทึก
+        // พิกัดตอนถ่ายรูป ไม่มี = null (ห้ามใส่ 0) — โหมด 1 ส่งผ่าน params ต่อไปยัง passenger_count
+        latitude: location?.latitude ?? null,
+        longitude: location?.longitude ?? null,
+        location_accuracy: location?.accuracy ?? null,
         created_by: currentSession.user_id,
         // synced และ sync_at ไม่ต้องใส่ตรงนี้ เพราะมี DEFAULT values และจะถูก update ตอน sync
       };
