@@ -6,7 +6,7 @@
 //
 // npx jest constants/__tests__/Database.migrations.test.js
 
-const LATEST_VERSION = 10;
+const LATEST_VERSION = 11;
 
 jest.mock('expo-sqlite', () => {
   // process.getBuiltinModule ข้าม resolver ของ jest ซึ่งไม่รู้จัก node:sqlite
@@ -81,6 +81,7 @@ const checkIn = (extra = {}) => ({
 /** ถอยฐานข้อมูลที่อัปเดตแล้วกลับไปเป็นสภาพของเวอร์ชันเก่า โดยเก็บข้อมูลแถวไว้ */
 const downgradeTo = (v) => {
   const db = raw();
+  if (v < 11) db.exec('DROP TABLE location_points');
   if (v < 10) {
     for (const c of ['latitude', 'longitude', 'location_accuracy']) db.exec(`ALTER TABLE check_ins DROP COLUMN ${c}`);
   }
@@ -109,7 +110,7 @@ describe('ติดตั้งใหม่ (ฐานข้อมูลว่�
     expect(version()).toBe(LATEST_VERSION);
     const tables = raw().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((t) => t.name);
     expect(tables).toEqual(expect.arrayContaining(
-      ['users', 'sessions', 'settings', 'projects', 'registers', 'check_ins', 'error_logs']
+      ['users', 'sessions', 'settings', 'projects', 'registers', 'check_ins', 'error_logs', 'location_points']
     ));
   });
 
@@ -152,7 +153,7 @@ describe('อัปเกรดเครื่องที่มีข้อม�
     await db.insertCheckIn(checkIn({ plate_no: 'กข2222', seq_no: 1 }));
   };
 
-  test.each([9, 8, 7, 6])('v%i → v10', async (from) => {
+  test.each([10, 9, 8, 7, 6])('v%i → v11', async (from) => {
     const db = freshDatabase();
     await db.setupDatabase();
     await seedOldRows(db);
@@ -169,6 +170,7 @@ describe('อัปเกรดเครื่องที่มีข้อม�
     expect(indexes('check_ins')).toEqual(expect.arrayContaining(
       ['ix_checkins_project_created', 'ix_checkins_activity_created']
     ));
+    expect(indexes('location_points')).toContain('ix_location_points_sync');
 
     const rows = raw().prepare('SELECT * FROM check_ins ORDER BY id').all();
     expect(rows.map((r) => r.plate_no)).toEqual(['กข1111', 'กข2222']);
@@ -312,5 +314,57 @@ describe('คิวส่งขึ้น server (getUnsyncedCheckIns / markCheck
     const row = raw().prepare('SELECT sync_status, next_retry_at, retry_count FROM check_ins WHERE id = 1').get();
     expect(row).toEqual(expect.objectContaining({ sync_status: 3, next_retry_at: null, retry_count: 0 }));
     expect((await db.getUnsyncedCheckIns()).map((r) => r.id)).toEqual([1]);
+  });
+});
+
+describe('เส้นทางเดิน (location_points, v11)', () => {
+  const point = (extra = {}) => ({
+    recorded_at: '2026-11-26 09:00:00', latitude: 14.07, longitude: 100.6, accuracy: 6,
+    comp_id: '8012', user_id: 99, project_id: 12, activity_id: 34, ...extra,
+  });
+
+  test('บันทึก → อ่านคิวเก่าสุดก่อน → ทำเครื่องหมายส่งแล้ว → ไม่อยู่ในคิว', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+    const a = await db.insertLocationPoint(point({ recorded_at: '2026-11-26 09:00:00' }));
+    const b = await db.insertLocationPoint(point({ recorded_at: '2026-11-26 09:00:10' }));
+    await db.insertLocationPoint(point({ recorded_at: '2026-11-26 09:00:20' }));
+
+    expect((await db.getUnsyncedLocationPoints(2)).map((r) => r.id)).toEqual([a, b]);
+    expect(await db.getUnsyncedLocationPointsCount()).toBe(3);
+
+    expect(await db.markLocationPointsSynced([a, b])).toBe(2);
+    expect(await db.getUnsyncedLocationPointsCount()).toBe(1);
+    expect(await db.markLocationPointsSynced([])).toBe(0);
+  });
+
+  test('รหัสเครื่องเก็บเป็นข้อความ ว่าง = NULL, ค่าที่ไม่มี = NULL ไม่ใช่ 0', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+    await db.insertLocationPoint(point({ comp_id: 8012, speed: undefined }));
+    await db.insertLocationPoint(point({ comp_id: '  ', activity_id: undefined }));
+    const rows = raw().prepare('SELECT * FROM location_points ORDER BY id').all();
+    expect(rows[0].comp_id).toBe('8012');
+    expect(rows[0].speed).toBeNull();
+    expect(rows[1].comp_id).toBeNull();
+    expect(rows[1].activity_id).toBeNull();
+    expect(rows[0].sync_status).toBe(0);
+  });
+
+  test('ลบจุดเก่า: ส่งแล้วเกิน 2 วัน และทุกจุดที่เกิน 14 วัน — จุดที่ยังไม่ส่งภายใน 14 วันต้องอยู่', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+    const ins = (status, daysAgo) => raw().prepare(
+      `INSERT INTO location_points (recorded_at, latitude, longitude, sync_status, created_at)
+       VALUES ('x', 14, 100, ?, datetime('now', 'localtime', ?))`
+    ).run(status, `-${daysAgo} days`);
+    ins(2, 1);   // ส่งแล้ว 1 วัน → อยู่
+    ins(2, 3);   // ส่งแล้ว 3 วัน → ลบ
+    ins(0, 3);   // ยังไม่ส่ง 3 วัน → อยู่ (รอ server)
+    ins(0, 15);  // ยังไม่ส่ง 15 วัน → ลบ
+
+    expect(await db.pruneLocationPoints()).toBe(2);
+    const left = raw().prepare('SELECT sync_status FROM location_points ORDER BY id').all().map((r) => r.sync_status);
+    expect(left).toEqual([2, 0]);
   });
 });

@@ -4,7 +4,7 @@ import { useMode } from "@/contexts/ModeContext";
 import { getCheckInLocation } from '@/utils/location';
 import { detectPlate } from '@/utils/lprOcr';
 import { printReceiptImage, waitForPrinterReady } from '@/utils/printer';
-import { createSpokenPlate } from '@/utils/speechUtils';
+import { buildScanAnnouncement, speakAndWaitForStart } from '@/utils/speechUtils';
 import axios from 'axios';
 import {
   useLocalSearchParams,
@@ -189,15 +189,13 @@ export default function ScanScreen() {
 
       const checkResult = await checkWithRegisterList(detectedPlate, provinceExists);
 
-      // พูดเลขทะเบียนพร้อมสถานะ duplicate
-      speakPlateNo(detectedPlate, provinceExists, checkResult.hasDuplicate);
+      // พูดทะเบียน + สถานะ แล้วรอจนเสียงเริ่มออกก่อน (วงหมุนยังค้างอยู่) ค่อยปล่อยให้รูปขึ้นใน finally
+      // เจ้าหน้าที่จะได้ยินผลทันทีที่ถ่ายเสร็จ ไม่ต้องรอดูจอ — รอไม่เกิน 1.5 วิ ถ้าเสียงไม่ออก
+      await speakPlate(detectedPlate, provinceExists, checkResult);
 
       if (!detectedPlate || !provinceExists) {
         openEditModal(detectedPlate, provinceExists);
       }
-
-      // พูดผลลัพธ์การตรวจสอบ
-      speakVerificationResult(checkResult.found);
 
 
     } catch (error) {
@@ -298,34 +296,14 @@ export default function ScanScreen() {
     }
   };
 
-  const speakPlateNo = (detectedPlate, provinceExists, hasDuplicate = false) => {
-    const spokenPlate = createSpokenPlate(detectedPlate);
-    let text = `ทะเบียน, ${spokenPlate || 'ไม่พบทะเบียน'}, ${provinceExists || 'ไม่พบจังหวัด'}`;
-
-    if (hasDuplicate) {
-      text += ', ลงทะเบียนแล้ว';
-    }
-
-    Speech.stop();
-    Speech.speak(text, {
+  // อ่านทะเบียน + จังหวัด + (ลงทะเบียนแล้ว) + (ไม่พบซีเจ็ด) เป็นประโยคเดียว
+  // คืน promise ที่ resolve เมื่อเสียงเริ่มออก — processImage รอตัวนี้ก่อนแสดงรูป
+  const speakPlate = (plate, prov, checkResult = {}) =>
+    speakAndWaitForStart(Speech, buildScanAnnouncement(plate, prov, checkResult), {
       language: 'th-TH',
       rate: 1.1,
       pitch: 1.1,
     });
-  };
-
-  const speakVerificationResult = (isFound) => {
-    const text = isFound ? "" : "ไม่พบซีเจ็ด";
-
-    // ไม่ต้อง Speech.stop() เพื่อให้พูดต่อจากเลขทะเบียนได้เลย (ถ้าเลขทะเบียนยังพูดไม่จบ มันจะต่อคิว)
-    // แต่ถ้าต้องการให้พูดแทรก ก็ใส่ Speech.stop()
-    // ในที่นี้เราอยากให้พูดต่อกัน
-    Speech.speak(text, {
-      language: 'th-TH',
-      rate: 1.1,
-      pitch: 1.1,
-    });
-  };
 
 
   // ✅ ฟังก์ชันสำหรับดำเนินการบันทึก (แยกออกมาเพื่อให้เรียกใช้ได้จากหลายจุด)
@@ -626,8 +604,7 @@ export default function ScanScreen() {
     const checkResult = await checkWithRegisterList(tempLicensePlate, tempProvince);
 
     // Speak again
-    speakPlateNo(tempLicensePlate, tempProvince, checkResult.hasDuplicate);
-    speakVerificationResult(checkResult.found);
+    speakPlate(tempLicensePlate, tempProvince, checkResult);
 
     // 4. ปิด Modal แก้ไข
     setIsEditModalVisible(false);

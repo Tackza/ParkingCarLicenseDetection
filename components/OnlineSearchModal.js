@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import DropDownPicker from 'react-native-dropdown-picker';
 import ViewShot, { captureRef } from 'react-native-view-shot';
-import { getActiveSession, insertErrorLog } from '../constants/Database';
+import { getActiveSession, getSetting, insertErrorLog } from '../constants/Database';
 import { THAI_PROVINCES } from '../constants/provinces';
 import { printReceiptImage, waitForPrinterReady } from '../utils/printer';
 import { useAuth } from '../contexts/AuthContext';
@@ -198,6 +198,10 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
 
       const session = await getActiveSession();
       const token = session?.lpr_token;
+      // เครื่องที่พิมพ์คือเครื่องนี้ ไม่ใช่เครื่องที่สแกนครั้งแรก — server บันทึก comp_id เป็นผู้พิมพ์
+      // (CompId ของ log การพิมพ์ และ used_comp_id ของสิทธิ์พิมพ์ซ้ำที่แอดมินอนุญาต)
+      // ยังไม่ตั้งรหัสเครื่อง → ใช้ของเดิม เพราะ server บังคับ comp_id เป็นตัวเลข
+      const thisMachineCode = String((await getSetting('machineCode')) || '').trim();
 
 
       const body = {
@@ -206,7 +210,7 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
         activity_id: activeProject?.activity_id || '',
         seq_no: activeProject?.seq_no || '',
         register_id: item.register_id,
-        comp_id: item.comp_id || ''
+        comp_id: thisMachineCode || item.comp_id || ''
       };
 
       console.log('Calling print-slip with body:', body);
@@ -294,6 +298,9 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
     //    (handlePrint ตีกลับทันทีเมื่อ printed !== false) — แอพไม่ยอมให้พิมพ์ซ้ำโดยตั้งใจ
     const canPrint = item.can_print === true && hasC7Data && !!item.register_id && item.printed === false;
     const isPrintingThis = printLoading && printData === item;
+    // server บอกว่าพิมพ์ได้เพราะแอดมินอนุญาตพิมพ์ซ้ำ (lpr_reprint_grants) — ปุ่มจึงเขียนว่า "ปริ้นใหม่"
+    // server เก่าที่ยังไม่ส่ง reprint → undefined → ปุ่มเดิม "พิมพ์สลิป"
+    const isReprint = item.reprint === true;
     const fields = [
       { k: 'จุดออกรถ', v: reg.station || '--' },
       { k: 'จังหวัดต้นทาง', v: reg.province || '--' },
@@ -357,7 +364,7 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
             <View className="flex-row items-start gap-[7px] rounded-[9px] border border-warning-bg bg-warning-bg px-[11px] py-[9px]">
               <Ionicons name="checkmark-circle-outline" size={15} color={WARNING_INK} style={{ marginTop: 1 }} />
               <Text className="flex-1 text-[12px] leading-[17px] text-warning-ink">
-                สลิปใบนี้พิมพ์ไปแล้ว — พิมพ์ซ้ำจากหน้านี้ไม่ได้
+                สลิปใบนี้พิมพ์ไปแล้ว — ถ้าต้องการปริ้นใหม่ ให้แอดมินอนุญาตที่หน้าธรรมยาตราก่อน
               </Text>
             </View>
           )}
@@ -373,6 +380,11 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
 
           {canPrint && (
             <View className="gap-[6px]">
+              {isReprint && (
+                <Text className="text-center text-[12px] text-text-subtle">
+                  แอดมินอนุญาตให้ปริ้นใหม่ 1 ใบ
+                </Text>
+              )}
               <TouchableOpacity
                 onPress={() => handlePrint(item)}
                 disabled={printLoading}
@@ -382,10 +394,10 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
                 {isPrintingThis ? (
                   <ActivityIndicator color={ICON_ON_FILL} />
                 ) : (
-                  <Ionicons name="print-outline" size={18} color={ICON_ON_FILL} />
+                  <Ionicons name={isReprint ? 'refresh' : 'print-outline'} size={18} color={ICON_ON_FILL} />
                 )}
                 <Text className="text-[16px] font-semibold text-white">
-                  {isPrintingThis ? 'กำลังพิมพ์…' : 'พิมพ์สลิป'}
+                  {isPrintingThis ? 'กำลังพิมพ์…' : isReprint ? 'ปริ้นใหม่' : 'พิมพ์สลิป'}
                 </Text>
               </TouchableOpacity>
               {isPrintingThis && (

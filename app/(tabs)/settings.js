@@ -6,7 +6,7 @@ import axios from 'axios';
 import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
-import { backfillCheckInCompId, clearProjectsTable, clearRegistersTable, clearSession, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnscannedRegisters, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { backfillCheckInCompId, clearProjectsTable, clearRegistersTable, clearSession, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnscannedRegisters, getUnsyncedCheckInsCountForId, getUnsyncedLocationPointsCount, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
@@ -16,26 +16,7 @@ import { fullResyncRegisters } from '../../utils/registerSync';
 import { captureRef } from 'react-native-view-shot';
 
 
-// ✅ registers ยังไม่มีคอลัมน์เบอร์โทร (ต้องให้ backend ส่งมาก่อน — ดูแผน 1b)
-//    ระหว่างนี้ดึงเบอร์จาก note / alert_message ที่ admin กรอกไว้ ซึ่ง sync ลงเครื่อง
-//    อยู่แล้วทุกรอบแต่ไม่เคยถูกแสดงที่ไหนเลยในแอพ
-//    พอ backend ส่งฟิลด์จริงมา ให้ใส่ reg.driver_phone เป็นตัวแรกของ candidates
-const extractPhone = (text) => {
-  if (!text) return null;
-  // เบอร์ไทย: ขึ้นต้น 0 หรือ +66 คั่นด้วย - เว้นวรรค หรือ . ได้
-  const match = String(text).match(/(?:\+66|0)[\d\-\s.]{7,12}\d/);
-  if (!match) return null;
-  const cleaned = match[0].replace(/[^\d+]/g, '');
-  return cleaned.length >= 9 ? cleaned : null;
-};
-
-const getContactInfo = (reg) => {
-  const candidates = [reg?.driver_phone, reg?.note, reg?.alert_message];
-  const phone = candidates.map(extractPhone).find(Boolean) || null;
-  // เก็บข้อความเต็มไว้ด้วย เพราะ note อาจมีข้อมูลอื่นที่เจ้าหน้าที่ต้องเห็น
-  const raw = candidates.find(v => v && String(v).trim());
-  return { phone, raw: raw ? String(raw).trim() : null };
-};
+import { CALL_OK, CALL_OTHER, CALL_RESULTS, canSaveFollowup, contactLines, fetchRegisterContacts, followupErrorMessage, hhmm, saveFollowup, startCalling, stopCalling } from '../../utils/registerContacts';
 
 // Ionicons และ ActivityIndicator รับสีเป็นค่า ไม่ใช่ className — ค่าต้องตรงกับ token ใน tailwind.config.js
 const ICON_TEXT = '#16181d';     // text
@@ -216,6 +197,7 @@ export default function SettingsScreen() {
   const [unsyncedCount, setUnsyncedCount] = useState(0);
   const [pendingSyncCount, setPendingSyncCount] = useState(0); // ยังไม่ได้ส่ง (sync_status 0,3)
   const [syncErrorCount, setSyncErrorCount] = useState(0); // พบปัญหา (sync_status 4)
+  const [routePendingCount, setRoutePendingCount] = useState(0); // จุดเส้นทางที่ยังไม่ส่ง (location_points)
   const [successCount, setSuccessCount] = useState(0); // สำเร็จ (sync_status 2)
   const [currentId, setCurrentId] = useState(null); // project_id or activity_id depending on mode
   const [currentProject, setCurrentProject] = useState(null); // Store current project info
@@ -239,6 +221,16 @@ export default function SettingsScreen() {
   const [remainingList, setRemainingList] = useState([]);
   const [remainingCount, setRemainingCount] = useState(0);
   const [remainingLoading, setRemainingLoading] = useState(false);
+  // ผู้ติดต่อของรถที่เหลือ ดึงสดจาก server ทุกครั้งที่เปิด/รีเฟรช — { [register_id]: {driver, leader, coord, note} }
+  const [remainingContacts, setRemainingContacts] = useState({});
+  const [contactsStatus, setContactsStatus] = useState('idle'); // idle | loading | ok | error
+  const contactsRequestRef = useRef(0); // กดรีเฟรชซ้อน — คำตอบของรอบเก่าห้ามทับรอบใหม่
+  // การ์ดที่กางผู้ติดต่ออื่น (ผู้นำรถ / ผู้ประสานงาน) — ปกติแสดงแค่คนขับ
+  const [expandedContacts, setExpandedContacts] = useState({});
+  // ใครกำลังโทร + ผลการโทร (เหมือนหน้าธรรมยาตรา) — ฟอร์มบันทึกผลมีได้ทีละคัน
+  const [followBusy, setFollowBusy] = useState(null); // register_id ที่กำลังส่งคำขอ
+  const [noteReason, setNoteReason] = useState('');
+  const [noteText, setNoteText] = useState('');
   const appVersion = Constants.expoConfig?.version || '1.0.0';
   const runtimeVersion = Constants.expoConfig?.runtimeVersion || '-';
   const updateId = Updates.updateId || null;
@@ -350,6 +342,7 @@ export default function SettingsScreen() {
       setSyncErrorCount(errors);
       const success = await getSuccessCheckInsCountForId(idForFilter);
       setSuccessCount(success);
+      setRoutePendingCount(await getUnsyncedLocationPointsCount());
     } catch (e) {
       console.error("Failed to refresh counts", e);
 
@@ -770,6 +763,8 @@ export default function SettingsScreen() {
       const rows = await getUnscannedRegisters(idForFilter, projectData?.seq_no);
       setRemainingList(rows);
       setRemainingCount(rows.length);
+      // เบอร์โทรไม่ได้ sync ลงเครื่อง — ดึงตามหลัง ไม่ให้รายการรถรอเน็ต
+      loadRemainingContacts(rows);
     } catch (e) {
       console.error('Failed to load remaining vehicles', e);
       setRemainingList([]);
@@ -789,6 +784,91 @@ export default function SettingsScreen() {
     } finally {
       setRemainingLoading(false);
     }
+  };
+
+  // ชื่อ-เบอร์ผู้ติดต่อ (คนขับ / ผู้นำรถ / ผู้ประสานงาน) จาก GET /lpr/registers/contacts
+  // ออฟไลน์หรือ server เก่าที่ยังไม่มี endpoint นี้ → รายการรถยังแสดงครบ แค่บอกว่าดึงเบอร์ไม่ได้
+  const loadRemainingContacts = async (rows) => {
+    const requestId = ++contactsRequestRef.current;
+    if (!rows || rows.length === 0) {
+      setRemainingContacts({});
+      setContactsStatus('ok');
+      return;
+    }
+    setContactsStatus('loading');
+    try {
+      const session = await getActiveSession();
+      const contacts = await fetchRegisterContacts({
+        http: axios,
+        baseUrl: API_BASE_URL,
+        token: session?.lpr_token,
+        rows,
+        seqNo: projectSeqNo(),
+      });
+      if (requestId !== contactsRequestRef.current) return;
+      setRemainingContacts(contacts);
+      setContactsStatus('ok');
+    } catch (e) {
+      if (requestId !== contactsRequestRef.current) return;
+      console.error('Failed to load register contacts', e?.message);
+      setContactsStatus('error');
+      insertErrorLog({
+        comp_id: machineCode || null,
+        error_type: 'API_ERROR',
+        error_message: e?.message || 'Failed to load register contacts',
+        error_code: e?.response?.status ? String(e.response.status) : (e?.code || 'CONTACTS_ERROR'),
+        page_name: 'settings.js',
+        action_name: 'loadRemainingContacts',
+        user_id: user?.id || null,
+      }).catch(() => {});
+    }
+  };
+
+  // รอบสแกนของกิจกรรม (0/null เช็กอิน, 1/2 กิจกรรม) — ผลการโทรแยกตามรอบ เหมือนหน้าธรรมยาตรา
+  const projectSeqNo = () => {
+    const n = Number(currentProject?.seq_no);
+    return n === 1 || n === 2 ? n : null;
+  };
+
+  // จอง / เลิกโทร / บันทึกผล แล้วโหลดสถานะใหม่ ให้เห็นของคนอื่นด้วย
+  const followAction = async (item, request) => {
+    setFollowBusy(item.register_id);
+    try {
+      const session = await getActiveSession();
+      await request({
+        http: axios,
+        baseUrl: API_BASE_URL,
+        token: session?.lpr_token,
+        registerId: item.register_id,
+        projectId: item.project_id,
+        seqNo: projectSeqNo(),
+      });
+      return true;
+    } catch (e) {
+      Alert.alert('ทำรายการไม่สำเร็จ', followupErrorMessage(e));
+      return false;
+    } finally {
+      setFollowBusy(null);
+      await loadRemainingContacts(remainingList);
+    }
+  };
+
+  const handleStartCalling = (item) => {
+    setNoteReason('');
+    setNoteText('');
+    return followAction(item, startCalling);
+  };
+  const handleStopCalling = (item) => followAction(item, stopCalling);
+  const handleSaveFollowup = (item) => {
+    if (!canSaveFollowup(noteReason, noteText)) return;
+    return followAction(item, (args) => saveFollowup({ ...args, reason: noteReason, note: noteText }));
+  };
+
+  // กดเบอร์ = เริ่มโทร — ถ้ายังไม่มีใครจองคันนี้ จองให้เลย (เหมือนหน้าธรรมยาตรา)
+  const handleDial = (item, tel) => {
+    const f = remainingContacts[item.register_id]?.followup;
+    if (!f?.calling) handleStartCalling(item);
+    handleCallDriver(tel);
   };
 
   // ✅ เครื่องอาจไม่มีซิม โทรออกไม่ได้ — ต้องโชว์เบอร์ให้อ่านได้เสมอ
@@ -1061,21 +1141,54 @@ export default function SettingsScreen() {
   );
 
   // การ์ดรถหนึ่งคันในรายการ "รถที่เหลือ"
+  const renderContactLine = (item, l) => (
+    <View key={l.key} className="flex-row items-center gap-2">
+      <Text className="w-[76px] text-[13px] text-text-subtle">{l.label}</Text>
+      <View className="flex-1 flex-row flex-wrap items-center gap-x-2 gap-y-1">
+        {!!l.name && <Text className="text-[14px] text-text" numberOfLines={1}>{l.name}</Text>}
+        {l.tel ? (
+          <TouchableOpacity
+            onPress={() => handleDial(item, l.tel)}
+            accessibilityLabel={`โทรหา${l.label} ${l.phone}`}
+            className="flex-row items-center gap-[6px] rounded-lg bg-success px-[10px] py-[6px]"
+          >
+            <Ionicons name="call" size={14} color={ICON_ON_FILL} />
+            {/* selectable เผื่อเครื่องโทรออกไม่ได้ จะได้กดค้างคัดลอกไปโทรจากมือถือ */}
+            <Text className="text-[14px] font-semibold text-white" selectable>{l.phone}</Text>
+          </TouchableOpacity>
+        ) : (
+          !!l.phone && <Text className="text-[14px] text-text" selectable>{l.phone}</Text>
+        )}
+      </View>
+    </View>
+  );
+
   const renderRemainingVehicleCard = ({ item }) => {
-    const { phone, raw } = getContactInfo(item);
+    const contact = remainingContacts[item.register_id];
+    const lines = contactLines(contact);
+    // แสดงคนขับก่อน (ไม่มีคนขับ = คนแรกที่มี) ที่เหลือซ่อนไว้ กดขยายเมื่อต้องการ
+    const [first, ...others] = lines;
+    const expanded = !!expandedContacts[item.register_id];
+    const note = contact?.note || null;
+    const f = contact?.followup || null;
+    const busy = followBusy === item.register_id;
+    const mineCalling = !!f?.calling?.mine;
     return (
-      <View className="mx-[14px] mb-2 gap-[6px] rounded-[11px] border border-border bg-surface px-3 py-[10px]">
-        <View className="flex-row items-center gap-2">
-          <Text numberOfLines={1} className="flex-1 text-[18px] font-bold text-text">
-            {item.plate_no}{' '}
-            <Text className="text-[14px] font-medium text-text-muted">{item.plate_province || ''}</Text>
-          </Text>
-          {!!item.short_code && (
-            <View className="rounded-[7px] bg-chip px-[7px] py-[3px]">
-              <Text className="text-[12px] font-semibold text-chip-ink">{item.short_code}</Text>
-            </View>
-          )}
-        </View>
+      <View className={`mx-[14px] mb-2 gap-[6px] rounded-[11px] border px-3 py-[10px] ${f?.calling ? 'border-warning bg-warning-bg' : 'border-border bg-surface'}`}>
+        <Text numberOfLines={1} className="text-[18px] font-bold text-text">
+          {item.plate_no}{' '}
+          <Text className="text-[14px] font-medium text-text-muted">{item.plate_province || ''}</Text>
+        </Text>
+
+        {/* ใครกำลังโทรคันนี้ — เห็นทั้งจากเครื่องสแกนและหน้าธรรมยาตรา */}
+        {!!f?.calling && (
+          <View className="flex-row items-center gap-[6px] self-start rounded-[7px] bg-surface px-2 py-1">
+            <Ionicons name="call" size={13} color={EDGE_WARNING} />
+            <Text className="text-[13px] font-semibold text-warning-ink">
+              {f.calling.mine ? 'คุณกำลังโทร' : `${f.calling.by} กำลังโทร`} {hhmm(f.calling.at)} น.
+            </Text>
+          </View>
+        )}
 
         <InfoLine label="ประเภทรถ" value={item.bus_type || '--'} />
         <InfoLine
@@ -1083,27 +1196,108 @@ export default function SettingsScreen() {
           value={`${item.station_name || '--'}${item.station_province ? ` (${item.station_province})` : ''}`}
         />
 
-        <View className="flex-row items-center gap-2">
-          <Text className="w-[76px] text-[13px] text-text-subtle">เบอร์คนขับ</Text>
-          {phone ? (
-            <TouchableOpacity
-              onPress={() => handleCallDriver(phone)}
-              className="flex-row items-center gap-[6px] rounded-lg bg-success px-[10px] py-[6px]"
-            >
-              <Ionicons name="call" size={14} color={ICON_ON_FILL} />
-              {/* selectable เผื่อเครื่องโทรออกไม่ได้ จะได้กดค้างคัดลอกไปโทรจากมือถือ */}
-              <Text className="text-[14px] font-semibold text-white" selectable>{phone}</Text>
-            </TouchableOpacity>
-          ) : (
-            <Text className="flex-1 text-[13px] text-text-subtle">{raw || 'ไม่มีข้อมูลติดต่อ'}</Text>
-          )}
-        </View>
+        {!!first && renderContactLine(item, first)}
+        {expanded && others.map((l) => renderContactLine(item, l))}
+        {others.length > 0 && (
+          <TouchableOpacity
+            onPress={() => setExpandedContacts((prev) => ({ ...prev, [item.register_id]: !expanded }))}
+            className="flex-row items-center gap-1 self-start py-1"
+          >
+            <Text className="text-[13px] font-semibold text-primary-ink">
+              {expanded ? 'ซ่อนผู้ติดต่ออื่น' : `ผู้ติดต่ออื่น (${others.length})`}
+            </Text>
+            <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={TINT_PRIMARY} />
+          </TouchableOpacity>
+        )}
 
-        {/* ถ้าข้อความต้นทางมีตัวอักษรนอกเหนือจากตัวเบอร์ (เช่นชื่อคนติดต่อ) ให้เห็นด้วย
-            เทียบเฉพาะตัวเลขไม่ได้ เพราะ "โทร 081-xxx หัวหน้าสมชาย" จะได้ตัวเลขชุดเดียวกัน
-            แล้วชื่อจะหายไปทั้งที่เป็นข้อมูลที่ต้องใช้ */}
-        {!!phone && !!raw && /[^\d\s\-+.()]/.test(raw) && (
-          <Text className="text-[12px] leading-[17px] text-text-muted" numberOfLines={2}>{raw}</Text>
+        {lines.length === 0 && (
+          <View className="flex-row items-center gap-2">
+            <Text className="w-[76px] text-[13px] text-text-subtle">ติดต่อ</Text>
+            <Text className="flex-1 text-[13px] text-text-subtle">
+              {contactsStatus === 'loading'
+                ? 'กำลังโหลดเบอร์...'
+                : contactsStatus === 'error'
+                  ? 'ดึงเบอร์ไม่ได้ (ออฟไลน์?) กดรีเฟรชด้านบน'
+                  : 'ไม่มีเบอร์ติดต่อในใบ C7'}
+            </Text>
+          </View>
+        )}
+
+        {!!note && (
+          <Text className="text-[12px] leading-[17px] text-text-muted" numberOfLines={3}>หมายเหตุ: {note}</Text>
+        )}
+
+        {/* ผลการโทรล่าสุด */}
+        {!!f?.reason && (
+          <View className={`rounded-[9px] px-[10px] py-[6px] ${f.reason === CALL_OK ? 'bg-success-bg' : 'bg-warning-bg'}`}>
+            <Text className={`text-[13px] ${f.reason === CALL_OK ? 'text-success-ink' : 'text-warning-ink'}`}>
+              <Text className="font-bold">{f.reason}</Text>{f.note ? ` — ${f.note}` : ''}
+            </Text>
+            <Text className="mt-[2px] text-[12px] text-text-muted">
+              {f.noted_by || '-'} {hhmm(f.noted_at)} น. · โทรแล้ว {f.attempts} ครั้ง
+            </Text>
+          </View>
+        )}
+
+        {/* คุณกำลังโทร: บันทึกผล */}
+        {contactsStatus !== 'error' && mineCalling && (
+          <View className="gap-2 rounded-[9px] border border-border bg-surface p-[10px]">
+            <Text className="text-[13px] font-semibold text-text">ผลการโทร</Text>
+            <View className="flex-row flex-wrap gap-[6px]">
+              {CALL_RESULTS.map((res) => (
+                <TouchableOpacity
+                  key={res}
+                  onPress={() => setNoteReason(res)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: noteReason === res }}
+                  className={`rounded-full border px-3 py-[7px] ${noteReason === res ? 'border-primary bg-primary' : 'border-border-strong bg-surface'}`}
+                >
+                  <Text className={`text-[13px] font-semibold ${noteReason === res ? 'text-white' : 'text-text'}`}>{res}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {!!noteReason && (
+              <TextInput
+                value={noteText}
+                onChangeText={setNoteText}
+                maxLength={200}
+                placeholder={noteReason === CALL_OTHER ? 'หมายเหตุ *' : 'หมายเหตุ (ถ้ามี)'}
+                placeholderTextColor={ICON_SUBTLE}
+                className="h-11 rounded-[9px] border border-border-strong bg-surface px-3 py-0 text-[15px] text-text"
+              />
+            )}
+            <View className="flex-row gap-2">
+              <TouchableOpacity
+                onPress={() => handleStopCalling(item)}
+                disabled={busy}
+                className="h-11 flex-1 items-center justify-center rounded-[9px] border border-border-strong bg-surface"
+              >
+                <Text className="text-[14px] font-semibold text-text">เลิกโทร</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => handleSaveFollowup(item)}
+                disabled={busy || !canSaveFollowup(noteReason, noteText)}
+                className={`h-11 flex-[2] items-center justify-center rounded-[9px] ${busy || !canSaveFollowup(noteReason, noteText) ? 'bg-primary-muted' : 'bg-primary'}`}
+              >
+                {busy ? <ActivityIndicator color={ICON_ON_FILL} /> : <Text className="text-[14px] font-semibold text-white">บันทึกผลการโทร</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* ยังไม่มีใครจอง: ปุ่มจองการโทร — หน้าตาต่างจากปุ่มเบอร์ (ขอบส้มประ) เหมือนหน้าธรรมยาตรา */}
+        {contactsStatus === 'ok' && !f?.calling && (
+          <View className="flex-row items-center justify-between gap-2 rounded-[9px] border border-dashed border-warning px-[10px] py-[6px]">
+            <Text className="flex-1 text-[12px] text-text-subtle">ยังไม่มีใครโทรคันนี้</Text>
+            <TouchableOpacity
+              onPress={() => handleStartCalling(item)}
+              disabled={!!followBusy}
+              className="flex-row items-center gap-[6px] rounded-lg bg-warning-bg px-[10px] py-[7px]"
+            >
+              <Ionicons name="hand-left-outline" size={15} color={EDGE_WARNING} />
+              <Text className="text-[13px] font-semibold text-warning-ink">{busy ? 'กำลังจอง…' : 'ฉันจะโทรคันนี้'}</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </View>
     );
@@ -1143,12 +1337,6 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* ✅ ข้อมูลมาจาก registers ที่ sync มา ไม่ใช่ check_ins ของเครื่องนี้
-            จึงเห็นการสแกนของเครื่องอื่นด้วย แต่ก็ค้างได้ถ้าเครื่องออฟไลน์ */}
-        <Text className="px-[14px] pb-1 pt-[10px] text-[12px] text-text-subtle">
-          อัปเดตตามรอบ sync ใบ C7 (ทุก 10 วินาที) · รวมการสแกนจากทุกเครื่อง
-        </Text>
-
         {remainingLoading ? (
           <View className="flex-1 items-center justify-center">
             <ActivityIndicator size="large" color={TINT_PRIMARY} />
@@ -1158,15 +1346,12 @@ export default function SettingsScreen() {
             sections={remainingSections}
             keyExtractor={(item) => String(item.register_id)}
             renderItem={renderRemainingVehicleCard}
-            renderSectionHeader={({ section: { title, data } }) => (
-              <Text className="bg-surface px-[14px] pb-[6px] pt-3 text-[12px] font-bold text-text-muted">
-                {title} ({data.length})
-              </Text>
-            )}
+            // ไม่มีหัวข้อจุดออกรถ (การ์ดบอกอยู่แล้ว) — ยังเรียงตามจุดออกรถ รถจุดเดียวกันจึงอยู่ติดกัน
             stickySectionHeadersEnabled={false}
+            keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={true}
             className="flex-1"
-            contentContainerStyle={remainingSections.length === 0 ? { flexGrow: 1 } : { paddingBottom: 16 }}
+            contentContainerStyle={remainingSections.length === 0 ? { flexGrow: 1 } : { paddingTop: 10, paddingBottom: 16 }}
             ListEmptyComponent={
               <View className="flex-1 items-center justify-center gap-[10px] px-6">
                 <Ionicons name="checkmark-circle" size={44} color={SUCCESS} />
@@ -1358,6 +1543,8 @@ export default function SettingsScreen() {
             />
             <MenuRow icon="sync-outline" label="ดึงใบ C7 ใหม่ทั้งหมด" onPress={openClearRegisters} />
             <MenuRow icon="download-outline" label="Export ฐานข้อมูล" onPress={() => setExportModalVisible(true)} />
+            {/* เส้นทางเดิน (components/LocationTracker.js) — ยังไม่มี endpoint จุดจึงสะสมในเครื่อง แตะเพื่ออ่านใหม่ */}
+            <MenuRow icon="navigate-outline" label="จุดเส้นทางรอส่ง" value={`${routePendingCount.toLocaleString()} จุด`} onPress={refresh} />
             <MenuRow
               icon="information-circle-outline"
               label="เวอร์ชัน"

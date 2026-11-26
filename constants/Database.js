@@ -339,6 +339,37 @@ export const setupDatabase = async () => {
       }
     }
 
+    // ✅ Migration to version 11: เส้นทางเดินของเครื่อง (components/LocationTracker.js)
+    // เก็บทุก ~10 วิ ระหว่างจอเปิดและมีกิจกรรม แล้วส่งเป็นชุดขึ้น server — ดู CLAUDE.md § Route tracking
+    // ทุกค่าที่ส่งต้องมาจากแถวนี้เอง (เหมือน check_ins) เพราะอาจส่งทีหลังหลายชั่วโมง
+    if (user_version < 11) {
+      console.log("Migrating to version 11: Creating location_points table...");
+      try {
+        await db.execAsync(`
+          CREATE TABLE IF NOT EXISTS location_points (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recorded_at TEXT NOT NULL,
+            latitude REAL NOT NULL,
+            longitude REAL NOT NULL,
+            accuracy REAL,
+            speed REAL,
+            heading REAL,
+            comp_id TEXT,
+            user_id INTEGER,
+            project_id INTEGER,
+            activity_id INTEGER,
+            sync_status INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+          );
+          CREATE INDEX IF NOT EXISTS ix_location_points_sync ON location_points(sync_status, id);
+        `);
+        user_version = 11;
+      } catch (e) {
+        console.error('❌ Error during version 11 migration:', e);
+        throw e;
+      }
+    }
+
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
     // This handles cases where the database was created before version tracking was added
     try {
@@ -376,6 +407,7 @@ export const setupDatabase = async () => {
 
     // ✅ เก็บกวาด error_logs ตอนเปิดแอป (ฟังก์ชันกลืน error เองแล้ว ไม่ทำให้ startup ล้ม)
     await pruneErrorLogs();
+    await pruneLocationPoints();
   } catch (error) {
     console.error("Error setting up database:", error);
   }
@@ -612,6 +644,83 @@ export const pruneErrorLogs = async ({ maxAgeDays = 14, maxRows = 5000 } = {}) =
   }
 };
 
+
+// ─── เส้นทางเดิน (location_points, migration v11) ────────────────────────────
+
+/**
+ * บันทึกจุดพิกัดหนึ่งจุด — ค่าเครื่อง/ผู้ใช้/กิจกรรมต้องส่งมาด้วย ณ เวลาที่เก็บ ห้ามเติมทีหลังตอนส่ง
+ * @returns {Promise<number|null>} id ของแถว หรือ null ถ้าบันทึกไม่ได้
+ */
+export const insertLocationPoint = async (p) => {
+  const db = await getDb();
+  try {
+    const r = await db.runAsync(
+      `INSERT INTO location_points
+         (recorded_at, latitude, longitude, accuracy, speed, heading, comp_id, user_id, project_id, activity_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      [
+        p.recorded_at, p.latitude, p.longitude,
+        p.accuracy ?? null, p.speed ?? null, p.heading ?? null,
+        p.comp_id != null && String(p.comp_id).trim() !== '' ? String(p.comp_id) : null,
+        p.user_id ?? null, p.project_id ?? null, p.activity_id ?? null,
+      ]
+    );
+    return r.lastInsertRowId;
+  } catch (error) {
+    console.error('Error inserting location point:', error);
+    return null;
+  }
+};
+
+/** จุดที่ยังไม่ได้ส่ง เก่าสุดก่อน */
+export const getUnsyncedLocationPoints = async (limit = 500) => {
+  const db = await getDb();
+  return db.getAllAsync(
+    `SELECT * FROM location_points WHERE sync_status = 0 ORDER BY id ASC LIMIT ?;`,
+    [limit]
+  );
+};
+
+/** ทำเครื่องหมายว่าส่งแล้ว (2) — แถวที่ส่งแล้วถูกลบทีหลังโดย pruneLocationPoints */
+export const markLocationPointsSynced = async (ids) => {
+  if (!ids || ids.length === 0) return 0;
+  const db = await getDb();
+  const placeholders = ids.map(() => '?').join(',');
+  const r = await db.runAsync(
+    `UPDATE location_points SET sync_status = 2 WHERE id IN (${placeholders});`,
+    ids
+  );
+  return r.changes || 0;
+};
+
+export const getUnsyncedLocationPointsCount = async () => {
+  const db = await getDb();
+  const row = await db.getFirstAsync(`SELECT COUNT(*) AS c FROM location_points WHERE sync_status = 0;`);
+  return row?.c || 0;
+};
+
+/**
+ * ลบจุดเก่า: ที่ส่งแล้วเก็บไว้ 2 วัน (เผื่อดูย้อนในเครื่อง), ที่ยังไม่ส่งเก็บ 14 วัน
+ * ไม่มีเพดาน 14 วันตารางจะโตไม่หยุดถ้า server ไม่รับ (ราว 3,000 จุด/วัน/เครื่อง)
+ * ข้อมูลตำแหน่งของคน — เก็บเท่าที่จำเป็น (PDPA)
+ */
+export const pruneLocationPoints = async ({ syncedDays = 2, unsyncedDays = 14 } = {}) => {
+  const db = await getDb();
+  try {
+    const a = await db.runAsync(
+      `DELETE FROM location_points WHERE sync_status = 2 AND created_at < datetime('now', 'localtime', ?);`,
+      [`-${syncedDays} days`]
+    );
+    const b = await db.runAsync(
+      `DELETE FROM location_points WHERE created_at < datetime('now', 'localtime', ?);`,
+      [`-${unsyncedDays} days`]
+    );
+    return (a.changes || 0) + (b.changes || 0);
+  } catch (error) {
+    console.error('Error pruning location_points:', error);
+    return 0; // งานบำรุงรักษา ห้ามทำให้ startup ล้ม
+  }
+};
 
 /**
  * 🚀 คอลัมน์ที่ใช้จำกัดขอบเขตข้อมูลตามโหมดที่ใช้งานอยู่
@@ -1538,8 +1647,8 @@ export const getUnscannedRegisters = async (currentId, seqNo) => {
   const dateField = getScanDateField(seqNo);
   // ชื่อคอลัมน์มาจาก getScanDateField เท่านั้น ไม่ได้รับมาจากภายนอก จึงต่อสตริงได้ปลอดภัย
   const notScanned = `(${dateField} IS NULL OR ${dateField} = '')`;
-  // เมื่อ backend ส่งเบอร์โทรมาแล้ว (ดูแผน 1b) ให้เพิ่มคอลัมน์ใหม่ตรงนี้จุดเดียว
-  const columns = `register_id, short_code, plate_no, plate_province, bus_type,
+  // เบอร์โทรไม่อยู่ใน registers — หน้า Settings ดึงสดจาก /lpr/registers/contacts ด้วย register_id + project_id
+  const columns = `register_id, project_id, short_code, plate_no, plate_province, bus_type,
                    station_name, station_province, note, alert_message`;
   try {
     const field = await getScopeField();

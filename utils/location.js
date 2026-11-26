@@ -21,7 +21,7 @@ const LOCATION_TIMEOUT_MS = 4000;
 let permissionAsked = false;
 let permissionGranted = false;
 
-const ensurePermission = async () => {
+export const ensurePermission = async () => {
   if (permissionGranted) return true;
   try {
     const current = await Location.getForegroundPermissionsAsync();
