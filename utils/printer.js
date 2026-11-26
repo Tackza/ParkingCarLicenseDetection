@@ -40,6 +40,20 @@ export async function isInnerPrinterAvailable() {
   return innerAvailable;
 }
 
+/**
+ * SUNMI device serial (SN on the label), or '' when unknown.
+ * Feature-detected: APKs built before getDeviceSerial existed answer '' instead of throwing,
+ * so this JS is safe to ship by OTA to them.
+ */
+export async function getDeviceSerial() {
+  if (Platform.OS !== 'android' || typeof SunmiPrinter?.getDeviceSerial !== 'function') return '';
+  try {
+    return (await SunmiPrinter.getDeviceSerial()) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
 /** `{ ok, code, message }`, or null when there is no built-in printer to ask. */
 export async function getInnerPrinterStatus() {
   if (!(await isInnerPrinterAvailable())) return null;

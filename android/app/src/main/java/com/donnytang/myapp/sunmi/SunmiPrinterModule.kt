@@ -89,6 +89,29 @@ class SunmiPrinterModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Device serial number (the SN on the label), or "" when it cannot be read.
+     *
+     * Build.getSerial() needs READ_PRIVILEGED_PHONE_STATE on Android 10+, which a normal app
+     * cannot hold. SUNMI exposes the same value as vendor properties that apps may read;
+     * ro.serialno is tried last because SELinux usually blocks it for apps.
+     * Synchronous properties only, so no executor; resolves a String (bridge-safe).
+     */
+    @ReactMethod
+    fun getDeviceSerial(promise: Promise) {
+        val keys = listOf("ro.sunmi.serial", "ro.sunmi.se.sn", "ro.serialno")
+        val serial = try {
+            val get = Class.forName("android.os.SystemProperties")
+                .getMethod("get", String::class.java, String::class.java)
+            keys.asSequence()
+                .map { (get.invoke(null, it, "") as? String).orEmpty().trim() }
+                .firstOrNull { it.isNotEmpty() && it != "unknown" }
+        } catch (e: Throwable) {
+            null
+        }
+        promise.resolve(serial.orEmpty())
+    }
+
     /** `{ ok, code, message }` — `message` is Thai, ready to show the operator. */
     @ReactMethod
     fun getStatus(promise: Promise) {

@@ -11,7 +11,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
 import { exportDatabaseFile } from '../../utils/exportUtils';
-import { getInnerPrinterStatus, printReceiptImage } from '../../utils/printer';
+import { getDeviceSerial, getInnerPrinterStatus, printReceiptImage } from '../../utils/printer';
 import { fullResyncRegisters } from '../../utils/registerSync';
 import { captureRef } from 'react-native-view-shot';
 
@@ -152,6 +152,37 @@ const MenuRow = ({ icon, label, value, valueClass = 'text-text-muted', onPress, 
   </TouchableOpacity>
 );
 
+// กลุ่มเมนูที่ใช้ไม่บ่อย — พับไว้เป็นแถวเดียว แตะแล้วค่อยขยาย
+// summary แสดงค่าสำคัญตอนพับ (เช่น Environment) เพื่อให้เห็นสถานะผิดปกติได้โดยไม่ต้องขยาย
+// state อยู่ในคอมโพเนนต์นี้เอง ไม่เพิ่ม hook ใน SettingsScreen (มี early return ตอน loading — ดู CLAUDE.md)
+const CollapsibleMenuGroup = ({ title, icon, summary, children }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <View className="gap-[6px]">
+      <Text className="text-[11px] font-bold tracking-[1px] text-text-subtle">{title}</Text>
+      <View className="overflow-hidden rounded-[10px] border border-border">
+        <TouchableOpacity
+          onPress={() => setOpen((v) => !v)}
+          activeOpacity={0.6}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
+          className={`min-h-[52px] flex-row items-center gap-[10px] bg-surface px-3 py-[11px] ${open ? 'border-b border-fill' : ''}`}
+        >
+          <View className="w-[22px] items-center">
+            <Ionicons name={icon} size={19} color={ICON_MUTED} />
+          </View>
+          <View className="flex-1">
+            <Text numberOfLines={1} className="text-[15px] text-text">{open ? 'ซ่อนเมนู' : 'แสดงเมนูทั้งหมด'}</Text>
+            {!open && !!summary && <View className="mt-[2px]">{summary}</View>}
+          </View>
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={ICON_FAINT} />
+        </TouchableOpacity>
+        {open && children}
+      </View>
+    </View>
+  );
+};
+
 const InfoLine = ({ label, value }) => (
   <View className="flex-row items-baseline gap-2">
     <Text className="w-[76px] text-[13px] text-text-subtle">{label}</Text>
@@ -167,6 +198,7 @@ export default function SettingsScreen() {
   const [machineCode, setMachineCode] = useState(null);
   const testSlipRef = useRef(null);
   const [testSlipTime, setTestSlipTime] = useState('');
+  const [testSlipSerial, setTestSlipSerial] = useState('');
   const router = useRouter();
   const [isModalVisible, setModalVisible] = useState(false);
   const [masterCodeInput, setMasterCodeInput] = useState('');
@@ -390,7 +422,9 @@ export default function SettingsScreen() {
         return;
       }
       setTestSlipTime(new Date().toLocaleString('th-TH'));
-      // รอให้เวลาใหม่ render ลงสลิปก่อนจับภาพ
+      // เลขเครื่อง (SN บนสติกเกอร์ใต้เครื่อง) — APK ที่ยังไม่มีเมธอดนี้ได้ค่าว่าง
+      setTestSlipSerial(await getDeviceSerial());
+      // รอให้ค่าใหม่ render ลงสลิปก่อนจับภาพ
       await new Promise((resolve) => setTimeout(resolve, 300));
       const uri = await captureRef(testSlipRef, { format: 'png', quality: 1.0, result: 'base64' });
       const via = await printReceiptImage(uri);
@@ -1279,11 +1313,33 @@ export default function SettingsScreen() {
               onPress={openRemaining}
             />
             <MenuRow icon="refresh-outline" label="อัพเดทข้อมูลกิจกรรม" onPress={getProject} />
-            <MenuRow icon="sync-outline" label="ดึงใบ C7 ใหม่ทั้งหมด" onPress={openClearRegisters} />
-            <MenuRow icon="download-outline" label="Export ฐานข้อมูล" onPress={() => setExportModalVisible(true)} last />
+            <MenuRow icon="print-outline" label="ทดสอบเครื่องพิมพ์" onPress={handlePrinterTest} />
+            <MenuRow
+              icon="cloud-download-outline"
+              label="ตรวจหาอัปเดต"
+              value={isCheckingUpdate ? 'กำลังตรวจ…' : ''}
+              onPress={handleCheckUpdate}
+              last
+            />
           </MenuGroup>
 
-          <MenuGroup title="ตั้งค่าเครื่อง">
+          {/* ใช้ไม่บ่อย — ตั้งครั้งเดียวหรือใช้ตอนแก้ปัญหา จึงพับไว้ */}
+          <CollapsibleMenuGroup
+            title="ตั้งค่าเครื่อง"
+            icon="settings-outline"
+            summary={
+              <Text numberOfLines={1} className="text-[12px] text-text-subtle">
+                <Text className={hasMachineCode ? '' : 'font-semibold text-danger-ink'}>
+                  {hasMachineCode ? `เครื่อง ${machineCode}` : 'ยังไม่ตั้งรหัสเครื่อง'}
+                </Text>
+                {` · ${modeLabel(isModeOne)} · `}
+                {/* Test ต้องเห็นได้แม้เมนูพับอยู่ — ลงทะเบียนหน้างานบน test คือข้อมูลไม่เข้าระบบจริง */}
+                <Text className={environment === 'prod' ? '' : 'font-semibold text-warning-ink'}>
+                  {environment === 'prod' ? 'Prod' : 'Test'}
+                </Text>
+              </Text>
+            }
+          >
             <MenuRow
               icon="barcode-outline"
               label="รหัสเครื่อง"
@@ -1292,7 +1348,6 @@ export default function SettingsScreen() {
               onPress={openMachineCode}
             />
             <MenuRow icon="swap-horizontal-outline" label="โหมด" value={modeLabel(isModeOne)} onPress={openModeChange} />
-            <MenuRow icon="print-outline" label="ทดสอบเครื่องพิมพ์" onPress={handlePrinterTest} />
             {/* Test เป็นสีส้ม — ลงทะเบียนหน้างานบน test คือข้อมูลหายไปจากระบบจริง ต้องเห็นได้ทันที */}
             <MenuRow
               icon="server-outline"
@@ -1301,12 +1356,8 @@ export default function SettingsScreen() {
               valueClass={environment === 'prod' ? 'text-text-muted' : 'text-warning-ink'}
               onPress={openEnvChange}
             />
-            <MenuRow
-              icon="cloud-download-outline"
-              label="ตรวจหาอัปเดต"
-              value={isCheckingUpdate ? 'กำลังตรวจ…' : ''}
-              onPress={handleCheckUpdate}
-            />
+            <MenuRow icon="sync-outline" label="ดึงใบ C7 ใหม่ทั้งหมด" onPress={openClearRegisters} />
+            <MenuRow icon="download-outline" label="Export ฐานข้อมูล" onPress={() => setExportModalVisible(true)} />
             <MenuRow
               icon="information-circle-outline"
               label="เวอร์ชัน"
@@ -1315,7 +1366,7 @@ export default function SettingsScreen() {
               onLongPress={openClearRegisters}
               last
             />
-          </MenuGroup>
+          </CollapsibleMenuGroup>
         </View>
       </ScrollView>
 
@@ -1326,9 +1377,22 @@ export default function SettingsScreen() {
         style={{ position: 'absolute', left: -2000, top: 0, width: 384, padding: 16, backgroundColor: '#fff', alignItems: 'center' }}
       >
         <Text style={{ fontSize: 28, fontWeight: 'bold', color: '#000' }}>ทดสอบเครื่องพิมพ์</Text>
-        <Text style={{ fontSize: 20, color: '#000', marginTop: 4 }}>Mbus Scan {Constants.expoConfig?.version}</Text>
         <Text style={{ fontSize: 20, color: '#000', marginTop: 4 }}>{testSlipTime}</Text>
-        <Text style={{ fontSize: 20, color: '#000', marginTop: 4 }}>กขคง 0123456789</Text>
+        {/* ข้อมูลเครื่องไว้แจ้งทีมเวลาเครื่องมีปัญหา — เวอร์ชันใช้ค่าเดียวกับแถว "เวอร์ชัน" ในเมนูตั้งค่า */}
+        <View style={{ width: '100%', borderTopWidth: 1, borderColor: '#000', marginTop: 10, paddingTop: 8, gap: 4 }}>
+          {[
+            ['รหัสเครื่อง', hasMachineCode ? String(machineCode) : 'ยังไม่ตั้ง'],
+            ['เลขเครื่อง', testSlipSerial || '-'],
+            ['เวอร์ชัน', otaVersion || appVersion],
+            ['ผู้ใช้', username && displayName !== username ? `${displayName} (${username})` : displayName],
+          ].map(([k, v]) => (
+            <View key={k} style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+              <Text style={{ fontSize: 20, color: '#000' }}>{k}</Text>
+              <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#000', flexShrink: 1, textAlign: 'right' }}>{v}</Text>
+            </View>
+          ))}
+        </View>
+        <Text style={{ fontSize: 20, color: '#000', marginTop: 10 }}>กขคง 0123456789</Text>
         <View style={{ width: '100%', borderTopWidth: 2, borderColor: '#000', marginTop: 12 }} />
       </View>
     </View>
