@@ -1,0 +1,65 @@
+# เน็ตหลุดกลางกะ: เปิดโหมดเครื่องบิน → สแกนและบันทึกได้ตามปกติ → การ์ดค้าง "รอส่ง"
+# → ปิดโหมดเครื่องบิน → รายการเดิมส่งขึ้น server เองโดยไม่ต้องกดอะไร
+#
+# ⚠️ สร้างเช็กอินจริง 1 รายการ (ไม่มี C7) บน server — รันกับแอปตัวทดสอบ (Test) เท่านั้น
+# ถ้า flow ล้มกลางทาง เครื่องอาจค้างในโหมดเครื่องบิน — ปิดเองจากแถบด้านบน
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+name: บันทึกตอนออฟไลน์ แล้วส่งเองเมื่อเน็ตกลับมา
+onFlowComplete:
+  - setAirplaneMode: disabled
+---
+- evalScript: ${output.plate = 'ทด' + (1000 + Math.floor(Math.random() * 9000))}
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible: "ค้นหาทะเบียน"
+    timeout: 20000
+- runFlow: subflows/require_test_env.yaml
+- setAirplaneMode: enabled
+- runFlow: subflows/capture_photo.yaml
+- runFlow:
+    file: subflows/enter_plate.yaml
+    env:
+      PLATE: ${output.plate}
+      PROVINCE: "ปทุมธานี"
+- assertVisible: "ไม่พบC7"
+- runFlow:
+    when:
+      visible: "เลือกประเภทรถ"
+    commands:
+      - tapOn: "เลือกประเภทรถ"
+      - tapOn:
+          text: ".+"
+          below: "Type something..."
+          index: 0
+- tapOn: "เลขสติกเกอร์"
+- eraseText
+- inputText: "9100"
+- hideKeyboard
+- tapOn:
+    text: "บันทึก"
+    below: "เลขสติกเกอร์"
+- extendedWaitUntil:
+    visible: "บันทึกสำเร็จ"
+    timeout: 15000
+- tapOn: "ตกลง"
+- extendedWaitUntil:
+    visible: ${output.plate}
+    timeout: 15000
+# ออฟไลน์อยู่ ต้องยังไม่ถูกส่ง — รอ ~25 วิ (2 รอบของลูปส่ง) แล้วการ์ดต้องยัง "รอส่ง"
+# Maestro ไม่มีคำสั่ง sleep จึงหน่วงด้วยสคริปต์
+- evalScript: ${ (function () { const t = Date.now(); while (Date.now() - t < 25000) {} })() }
+- assertVisible:
+    text: "รอส่ง"
+    below: ${output.plate}
+    index: 0
+- takeScreenshot: offline_waiting
+- setAirplaneMode: disabled
+# wifi ต่อกลับเอง แล้วลูปส่งรอบถัดไปหยิบแถวนี้
+- extendedWaitUntil:
+    visible:
+      text: "ส่งแล้ว"
+      below: ${output.plate}
+      index: 0
+    timeout: 120000
+- takeScreenshot: back_online_synced

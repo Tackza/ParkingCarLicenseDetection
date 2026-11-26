@@ -1,8 +1,11 @@
 # แท็บตั้งค่า (ขวาสุด) — แท็บไม่มีข้อความ จึงแตะตามตำแหน่ง
+# หน้าตั้งค่าค้างตำแหน่งเลื่อนไว้จากครั้งก่อน (เช่นตอนขยาย "ตั้งค่าเครื่อง") — เลื่อนกลับขึ้นบนสุดก่อน
 appId: ${APP_ID || "com.donnytang.myapp.dev"}
 ---
 - tapOn:
     point: "83%,91%"
-- extendedWaitUntil:
-    visible: "งานประจำวัน"
+- scrollUntilVisible:
+    element: "ใบ C7"
+    direction: UP
     timeout: 10000
+- assertVisible: "งานประจำวัน"

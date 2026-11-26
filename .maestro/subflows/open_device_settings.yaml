@@ -1,0 +1,11 @@
+# ตั้งค่า แล้วขยายกลุ่ม "ตั้งค่าเครื่อง" ที่พับไว้ (รหัสเครื่อง โหมด Environment ดึงใบ C7 Export เวอร์ชัน)
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+---
+- runFlow: open_settings.yaml
+- runFlow:
+    when:
+      visible: "แสดงเมนูทั้งหมด"
+    commands:
+      - tapOn: "แสดงเมนูทั้งหมด"
+- scrollUntilVisible:
+    element: "เวอร์ชัน"

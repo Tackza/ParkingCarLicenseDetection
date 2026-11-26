@@ -8,7 +8,7 @@ name: ดึงใบ C7 ใหม่ทั้งหมด
 - extendedWaitUntil:
     visible: "ค้นหาทะเบียน"
     timeout: 20000
-- runFlow: subflows/open_settings.yaml
+- runFlow: subflows/open_device_settings.yaml
 - tapOn: "ดึงใบ C7 ใหม่ทั้งหมด"
 # กล่องยืนยัน — ต้องไม่มีช่องกรอกรหัส
 - assertVisible: "ดึงใหม่"
@@ -22,4 +22,8 @@ name: ดึงใบ C7 ใหม่ทั้งหมด
 - copyTextFrom: "ได้รับ .* ใบ · บันทึก .*"
 - evalScript: ${output.saved = maestro.copiedText.match(/บันทึก ([\d,]+) ใบ/)[1].replace(/,/g, '')}
 - tapOn: "OK"
+# เมนูขยายแล้วหน้าจอเลื่อนลงไป — เลื่อนกลับขึ้นไปหาการ์ดตัวเลข
+- scrollUntilVisible:
+    element: "ใบ C7"
+    direction: UP
 - assertVisible: "${output.saved}, ใบ C7"

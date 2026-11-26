@@ -1,0 +1,99 @@
+# โหมดงานบุญ (โหมดที่ใช้หน้างานจริง): สแกนรถมี C7 → "ต่อไป" → หน้านับผู้โดยสาร
+# → บันทึกและพิมพ์ (สลิป 2 ส่วน) → ส่งขึ้น server → การ์ดแสดงจำนวนคน
+#
+# ⚠️ ใช้ใบ C7 ที่ยังไม่สแกน 1 ใบ และพิมพ์สลิปจริง 1 ใบ — รันกับแอปตัวทดสอบ (Test) เท่านั้น
+# ถ้าเครื่องอยู่โหมดธรรมยาตรา flow จะสลับเป็นงานบุญ แล้วสลับกลับให้ตอนจบ
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+name: โหมดงานบุญ นับผู้โดยสารแล้วพิมพ์
+onFlowComplete:
+  - runFlow:
+      when:
+        true: ${output.restoreMode == 'ธรรมยาตรา'}
+      commands:
+        - launchApp
+        - extendedWaitUntil:
+            visible: "ค้นหาทะเบียน"
+            timeout: 20000
+        - runFlow: subflows/open_device_settings.yaml
+        - runFlow:
+            file: subflows/set_mode.yaml
+            env:
+              MODE: "ธรรมยาตรา"
+---
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible: "ค้นหาทะเบียน"
+    timeout: 20000
+- runFlow: subflows/require_test_env.yaml
+- runFlow: subflows/open_device_settings.yaml
+- runFlow:
+    when:
+      visible: "ธรรมยาตรา"
+    commands:
+      - evalScript: ${output.restoreMode = 'ธรรมยาตรา'}
+- runFlow:
+    file: subflows/set_mode.yaml
+    env:
+      MODE: "งานบุญ"
+- runFlow: subflows/pick_unscanned_c7.yaml
+- tapOn:
+    point: "17%,91%"
+- runFlow: subflows/capture_photo.yaml
+- runFlow:
+    file: subflows/enter_plate.yaml
+    env:
+      PLATE: ${output.c7Plate}
+      PROVINCE: ${output.c7Province}
+- assertNotVisible: "ไม่พบC7"
+# โหมดงานบุญไม่มีช่องสติกเกอร์ ปุ่มเป็น "ต่อไป"
+- assertNotVisible: "เลขสติกเกอร์"
+- tapOn: "ต่อไป"
+- extendedWaitUntil:
+    visible: "ผู้ใหญ่"
+    timeout: 10000
+# ตัวนับเริ่มจากจำนวนในใบ C7 (ไม่ใช่ 0) — อ่านค่าเริ่มไว้ก่อน
+- copyTextFrom:
+    text: "[0-9]+"
+    below: "ผู้ใหญ่"
+    index: 0
+- evalScript: ${output.adults = parseInt(maestro.copiedText, 10); output.children = 0}
+- runFlow:
+    when:
+      visible: "เด็ก"
+    commands:
+      - copyTextFrom:
+          text: "[0-9]+"
+          below: "เด็ก"
+          index: 0
+      - evalScript: ${output.children = parseInt(maestro.copiedText, 10)}
+# ผู้ใหญ่ +3 (ปุ่ม + ตัวแรกคือแถวผู้ใหญ่)
+- repeat:
+    times: 3
+    commands:
+      - tapOn:
+          text: "\\+"
+          index: 0
+- evalScript: ${output.adultsAfter = String(output.adults + 3); output.people = String(output.adults + 3 + output.children)}
+- assertVisible:
+    text: ${output.adultsAfter}
+    below: "ผู้ใหญ่"
+    index: 0
+- takeScreenshot: passenger_count
+- tapOn: "บันทึกและพิมพ์"
+- extendedWaitUntil:
+    visible: "ค้นหาทะเบียน"
+    timeout: 30000
+- assertNotVisible: "พิมพ์ไม่สำเร็จ"
+- assertNotVisible: "เครื่องพิมพ์ไม่พร้อม"
+- assertVisible:
+    text: "${output.people}คน.*"   # ชิปบนการ์ด: ผู้ใหญ่+เด็ก "คน" ตามด้วย /พระ /สามเณร ถ้ามี
+    below: ${output.c7Plate}
+    index: 0
+- extendedWaitUntil:
+    visible:
+      text: "ส่งแล้ว"
+      below: ${output.c7Plate}
+      index: 0
+    timeout: 90000
+- takeScreenshot: mode_one_synced

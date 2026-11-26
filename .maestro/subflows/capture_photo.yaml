@@ -1,0 +1,20 @@
+# แตะแท็บกล้อง (กลาง) → กดชัตเตอร์ของแอปกล้อง SUNMI (Snapcam) → ✓ ยืนยันภาพ
+# ภาพที่ได้คืออะไรก็ได้ที่กล้องเห็น (ปกติคือโต๊ะ) → OCR หาป้ายไม่เจอ → แอปเปิดหน้ากรอกทะเบียนเอง
+# ซึ่งเป็นทางเดียวกับป้ายที่อ่านไม่ออกหน้างานจริง
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+---
+- tapOn:
+    point: "50%,91%"
+- extendedWaitUntil:
+    visible:
+      id: "org.codeaurora.snapcam:id/shutter_button"
+    timeout: 15000
+- tapOn:
+    id: "org.codeaurora.snapcam:id/shutter_button"
+# หน้าตรวจภาพของ Snapcam: ✕ / ถ่ายใหม่ / ✓ — ปุ่ม ✓ ไม่มี id ที่อ่านได้ จึงแตะตามตำแหน่ง
+- extendedWaitUntil:
+    notVisible:
+      id: "org.codeaurora.snapcam:id/shutter_button"
+    timeout: 10000
+- tapOn:
+    point: "90%,95%"

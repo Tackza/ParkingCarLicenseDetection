@@ -1,0 +1,67 @@
+# สแกนรถที่ไม่มีใบ C7 (โหมดธรรมยาตรา) → กรอกทะเบียนเอง → บันทึก → ส่งขึ้น server
+#
+# ตรวจ: กล้อง → OCR หาป้ายไม่เจอ → เปิดกล่องกรอกเอง → "ไม่พบC7" → บันทึกได้ (โหมดสองอนุญาต)
+#       → การ์ดขึ้นหน้าหลัก → ภายใน ~1 นาทีเปลี่ยนเป็น "ส่งแล้ว" → หน้ารายละเอียดยืนยันว่าขึ้นระบบ
+# ⚠️ สร้างเช็กอินจริง 1 รายการบน server ของ environment ที่ตั้งไว้ — รันกับแอปตัวทดสอบ (Test) เท่านั้น
+# ทะเบียนสุ่มใหม่ทุกครั้ง (ทด + 4 หลัก) จึงไม่ชนใบ C7 และรันซ้ำได้ไม่จำกัด
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+name: สแกนรถไม่มี C7 แล้วส่งขึ้น server
+---
+- evalScript: ${output.plate = 'ทด' + (1000 + Math.floor(Math.random() * 9000))}
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible: "ค้นหาทะเบียน"
+    timeout: 20000
+- runFlow: subflows/require_test_env.yaml
+- runFlow: subflows/capture_photo.yaml
+- runFlow:
+    file: subflows/enter_plate.yaml
+    env:
+      PLATE: ${output.plate}
+      PROVINCE: "นนทบุรี"
+- assertVisible: ${output.plate}
+- assertVisible: "ไม่พบC7"
+# ประเภทรถ: เลือกตัวแรกในรายการของกิจกรรม
+- tapOn: "เลือกประเภทรถ"
+- tapOn:
+    text: ".+"
+    below: "Type something..."
+    index: 0
+- runFlow:
+    when:
+      visible: "โปรดระบุประเภทรถ"
+    commands:
+      - tapOn: "เช่น รถเก๋ง.*"
+      - inputText: "ทดสอบ"
+- tapOn: "เลขสติกเกอร์"
+- inputText: "9001"
+# คีย์บอร์ดบังปุ่มบันทึก — ตรงนี้ไม่มีกล่องเปิดอยู่ hideKeyboard (= Back) จึงปิดแค่คีย์บอร์ด
+- hideKeyboard
+- tapOn:
+    text: "บันทึก"
+    below: "เลขสติกเกอร์"
+- extendedWaitUntil:
+    visible: "บันทึกสำเร็จ"
+    timeout: 15000
+- takeScreenshot: saved_no_c7
+- tapOn: "ตกลง"
+# หน้าหลัก: การ์ดใบบนสุดคือรายการที่เพิ่งบันทึก
+- extendedWaitUntil:
+    visible: ${output.plate}
+    timeout: 15000
+# ลูปส่งทุก 10 วิ + หน้าหลักอ่านใหม่ทุก 5 วิ
+- extendedWaitUntil:
+    visible:
+      text: "ส่งแล้ว"
+      below: ${output.plate}
+      index: 0
+    timeout: 90000
+- tapOn: ${output.plate}
+- extendedWaitUntil:
+    visible: "รายละเอียด"
+    timeout: 10000
+- assertVisible: "ไม่พบ C7"
+- tapOn: "การส่ง"
+- assertVisible: "ส่งขึ้นเซิร์ฟเวอร์แล้ว"
+- takeScreenshot: detail_synced
