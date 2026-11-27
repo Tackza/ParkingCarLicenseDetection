@@ -370,6 +370,24 @@ export const setupDatabase = async () => {
       }
     }
 
+    // ✅ Migration to version 12: role ของผู้ใช้ที่ login (admin/officer/officer2 จัดการรถได้ — 2026-11-27)
+    // can_manage มาจาก server (AdminResource) — แอปใช้ซ่อนเมนู "รถที่เหลือ" และปุ่มอนุญาตพิมพ์ซ้ำ
+    // server ตรวจ role ซ้ำทุกคำขอ ค่านี้จึงเป็นแค่การแสดงผล ; session เก่าที่ไม่มีค่า = 0 (ซ่อน) จนกว่าจะ login ใหม่
+    if (user_version < 12) {
+      console.log("Migrating to version 12: Adding users.role / can_manage...");
+      try {
+        const cols = (await db.getAllAsync('PRAGMA table_info(users);')).map((c) => c.name);
+        if (!cols.includes('role')) await db.execAsync('ALTER TABLE users ADD COLUMN role TEXT;');
+        if (!cols.includes('can_manage')) {
+          await db.execAsync('ALTER TABLE users ADD COLUMN can_manage INTEGER NOT NULL DEFAULT 0;');
+        }
+        user_version = 12;
+      } catch (e) {
+        console.error('❌ Error during version 12 migration:', e);
+        throw e;
+      }
+    }
+
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
     // This handles cases where the database was created before version tracking was added
     try {
@@ -420,7 +438,7 @@ export const setupDatabase = async () => {
 export const saveSession = async (loginData) => {
   console.log('loginData :>> ', loginData);
   const db = await getDb();
-  const { id, username, first_name, last_name, note, lpr_token } = loginData;
+  const { id, username, first_name, last_name, note, lpr_token, role = null, can_manage = false } = loginData;
 
   try {
     // 1. ลบ session เก่าทั้งหมด
@@ -429,8 +447,8 @@ export const saveSession = async (loginData) => {
     // 2. เพิ่มหรืออัปเดตข้อมูล user (ใช้ runAsync)
     // REPLACE INTO = INSERT or REPLACE
     await db.runAsync(
-      'REPLACE INTO users (id, username, first_name, last_name, note) VALUES (?, ?, ?, ?, ?);',
-      [id, username, first_name, last_name, note]
+      'REPLACE INTO users (id, username, first_name, last_name, note, role, can_manage) VALUES (?, ?, ?, ?, ?, ?, ?);',
+      [id, username, first_name, last_name, note, role, can_manage === true ? 1 : 0]
     );
 
     // 3. เพิ่มข้อมูล session ใหม่
@@ -455,6 +473,9 @@ export const getActiveSession = async () => {
   const db = await getDb();;
   try {
     // ใช้ getFirstAsync เพราะเราต้องการแค่แถวเดียว
+    // ⚠️ setupDatabase() ไม่มีใครรอ — login.js เช็ก session ก่อน migration v12 เสร็จได้ (เจอจริงบน SUNMI 2026-11-27)
+    //    ถ้า select u.role ตรงๆ จะได้ "no such column" → คืน null → เด้งไปหน้า login ทั้งที่มี session
+    //    จึงอ่านเฉพาะคอลัมน์เดิมก่อน แล้วค่อยเติม role/can_manage ถ้ามีแล้ว
     const session = await db.getFirstAsync(
       `SELECT s.*, u.username, u.first_name, u.last_name
        FROM sessions s
@@ -462,6 +483,16 @@ export const getActiveSession = async () => {
        ORDER BY s.created_at DESC
        LIMIT 1;`
     );
+    if (session) {
+      try {
+        const extra = await db.getFirstAsync('SELECT role, can_manage FROM users WHERE id = ?;', [session.user_id]);
+        session.role = extra?.role ?? null;
+        session.can_manage = extra?.can_manage ?? 0;
+      } catch {
+        session.role = null; // ยังไม่ถึง v12 — ไม่มีสิทธิ์จัดการ (ซ่อนเมนู) แต่ session ใช้ได้ตามปกติ
+        session.can_manage = 0;
+      }
+    }
     // getFirstAsync จะคืนค่า object ถ้าพบ หรือ undefined ถ้าไม่พบ
     return session || null;
   } catch (error) {

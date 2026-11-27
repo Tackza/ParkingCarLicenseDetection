@@ -128,3 +128,20 @@ export const saveFollowup = ({ http, baseUrl, token, registerId, projectId, seqN
 export const followupErrorMessage = (e) =>
   e?.response?.data?.message
   || (e?.response ? 'ทำรายการไม่สำเร็จ ลองใหม่อีกครั้ง' : 'ต่อ server ไม่ได้ ตรวจสอบอินเทอร์เน็ต');
+
+// ─── อนุญาตพิมพ์ซ้ำจากเครื่อง (admin / officer / officer2 — 2026-11-27) ──────────
+// สร้างสิทธิ์ใน lpr_reprint_grants แบบเดียวกับหน้าธรรมยาตรา → ค้นทะเบียนใหม่แล้วปุ่ม "ปริ้นใหม่" ขึ้น
+// เครื่องไหนค้นทะเบียนนี้ก็ใช้สิทธิ์ได้ (1 สิทธิ์ = 1 ใบ หมดอายุสิ้นวันของงาน)
+
+/** ต้องตรงกับ LprReprintGrant::REASONS (mbus_backend) และ YatraReprintGrants::REASONS (mbus_app_backend) */
+export const REPRINT_REASONS = ['กระดาษหมด', 'พิมพ์ไม่ชัด', 'ใบชำรุด'];
+
+/** session จาก getActiveSession() — server ตรวจ role ซ้ำทุกคำขอ ค่านี้ใช้แค่ซ่อน/แสดงเมนู */
+export const canManageVehicles = (session) => Number(session?.can_manage) === 1;
+
+/** POST /lpr/registers/{id}/reprint-grant */
+export const grantReprint = ({ http, baseUrl, token, registerId, projectId, seqNo, reason }) =>
+  followupRequest(http, 'post', `${baseUrl}/lpr/registers/${registerId}/reprint-grant`, {
+    ...target(projectId, seqNo),
+    reason,
+  }, token);

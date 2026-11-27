@@ -6,7 +6,7 @@
 //
 // npx jest constants/__tests__/Database.migrations.test.js
 
-const LATEST_VERSION = 11;
+const LATEST_VERSION = 12;
 
 jest.mock('expo-sqlite', () => {
   // process.getBuiltinModule ข้าม resolver ของ jest ซึ่งไม่รู้จัก node:sqlite
@@ -81,6 +81,9 @@ const checkIn = (extra = {}) => ({
 /** ถอยฐานข้อมูลที่อัปเดตแล้วกลับไปเป็นสภาพของเวอร์ชันเก่า โดยเก็บข้อมูลแถวไว้ */
 const downgradeTo = (v) => {
   const db = raw();
+  if (v < 12) {
+    for (const c of ['role', 'can_manage']) db.exec(`ALTER TABLE users DROP COLUMN ${c}`);
+  }
   if (v < 11) db.exec('DROP TABLE location_points');
   if (v < 10) {
     for (const c of ['latitude', 'longitude', 'location_accuracy']) db.exec(`ALTER TABLE check_ins DROP COLUMN ${c}`);
@@ -153,7 +156,7 @@ describe('อัปเกรดเครื่องที่มีข้อม�
     await db.insertCheckIn(checkIn({ plate_no: 'กข2222', seq_no: 1 }));
   };
 
-  test.each([10, 9, 8, 7, 6])('v%i → v11', async (from) => {
+  test.each([11, 10, 9, 8, 7, 6])('v%i → v12', async (from) => {
     const db = freshDatabase();
     await db.setupDatabase();
     await seedOldRows(db);
@@ -314,6 +317,56 @@ describe('คิวส่งขึ้น server (getUnsyncedCheckIns / markCheck
     const row = raw().prepare('SELECT sync_status, next_retry_at, retry_count FROM check_ins WHERE id = 1').get();
     expect(row).toEqual(expect.objectContaining({ sync_status: 3, next_retry_at: null, retry_count: 0 }));
     expect((await db.getUnsyncedCheckIns()).map((r) => r.id)).toEqual([1]);
+  });
+});
+
+describe('role ของผู้ใช้ (users.role / can_manage, v12)', () => {
+  const login = (over = {}) => ({
+    id: 77, username: 'u77', first_name: 'ก', last_name: 'ข', note: '', lpr_token: 'T', ...over,
+  });
+
+  test('v11 → v12: session ที่มีอยู่ไม่หาย และยังไม่มีสิทธิ์จัดการจนกว่าจะ login ใหม่', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+    downgradeTo(11);
+    raw().exec("INSERT INTO users (id, username) VALUES (5, 'old'); INSERT INTO sessions (user_id, lpr_token) VALUES (5, 'OLD')");
+
+    await db.setupDatabase();
+
+    expect(version()).toBe(12);
+    const s = await db.getActiveSession();
+    expect(s.lpr_token).toBe('OLD');
+    expect(s.role).toBeNull();
+    expect(s.can_manage).toBe(0);
+  });
+
+  test('เช็ก session ก่อน migration v12 เสร็จ (setupDatabase ไม่มีใครรอ): ยังได้ session ไม่ใช่ null', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+    downgradeTo(11);
+    raw().exec("INSERT INTO users (id, username) VALUES (5, 'old'); INSERT INTO sessions (user_id, lpr_token) VALUES (5, 'OLD')");
+
+    const s = await db.getActiveSession(); // ไม่เรียก setupDatabase — แบบที่ login.js เจอบนเครื่องจริง
+    expect(s).toEqual(expect.objectContaining({ lpr_token: 'OLD', username: 'old', role: null, can_manage: 0 }));
+  });
+
+  test('saveSession เก็บ role และ can_manage ; getActiveSession อ่านกลับมา', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+
+    await db.saveSession(login({ role: 'officer2', can_manage: true }));
+    expect(await db.getActiveSession()).toEqual(expect.objectContaining({ role: 'officer2', can_manage: 1 }));
+
+    await db.saveSession(login({ role: 'area', can_manage: false }));
+    expect(await db.getActiveSession()).toEqual(expect.objectContaining({ role: 'area', can_manage: 0 }));
+  });
+
+  test('server เก่าที่ไม่ส่ง role → ไม่มีสิทธิ์จัดการ (ไม่ใช่ error)', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+
+    await db.saveSession(login());
+    expect(await db.getActiveSession()).toEqual(expect.objectContaining({ role: null, can_manage: 0 }));
   });
 });
 

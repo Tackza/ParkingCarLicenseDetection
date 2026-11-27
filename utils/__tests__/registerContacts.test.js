@@ -3,6 +3,9 @@
 
 import {
   CALL_RESULTS,
+  REPRINT_REASONS,
+  canManageVehicles,
+  grantReprint,
   CONTACTS_PATH,
   canSaveFollowup,
   chunkIdsByProject,
@@ -177,5 +180,29 @@ describe('ใครกำลังโทร + ผลการโทร', () => {
     expect(hhmm('2026-11-26 16:39:05')).toBe('16:39');
     expect(hhmm('2026-11-26T09:05:00.000Z')).toBe('09:05');
     expect(hhmm(null)).toBe('');
+  });
+});
+
+describe('สิทธิ์จัดการรถ + อนุญาตพิมพ์ซ้ำ', () => {
+  test('เห็นเมนูเฉพาะ can_manage = 1 (admin/officer/officer2) ; area หรือ session เก่า = ไม่เห็น', () => {
+    expect(canManageVehicles({ can_manage: 1 })).toBe(true);
+    expect(canManageVehicles({ can_manage: 0, role: 'area' })).toBe(false);
+    expect(canManageVehicles({ role: 'admin' })).toBe(false); // ไม่เดาจาก role — ใช้ค่าที่ server บอก
+    expect(canManageVehicles(null)).toBe(false);
+  });
+
+  test('เหตุผลตรงกับ server (LprReprintGrant::REASONS)', () => {
+    expect(REPRINT_REASONS).toEqual(['กระดาษหมด', 'พิมพ์ไม่ชัด', 'ใบชำรุด']);
+  });
+
+  test('อนุญาต = POST /lpr/registers/{id}/reprint-grant พร้อมรอบสแกนและเหตุผล', async () => {
+    const http = { request: jest.fn(async () => ({ data: { status: 'success' } })) };
+    await grantReprint({ http, baseUrl: 'https://x/api', token: 'T', registerId: 9, projectId: 345, seqNo: 1, reason: 'กระดาษหมด' });
+    expect(http.request).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'post',
+      url: 'https://x/api/lpr/registers/9/reprint-grant',
+      data: { project_id: 345, seq_no: 1, reason: 'กระดาษหมด' },
+      headers: expect.objectContaining({ Authorization: 'Bearer T' }),
+    }));
   });
 });

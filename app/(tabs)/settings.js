@@ -16,7 +16,7 @@ import { fullResyncRegisters } from '../../utils/registerSync';
 import { captureRef } from 'react-native-view-shot';
 
 
-import { CALL_OK, CALL_OTHER, CALL_RESULTS, canSaveFollowup, contactLines, fetchRegisterContacts, followupErrorMessage, hhmm, saveFollowup, startCalling, stopCalling } from '../../utils/registerContacts';
+import { CALL_OK, CALL_OTHER, CALL_RESULTS, canManageVehicles, canSaveFollowup, contactLines, fetchRegisterContacts, followupErrorMessage, hhmm, saveFollowup, startCalling, stopCalling } from '../../utils/registerContacts';
 
 // Ionicons และ ActivityIndicator รับสีเป็นค่า ไม่ใช่ className — ค่าต้องตรงกับ token ใน tailwind.config.js
 const ICON_TEXT = '#16181d';     // text
@@ -217,6 +217,8 @@ export default function SettingsScreen() {
   const [isVersionModalVisible, setVersionModalVisible] = useState(false);
 
   // Remaining Vehicles ("รถที่เหลือ") States
+  // เมนูนี้เฉพาะ admin / officer / officer2 (can_manage จาก server ตอน login) — area ไม่เห็น (2026-11-27)
+  const [canManage, setCanManage] = useState(false);
   const [isRemainingModalVisible, setRemainingModalVisible] = useState(false);
   const [remainingList, setRemainingList] = useState([]);
   const [remainingCount, setRemainingCount] = useState(0);
@@ -371,6 +373,9 @@ export default function SettingsScreen() {
       let cancelled = false;
       (async () => {
         try {
+          const session = await getActiveSession();
+          if (cancelled) return;
+          setCanManage(canManageVehicles(session));
           const projectData = await getCurrentProject();
           if (cancelled) return;
           setCurrentProject(projectData);
@@ -1490,13 +1495,15 @@ export default function SettingsScreen() {
 
         <View className="gap-[14px] px-[14px] pt-[14px]">
           <MenuGroup title="งานประจำวัน">
-            <MenuRow
-              icon="bus-outline"
-              label="รถที่เหลือ"
-              value={`${remainingCount} คัน`}
-              valueClass={remainingCount > 0 ? 'text-warning-ink' : 'text-text-muted'}
-              onPress={openRemaining}
-            />
+            {canManage && (
+              <MenuRow
+                icon="bus-outline"
+                label="รถที่เหลือ"
+                value={`${remainingCount} คัน`}
+                valueClass={remainingCount > 0 ? 'text-warning-ink' : 'text-text-muted'}
+                onPress={openRemaining}
+              />
+            )}
             <MenuRow icon="refresh-outline" label="อัพเดทข้อมูลกิจกรรม" onPress={getProject} />
             <MenuRow icon="print-outline" label="ทดสอบเครื่องพิมพ์" onPress={handlePrinterTest} />
             <MenuRow

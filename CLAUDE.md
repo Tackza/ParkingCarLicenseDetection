@@ -94,7 +94,7 @@ Single test: `npx jest path/to/file.test.js` or `npx jest -t "test name"`.
 
 ### Tests
 
-`npm run test:ci` runs **148 Jest tests in about a second**, all on the Mac — no device, no network, no API. They cover the data path, not the screens:
+`npm run test:ci` runs **155 Jest tests in about a second**, all on the Mac — no device, no network, no API. They cover the data path, not the screens:
 
 | file | what it pins down |
 |---|---|
@@ -102,9 +102,9 @@ Single test: `npx jest path/to/file.test.js` or `npx jest -t "test name"`.
 | [utils/__tests__/checkInUpload.test.js](utils/__tests__/checkInUpload.test.js) (40) | the pure upload logic in [utils/checkInUpload.js](utils/checkInUpload.js): every field sent and its server name, `lat`/`long` empty (never `0`) when missing, `seq_no` 0 kept, `ocr_connected` 0 sent as `"0"`; error classification (401/403 → stop batch at 3, 4xx → 4, 5xx → 3, timeout/offline → 3 + stop batch, duplicate → synced); the backoff table |
 | [components/__tests__/CheckInSyncManager.test.js](components/__tests__/CheckInSyncManager.test.js) (11) | the **real** `CheckInSyncManager` rendered with `react-test-renderer`, server/DB/files/timer mocked, one cycle driven by fake timers: per-row outcomes, offline aborts the batch, 401 forces re-login, resized photo attached and its temp file deleted, a missing photo uploads without it, next cycle after 10 s |
 | [utils/__tests__/routeTracking.test.js](utils/__tests__/routeTracking.test.js) (24) | which GPS fixes become route points (moved ≥5 m, else one a minute; no 0,0, no >100 m accuracy, no late/duplicate fixes), the row shape, the `/lpr/locations` body (one `comp_id`/`project_id` group per request, `lng`, integer `comp_id`, fallback machine code), the tracking-state store |
-| [utils/__tests__/registerContacts.test.js](utils/__tests__/registerContacts.test.js) (20) | "รถที่เหลือ" contacts: ids grouped by project and chunked, `tel:` cleanup, driver → leader → coordinator, request/error shapes; the follow-up calls (claim, release as query params, save with `อื่นๆ` needing a note) and `CALL_RESULTS` matching the server |
+| [utils/__tests__/registerContacts.test.js](utils/__tests__/registerContacts.test.js) (23) | "รถที่เหลือ" contacts: ids grouped by project and chunked, `tel:` cleanup, driver → leader → coordinator, request/error shapes; the follow-up calls (claim, release as query params, save with `อื่นๆ` needing a note) and `CALL_RESULTS` matching the server |
 | [utils/__tests__/speechUtils.test.js](utils/__tests__/speechUtils.test.js) (7) | the post-scan announcement text, and `speakAndWaitForStart()` holding the spinner until speech starts (capped at 1.5 s, never rejects) |
-| [constants/__tests__/Database.migrations.test.js](constants/__tests__/Database.migrations.test.js) (29) | `setupDatabase()` on **real SQLite**: fresh install to the latest version, re-running is a no-op, upgrading v6–v10 keeps rows, `location_points` queue/mark/prune, a half-applied migration re-runs, v8 never overwrites a device's mode; `insertCheckIn` coordinate/`seq_no`/mileage handling; queue order, `next_retry_at`, the 50-row limit, backoff 1 → 5 min |
+| [constants/__tests__/Database.migrations.test.js](constants/__tests__/Database.migrations.test.js) (33) | `setupDatabase()` on **real SQLite**: fresh install to the latest version, re-running is a no-op, upgrading v6–v10 keeps rows, `location_points` queue/mark/prune, a half-applied migration re-runs, v8 never overwrites a device's mode; `insertCheckIn` coordinate/`seq_no`/mileage handling; queue order, `next_retry_at`, the 50-row limit, backoff 1 → 5 min |
 | `components/__tests__/ThemedText-test.tsx` (1) | leftover from the Expo template, tests dead code |
 
 How the hard parts are faked — keep these when adding tests:
@@ -375,6 +375,8 @@ The mode also keys the `<Tabs>` element (`key={isModeOne ? ... }`), so toggling 
 
 ### The "รถที่เหลือ" list
 
+**Only admin, officer and officer2 see it** (since 27 Nov 2026). `lpr/login` used to accept only role `area`; it now accepts `area` plus those three (`Role::lprLoginValues()` / `lprManagerValues()` in mbus_backend; `officer2` is a new role). The login response carries `role` and `can_manage`, stored in `users` (v12) and read with `canManageVehicles(getActiveSession())`. It only hides UI — the server answers 403 to `area` on contacts / calling / followup / reprint-grant. A session saved before v12 has `can_manage = 0` until the next login. The same three roles get **อนุญาตปริ้นซ้ำ** in `OnlineSearchModal` on a slip that was already printed: pick a reason → `POST /lpr/registers/{id}/reprint-grant` (same rules as the `/yatra` page, `LprReprintGrant::REASONS` = `REPRINT_REASONS`) → the search re-runs and **ปริ้นใหม่** appears, on this or any other device. It does not print by itself.
+
 `getUnscannedRegisters(currentId, seqNo)` backs a menu in Settings that lists the registered vehicles nobody has scanned yet — the roster minus the ones already seen. Staff otherwise have no end condition for sweeping the parking area, and at close of day the leftovers are the "did not arrive" list.
 
 Three things about it are load-bearing:
@@ -449,12 +451,13 @@ All under the environment base URL, `Authorization: Bearer <lpr_token>` from `ge
 | `POST /lpr/checkins/print-slip` | `components/OnlineSearchModal.js` |
 | `POST /lpr/locations` | `components/LocationTracker.js` (route points) |
 | `GET /lpr/registers/contacts` | `app/(tabs)/settings.js` ("รถที่เหลือ" phones — see that section) |
+| `POST /lpr/registers/{id}/reprint-grant` | `components/OnlineSearchModal.js` (admin/officer/officer2 only) |
 
 ### Database (SQLite, expo-sqlite, WAL mode)
 
 [constants/Database.js](constants/Database.js) is a ~1480-line monolith — schema, migrations, and every query live here as plain exported async functions. `LicensePlateReader.db` is opened once into a module-level promise; every function starts with `await getDb()`.
 
-Migrations run in `setupDatabase()` and are gated on `PRAGMA user_version`, **currently v11**: v1 initial schema, v2 `error_logs`, v3 mileage columns, v4 `projects.bus_types`, v5 `not_show_child_qty` / `not_show_novice_qty`, v6 `show_slip_section_2`, v7 `check_ins.retry_count` / `next_retry_at`, v8 seeds the `appMode` setting, v9 indexes `check_ins` on `(project_id, created_at)` and `(activity_id, created_at)` for the history list, v10 adds `check_ins.latitude` / `longitude` / `location_accuracy`, v11 creates `location_points` (route tracking). Each block must set `user_version = N` itself; the single `PRAGMA user_version = ...` write at the end only fires when the value is `> 0`. (The v1 block is the exception — it sets nothing and is carried to 2 by the v2 block that always follows it on a fresh DB. Don't copy that shape; a new tail migration that forgets the assignment re-runs forever.) Post-v1 migrations check `PRAGMA table_info(...)` before each `ALTER TABLE` so they are re-runnable.
+Migrations run in `setupDatabase()` and are gated on `PRAGMA user_version`, **currently v12**: v1 initial schema, v2 `error_logs`, v3 mileage columns, v4 `projects.bus_types`, v5 `not_show_child_qty` / `not_show_novice_qty`, v6 `show_slip_section_2`, v7 `check_ins.retry_count` / `next_retry_at`, v8 seeds the `appMode` setting, v9 indexes `check_ins` on `(project_id, created_at)` and `(activity_id, created_at)` for the history list, v10 adds `check_ins.latitude` / `longitude` / `location_accuracy`, v11 creates `location_points` (route tracking), v12 adds `users.role` / `can_manage`. Each block must set `user_version = N` itself; the single `PRAGMA user_version = ...` write at the end only fires when the value is `> 0`. (The v1 block is the exception — it sets nothing and is carried to 2 by the v2 block that always follows it on a fresh DB. Don't copy that shape; a new tail migration that forgets the assignment re-runs forever.) Post-v1 migrations check `PRAGMA table_info(...)` before each `ALTER TABLE` so they are re-runnable.
 
 Key tables:
 
