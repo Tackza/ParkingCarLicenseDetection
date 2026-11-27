@@ -13,8 +13,8 @@ export const STATIONARY_METERS = 5;
 export const STATIONARY_HEARTBEAT_MS = 60_000;
 /** จุดที่คลาดเคลื่อนเกินนี้ (เมตร) ไม่บันทึก — มักเป็นจุดจากเสาสัญญาณตอน GPS ยังไม่ fix */
 export const MAX_ACCURACY_METERS = 100;
-/** ส่งขึ้น server ทุกกี่ ms และครั้งละกี่จุด */
-export const UPLOAD_INTERVAL_MS = 60_000;
+/** ส่งขึ้น server ทุกกี่ ms และครั้งละกี่จุด — 10 วินาที ให้แผนที่หน้าธรรมยาตราเห็นเกือบทันที (ผู้ใช้ขอ 2026-11-27 ; เดิม 1 นาที) */
+export const UPLOAD_INTERVAL_MS = 10_000;
 export const UPLOAD_BATCH_SIZE = 500;
 
 /**
