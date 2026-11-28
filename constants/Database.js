@@ -388,6 +388,26 @@ export const setupDatabase = async () => {
       }
     }
 
+    // ✅ Migration to version 13: ติดป้าย environment (prod/test) ให้เช็กอินและจุดเส้นทาง (2026-11-28)
+    // สลับ environment ล้างกิจกรรม/ใบ C7 แต่ไม่ล้างเช็กอิน และ project_id ของ prod กับ test ชนกันได้
+    // (test มี 345–368 ที่ prod ยังไม่ได้ใช้) — ไม่ติดป้าย รายการ/ตัวนับ/คันที่ จะปนกัน และคิวค้างจะถูกส่งผิดฝั่ง
+    // แถวเก่าไม่รู้ว่ามาจากฝั่งไหน จึงให้ใช้ environment ที่เครื่องตั้งอยู่ตอนอัปเกรด (ไม่มีค่า = prod แบบเดียวกับ EnvironmentContext)
+    if (user_version < 13) {
+      console.log("Migrating to version 13: Tagging check_ins / location_points with environment...");
+      try {
+        const env = envOf((await db.getFirstAsync("SELECT value FROM settings WHERE key = 'environment';"))?.value);
+        for (const table of ['check_ins', 'location_points']) {
+          const cols = (await db.getAllAsync(`PRAGMA table_info(${table});`)).map((c) => c.name);
+          if (!cols.includes('environment')) await db.execAsync(`ALTER TABLE ${table} ADD COLUMN environment TEXT;`);
+          await db.runAsync(`UPDATE ${table} SET environment = ? WHERE environment IS NULL;`, [env]);
+        }
+        user_version = 13;
+      } catch (e) {
+        console.error('❌ Error during version 13 migration:', e);
+        throw e;
+      }
+    }
+
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
     // This handles cases where the database was created before version tracking was added
     try {
@@ -676,6 +696,21 @@ export const pruneErrorLogs = async ({ maxAgeDays = 14, maxRows = 5000 } = {}) =
 };
 
 
+// ─── environment ของแถว (migration v13) ─────────────────────────────────────
+// ค่าเดียวกับ EnvironmentContext: 'test' เฉพาะเมื่อตั้งไว้ชัดเจน นอกนั้น 'prod'
+const envOf = (value) => (value === 'test' ? 'test' : 'prod');
+
+/** environment ที่เครื่องตั้งอยู่ตอนนี้ — ทุก query ของ check_ins / location_points กรองด้วยค่านี้ */
+export const getCurrentEnvironment = async () => {
+  const db = await getDb();
+  try {
+    const row = await db.getFirstAsync("SELECT value FROM settings WHERE key = 'environment';");
+    return envOf(row?.value);
+  } catch {
+    return 'prod';
+  }
+};
+
 // ─── เส้นทางเดิน (location_points, migration v11) ────────────────────────────
 
 /**
@@ -687,13 +722,14 @@ export const insertLocationPoint = async (p) => {
   try {
     const r = await db.runAsync(
       `INSERT INTO location_points
-         (recorded_at, latitude, longitude, accuracy, speed, heading, comp_id, user_id, project_id, activity_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+         (recorded_at, latitude, longitude, accuracy, speed, heading, comp_id, user_id, project_id, activity_id, environment)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         p.recorded_at, p.latitude, p.longitude,
         p.accuracy ?? null, p.speed ?? null, p.heading ?? null,
         p.comp_id != null && String(p.comp_id).trim() !== '' ? String(p.comp_id) : null,
         p.user_id ?? null, p.project_id ?? null, p.activity_id ?? null,
+        await getCurrentEnvironment(),
       ]
     );
     return r.lastInsertRowId;
@@ -707,8 +743,8 @@ export const insertLocationPoint = async (p) => {
 export const getUnsyncedLocationPoints = async (limit = 500) => {
   const db = await getDb();
   return db.getAllAsync(
-    `SELECT * FROM location_points WHERE sync_status = 0 ORDER BY id ASC LIMIT ?;`,
-    [limit]
+    `SELECT * FROM location_points WHERE sync_status = 0 AND environment = ? ORDER BY id ASC LIMIT ?;`,
+    [await getCurrentEnvironment(), limit]
   );
 };
 
@@ -726,7 +762,10 @@ export const markLocationPointsSynced = async (ids) => {
 
 export const getUnsyncedLocationPointsCount = async () => {
   const db = await getDb();
-  const row = await db.getFirstAsync(`SELECT COUNT(*) AS c FROM location_points WHERE sync_status = 0;`);
+  const row = await db.getFirstAsync(
+    `SELECT COUNT(*) AS c FROM location_points WHERE sync_status = 0 AND environment = ?;`,
+    [await getCurrentEnvironment()]
+  );
   return row?.c || 0;
 };
 
@@ -1170,9 +1209,9 @@ export const getScanHistory = async (id, searchQuery = '', limit = 30) => {
     // นับก่อนกรองคำค้น — ค้นทะเบียนแล้วเลขของแต่ละคันต้องไม่เปลี่ยน ; โหลดเพิ่มทีละหน้าก็ไม่เปลี่ยน
     let sql = `SELECT * FROM (
                  SELECT *, ROW_NUMBER() OVER (ORDER BY created_at, id) AS vehicle_no
-                 FROM check_ins WHERE ${field} = ?
+                 FROM check_ins WHERE ${field} = ? AND environment = ?
                )`;
-    const params = [id];
+    const params = [id, await getCurrentEnvironment()];
 
     const normalizedQuery = searchQuery.trim();
     if (normalizedQuery !== '') {
@@ -1219,8 +1258,8 @@ export const insertCheckIn = async (checkInData) => {
          uid, project_id, register_id, activity_id, seq_no, detect_plate_no, detect_plate_province,
          plate_no, plate_province, is_plate_manual, photo_path, bus_type,
          passenger, mileage, sticker_no, note, comp_id, printed, error_msg, ocr_connected,
-         created_by, latitude, longitude, location_accuracy
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+         created_by, latitude, longitude, location_accuracy, environment
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         newId, // ลบขีดกลางออกจาก ULID
         checkInData.project_id,
@@ -1250,6 +1289,8 @@ export const insertCheckIn = async (checkInData) => {
         toNumberOrNull(checkInData.latitude),
         toNumberOrNull(checkInData.longitude),
         toNumberOrNull(checkInData.location_accuracy),
+        // ฝั่งที่บันทึก — ใช้กรองรายการ/ตัวนับ และกันไม่ให้คิวถูกส่งขึ้นอีก server หลังสลับ environment
+        await getCurrentEnvironment(),
       ]
     );
 
@@ -1310,10 +1351,11 @@ export const getUnsyncedCheckIns = async (limit = 50) => { // ต้องเป
     const rows = await db.getAllAsync( // ใช้ getAllAsync โดยตรง
       `SELECT * FROM check_ins
          WHERE sync_status IN (0, 3, 4)
+           AND environment = ?
            AND (next_retry_at IS NULL OR next_retry_at <= datetime('now', 'localtime'))
          ORDER BY (sync_status != 0), created_at ASC
          LIMIT ?;`,
-      [limit]
+      [await getCurrentEnvironment(), limit]
     );
     return rows;
   } catch (error) {
@@ -1553,7 +1595,8 @@ export const getTotalUnsyncedCheckInsCount = async () => {
   const db = await getDb();
   try {
     const res = await db.getFirstAsync(
-      'SELECT COUNT(*) as count FROM check_ins WHERE sync_status IN (0, 3, 4);'
+      'SELECT COUNT(*) as count FROM check_ins WHERE sync_status IN (0, 3, 4) AND environment = ?;',
+      [await getCurrentEnvironment()]
     );
     return res?.count || 0;
   } catch (error) {
@@ -1601,8 +1644,8 @@ export const getCheckInsCountForId = async (id) => {
   try {
     const field = await getScopeField();
     // Build SQL safely by using selected field name and parameterized id
-    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ?`;
-    const res = await db.getFirstAsync(sql, [id]);
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND environment = ?`;
+    const res = await db.getFirstAsync(sql, [id, await getCurrentEnvironment()]);
     return res?.count || 0;
   } catch (error) {
     console.error('Error getting checkins count for id with appMode:', error);
@@ -1727,8 +1770,8 @@ export const getUnsyncedCheckInsCountForId = async (id) => {
   try {
     const field = await getScopeField();
     // Count where sync_status is 0 (pending) or 3 (error)
-    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 3`;
-    const res = await db.getFirstAsync(sql, [id]);
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND environment = ? AND sync_status = 3`;
+    const res = await db.getFirstAsync(sql, [id, await getCurrentEnvironment()]);
     return res?.count || 0;
   } catch (error) {
     console.error('Error getting unsynced checkins count for id:', error);
@@ -1746,8 +1789,8 @@ export const getPendingSyncCheckInsCountForId = async (id) => {
   try {
     const field = await getScopeField();
     // Count where sync_status is 0 (pending) or 3 (error)
-    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status IN (0, 3)`;
-    const res = await db.getFirstAsync(sql, [id]);
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND environment = ? AND sync_status IN (0, 3)`;
+    const res = await db.getFirstAsync(sql, [id, await getCurrentEnvironment()]);
     return res?.count || 0;
   } catch (error) {
     console.error('Error getting pending sync checkins count for id:', error);
@@ -1765,8 +1808,8 @@ export const getSyncErrorCheckInsCountForId = async (id) => {
   try {
     const field = await getScopeField();
     // Count where sync_status is 4 (error/problem)
-    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 4`;
-    const res = await db.getFirstAsync(sql, [id]);
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND environment = ? AND sync_status = 4`;
+    const res = await db.getFirstAsync(sql, [id, await getCurrentEnvironment()]);
     return res?.count || 0;
   } catch (error) {
     console.error('Error getting sync error checkins count for id:', error);
@@ -1784,8 +1827,8 @@ export const getSuccessCheckInsCountForId = async (id) => {
   try {
     const field = await getScopeField();
     // Count where sync_status is 2 (success)
-    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 2`;
-    const res = await db.getFirstAsync(sql, [id]);
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND environment = ? AND sync_status = 2`;
+    const res = await db.getFirstAsync(sql, [id, await getCurrentEnvironment()]);
     return res?.count || 0;
   } catch (error) {
     console.error('Error getting success checkins count for id:', error);

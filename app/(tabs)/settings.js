@@ -975,14 +975,16 @@ export default function SettingsScreen() {
     setEnvModalVisible(false);
     setEnvMasterCodeInput('');
 
-    // ยอดค้างทั้งเครื่อง ไม่ใช่เฉพาะโปรเจกต์ที่ active
+    // ยอดค้างของ environment นี้ทั้งเครื่อง (ไม่ใช่เฉพาะโปรเจกต์ที่ active)
     const pendingTotal = await getTotalUnsyncedCheckInsCount();
 
     const warning =
       `จะออกจากระบบ และล้างข้อมูลกิจกรรม/ใบ C7 ในเครื่องทั้งหมด\n` +
       `ต้องเข้าสู่ระบบใหม่เพื่อดึงข้อมูลของ ${newEnv.toUpperCase()}` +
       (pendingTotal > 0
-        ? `\n\n⚠️ มีรายการลงทะเบียนค้างส่งอยู่ ${pendingTotal} รายการ\nรายการเหล่านี้จะถูกส่งขึ้น ${newEnv.toUpperCase()} แทนที่จะเป็น ${environment.toUpperCase()}`
+        // เช็กอินติดป้าย environment แล้ว (migration v13) — ไม่ถูกส่งข้ามฝั่ง แต่ token ใช้ได้ server เดียว
+        // จึงรอจนกว่าจะสลับกลับมาแล้ว login ฝั่งเดิม
+        ? `\n\n⚠️ มีรายการลงทะเบียนของ ${environment.toUpperCase()} ค้างส่งอยู่ ${pendingTotal} รายการ\nรายการเหล่านี้จะรอส่งขึ้น ${environment.toUpperCase()} เมื่อสลับกลับมาและเข้าสู่ระบบอีกครั้ง`
         : '');
 
     Alert.alert(

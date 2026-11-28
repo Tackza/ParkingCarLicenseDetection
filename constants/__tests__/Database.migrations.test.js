@@ -6,7 +6,7 @@
 //
 // npx jest constants/__tests__/Database.migrations.test.js
 
-const LATEST_VERSION = 12;
+const LATEST_VERSION = 13;
 
 jest.mock('expo-sqlite', () => {
   // process.getBuiltinModule ข้าม resolver ของ jest ซึ่งไม่รู้จัก node:sqlite
@@ -81,6 +81,10 @@ const checkIn = (extra = {}) => ({
 /** ถอยฐานข้อมูลที่อัปเดตแล้วกลับไปเป็นสภาพของเวอร์ชันเก่า โดยเก็บข้อมูลแถวไว้ */
 const downgradeTo = (v) => {
   const db = raw();
+  if (v < 13) {
+    db.exec('ALTER TABLE check_ins DROP COLUMN environment');
+    if (v >= 11) db.exec('ALTER TABLE location_points DROP COLUMN environment');
+  }
   if (v < 12) {
     for (const c of ['role', 'can_manage']) db.exec(`ALTER TABLE users DROP COLUMN ${c}`);
   }
@@ -156,7 +160,7 @@ describe('อัปเกรดเครื่องที่มีข้อม�
     await db.insertCheckIn(checkIn({ plate_no: 'กข2222', seq_no: 1 }));
   };
 
-  test.each([11, 10, 9, 8, 7, 6])('v%i → v12', async (from) => {
+  test.each([12, 11, 10, 9, 8, 7, 6])('v%i → v13', async (from) => {
     const db = freshDatabase();
     await db.setupDatabase();
     await seedOldRows(db);
@@ -346,6 +350,65 @@ describe('getScanHistory — คันที่ (vehicle_no) บนการ์�
   });
 });
 
+describe('environment ของแถว (v13) — สลับ prod/test แล้วข้อมูลไม่ปนกัน', () => {
+  const setEnv = (env) => raw().exec(`INSERT OR REPLACE INTO settings (key, value) VALUES ('environment', '${env}')`);
+  const point = (extra = {}) => ({
+    recorded_at: '2026-11-28 09:00:00', latitude: 14.07, longitude: 100.6, comp_id: '8012', project_id: 12, ...extra,
+  });
+
+  test('แต่ละฝั่งเห็นแต่ของตัวเอง: รายการ คันที่ ตัวนับ คิวส่งเช็กอิน และคิวส่งเส้นทาง', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+
+    setEnv('test');
+    await db.insertCheckIn(checkIn({ plate_no: 'ท1' }));
+    await db.insertCheckIn(checkIn({ plate_no: 'ท2' }));
+    await db.insertLocationPoint(point());
+    setEnv('prod');
+    await db.insertCheckIn(checkIn({ plate_no: 'พ1' })); // project_id 12 เหมือนกัน — แบบที่ prod/test ชนกันจริง
+    await db.insertLocationPoint(point({ recorded_at: '2026-11-28 09:00:10' }));
+
+    expect((await db.getScanHistory(12)).map((r) => [r.plate_no, r.vehicle_no])).toEqual([['พ1', 1]]);
+    expect(await db.getCheckInsCountForId(12)).toBe(1);
+    expect(await db.getPendingSyncCheckInsCountForId(12)).toBe(1);
+    expect((await db.getUnsyncedCheckIns()).map((r) => r.plate_no)).toEqual(['พ1']);
+    expect(await db.getTotalUnsyncedCheckInsCount()).toBe(1);
+    expect((await db.getUnsyncedLocationPoints()).map((r) => r.environment)).toEqual(['prod']);
+    expect(await db.getUnsyncedLocationPointsCount()).toBe(1);
+
+    setEnv('test'); // สลับกลับ — ของเดิมอยู่ครบ
+    expect((await db.getScanHistory(12)).map((r) => [r.plate_no, r.vehicle_no])).toEqual([['ท2', 2], ['ท1', 1]]);
+    expect((await db.getUnsyncedCheckIns()).map((r) => r.plate_no)).toEqual(['ท1', 'ท2']);
+    expect(await db.getUnsyncedLocationPointsCount()).toBe(1);
+  });
+
+  test('ไม่เคยตั้ง environment = prod (ค่าเริ่มต้นเดียวกับ EnvironmentContext)', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+    raw().exec("DELETE FROM settings WHERE key = 'environment'");
+
+    expect(await db.getCurrentEnvironment()).toBe('prod');
+    await db.insertCheckIn(checkIn());
+    expect(raw().prepare('SELECT environment FROM check_ins').get().environment).toBe('prod');
+  });
+
+  test('v12 → v13: แถวเก่าได้ป้ายของ environment ที่เครื่องตั้งอยู่ตอนอัปเกรด', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+    await db.insertCheckIn(checkIn({ plate_no: 'เก่า' }));
+    await db.insertLocationPoint(point());
+    downgradeTo(12);
+    setEnv('test');
+
+    await db.setupDatabase();
+
+    expect(version()).toBe(13);
+    expect(raw().prepare('SELECT environment FROM check_ins').get().environment).toBe('test');
+    expect(raw().prepare('SELECT environment FROM location_points').get().environment).toBe('test');
+    expect((await db.getScanHistory(12)).map((r) => r.plate_no)).toEqual(['เก่า']);
+  });
+});
+
 describe('role ของผู้ใช้ (users.role / can_manage, v12)', () => {
   const login = (over = {}) => ({
     id: 77, username: 'u77', first_name: 'ก', last_name: 'ข', note: '', lpr_token: 'T', ...over,
@@ -359,7 +422,7 @@ describe('role ของผู้ใช้ (users.role / can_manage, v12)', () =
 
     await db.setupDatabase();
 
-    expect(version()).toBe(12);
+    expect(version()).toBe(LATEST_VERSION);
     const s = await db.getActiveSession();
     expect(s.lpr_token).toBe('OLD');
     expect(s.role).toBeNull();
