@@ -1,0 +1,24 @@
+# ตั้งค่า → ตรวจหาอัปเดต: ยังไม่มี OTA ของ runtime นี้ → ต้องบอกว่าเป็นเวอร์ชันล่าสุด
+# (ถ้าวันหนึ่งมี OTA ใหม่ flow นี้จะเห็น "ดาวน์โหลดอัปเดตเสร็จแล้ว" แทน ซึ่งก็ถือว่าปุ่มทำงาน)
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+name: ปุ่มตรวจหาอัปเดต
+---
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible: "ค้นหาทะเบียน"
+    timeout: 20000
+- runFlow: subflows/open_settings.yaml
+- scrollUntilVisible:
+    element: "ตรวจหาอัปเดต"
+- tapOn: "ตรวจหาอัปเดต"
+- extendedWaitUntil:
+    visible: "เป็นเวอร์ชันล่าสุดแล้ว|ดาวน์โหลดอัปเดตเสร็จแล้ว|ตรวจหาอัปเดตไม่สำเร็จ|ตรวจหาอัปเดตไม่ได้"
+    timeout: 30000
+- takeScreenshot: check_update_result
+- assertVisible: "เป็นเวอร์ชันล่าสุดแล้ว|ดาวน์โหลดอัปเดตเสร็จแล้ว"
+- runFlow:
+    when:
+      visible: "เป็นเวอร์ชันล่าสุดแล้ว"
+    commands:
+      - tapOn: "OK"

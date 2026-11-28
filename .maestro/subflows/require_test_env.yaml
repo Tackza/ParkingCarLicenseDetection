@@ -1,0 +1,11 @@
+# กันพลาด: flow ที่สร้างเช็กอินจริง (05–08) ต้องรันบน environment Test เท่านั้น
+# ถ้าเครื่องตั้งเป็น Prod flow จะหยุดตรงนี้ ก่อนแตะกล้องหรือบันทึกอะไร
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+---
+- runFlow: open_device_settings.yaml
+- scrollUntilVisible:
+    element: "Environment"
+- assertVisible:
+    text: "Test"
+    label: "Environment ต้องเป็น Test — flow นี้สร้างเช็กอินจริงบน server"
+- assertNotVisible: "Prod"

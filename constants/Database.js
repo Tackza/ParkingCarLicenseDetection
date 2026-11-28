@@ -5,6 +5,7 @@ import 'react-native-get-random-values';
 
 // 2. ค่อย Import uuid
 import { ulid } from "ulid";
+import { retryDelayMinutes } from '../utils/checkInUpload';
 
 // 1. การเปิดฐานข้อมูลจะคืนค่าเป็น Promise
 // เราจะเปิดมันแค่ครั้งเดียว แล้วนำไปใช้ในฟังก์ชันต่างๆ
@@ -322,6 +323,91 @@ export const setupDatabase = async () => {
       }
     }
 
+    if (user_version < 10) {
+      console.log("Migrating to version 10: Adding latitude / longitude / location_accuracy to check_ins...");
+      try {
+        const ciCols = await db.getAllAsync(`PRAGMA table_info('check_ins');`);
+        const has = (name) => Array.isArray(ciCols) && ciCols.some(col => col.name === name);
+        // ✅ NULL = ไม่มีพิกัด (ไม่มีสัญญาณ / ไม่ได้อนุญาต) — ห้ามใช้ 0 แทน เพราะ 0,0 คือจุดจริงกลางทะเล
+        if (!has('latitude')) await db.runAsync(`ALTER TABLE check_ins ADD COLUMN latitude REAL;`);
+        if (!has('longitude')) await db.runAsync(`ALTER TABLE check_ins ADD COLUMN longitude REAL;`);
+        if (!has('location_accuracy')) await db.runAsync(`ALTER TABLE check_ins ADD COLUMN location_accuracy REAL;`);
+        user_version = 10;
+      } catch (e) {
+        console.error('❌ Error during version 10 migration:', e);
+        throw e;
+      }
+    }
+
+    // ✅ Migration to version 11: เส้นทางเดินของเครื่อง (components/LocationTracker.js)
+    // เก็บทุก ~10 วิ ระหว่างจอเปิดและมีกิจกรรม แล้วส่งเป็นชุดขึ้น server — ดู CLAUDE.md § Route tracking
+    // ทุกค่าที่ส่งต้องมาจากแถวนี้เอง (เหมือน check_ins) เพราะอาจส่งทีหลังหลายชั่วโมง
+    if (user_version < 11) {
+      console.log("Migrating to version 11: Creating location_points table...");
+      try {
+        await db.execAsync(`
+          CREATE TABLE IF NOT EXISTS location_points (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recorded_at TEXT NOT NULL,
+            latitude REAL NOT NULL,
+            longitude REAL NOT NULL,
+            accuracy REAL,
+            speed REAL,
+            heading REAL,
+            comp_id TEXT,
+            user_id INTEGER,
+            project_id INTEGER,
+            activity_id INTEGER,
+            sync_status INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+          );
+          CREATE INDEX IF NOT EXISTS ix_location_points_sync ON location_points(sync_status, id);
+        `);
+        user_version = 11;
+      } catch (e) {
+        console.error('❌ Error during version 11 migration:', e);
+        throw e;
+      }
+    }
+
+    // ✅ Migration to version 12: role ของผู้ใช้ที่ login (admin/officer/officer2 จัดการรถได้ — 2026-11-27)
+    // can_manage มาจาก server (AdminResource) — แอปใช้ซ่อนเมนู "รถที่เหลือ" และปุ่มอนุญาตพิมพ์ซ้ำ
+    // server ตรวจ role ซ้ำทุกคำขอ ค่านี้จึงเป็นแค่การแสดงผล ; session เก่าที่ไม่มีค่า = 0 (ซ่อน) จนกว่าจะ login ใหม่
+    if (user_version < 12) {
+      console.log("Migrating to version 12: Adding users.role / can_manage...");
+      try {
+        const cols = (await db.getAllAsync('PRAGMA table_info(users);')).map((c) => c.name);
+        if (!cols.includes('role')) await db.execAsync('ALTER TABLE users ADD COLUMN role TEXT;');
+        if (!cols.includes('can_manage')) {
+          await db.execAsync('ALTER TABLE users ADD COLUMN can_manage INTEGER NOT NULL DEFAULT 0;');
+        }
+        user_version = 12;
+      } catch (e) {
+        console.error('❌ Error during version 12 migration:', e);
+        throw e;
+      }
+    }
+
+    // ✅ Migration to version 13: ติดป้าย environment (prod/test) ให้เช็กอินและจุดเส้นทาง (2026-11-28)
+    // สลับ environment ล้างกิจกรรม/ใบ C7 แต่ไม่ล้างเช็กอิน และ project_id ของ prod กับ test ชนกันได้
+    // (test มี 345–368 ที่ prod ยังไม่ได้ใช้) — ไม่ติดป้าย รายการ/ตัวนับ/คันที่ จะปนกัน และคิวค้างจะถูกส่งผิดฝั่ง
+    // แถวเก่าไม่รู้ว่ามาจากฝั่งไหน จึงให้ใช้ environment ที่เครื่องตั้งอยู่ตอนอัปเกรด (ไม่มีค่า = prod แบบเดียวกับ EnvironmentContext)
+    if (user_version < 13) {
+      console.log("Migrating to version 13: Tagging check_ins / location_points with environment...");
+      try {
+        const env = envOf((await db.getFirstAsync("SELECT value FROM settings WHERE key = 'environment';"))?.value);
+        for (const table of ['check_ins', 'location_points']) {
+          const cols = (await db.getAllAsync(`PRAGMA table_info(${table});`)).map((c) => c.name);
+          if (!cols.includes('environment')) await db.execAsync(`ALTER TABLE ${table} ADD COLUMN environment TEXT;`);
+          await db.runAsync(`UPDATE ${table} SET environment = ? WHERE environment IS NULL;`, [env]);
+        }
+        user_version = 13;
+      } catch (e) {
+        console.error('❌ Error during version 13 migration:', e);
+        throw e;
+      }
+    }
+
     // ✅ Additional safety check: Ensure error_logs table exists (for existing databases)
     // This handles cases where the database was created before version tracking was added
     try {
@@ -359,6 +445,7 @@ export const setupDatabase = async () => {
 
     // ✅ เก็บกวาด error_logs ตอนเปิดแอป (ฟังก์ชันกลืน error เองแล้ว ไม่ทำให้ startup ล้ม)
     await pruneErrorLogs();
+    await pruneLocationPoints();
   } catch (error) {
     console.error("Error setting up database:", error);
   }
@@ -371,7 +458,7 @@ export const setupDatabase = async () => {
 export const saveSession = async (loginData) => {
   console.log('loginData :>> ', loginData);
   const db = await getDb();
-  const { id, username, first_name, last_name, note, lpr_token } = loginData;
+  const { id, username, first_name, last_name, note, lpr_token, role = null, can_manage = false } = loginData;
 
   try {
     // 1. ลบ session เก่าทั้งหมด
@@ -380,8 +467,8 @@ export const saveSession = async (loginData) => {
     // 2. เพิ่มหรืออัปเดตข้อมูล user (ใช้ runAsync)
     // REPLACE INTO = INSERT or REPLACE
     await db.runAsync(
-      'REPLACE INTO users (id, username, first_name, last_name, note) VALUES (?, ?, ?, ?, ?);',
-      [id, username, first_name, last_name, note]
+      'REPLACE INTO users (id, username, first_name, last_name, note, role, can_manage) VALUES (?, ?, ?, ?, ?, ?, ?);',
+      [id, username, first_name, last_name, note, role, can_manage === true ? 1 : 0]
     );
 
     // 3. เพิ่มข้อมูล session ใหม่
@@ -406,6 +493,9 @@ export const getActiveSession = async () => {
   const db = await getDb();;
   try {
     // ใช้ getFirstAsync เพราะเราต้องการแค่แถวเดียว
+    // ⚠️ setupDatabase() ไม่มีใครรอ — login.js เช็ก session ก่อน migration v12 เสร็จได้ (เจอจริงบน SUNMI 2026-11-27)
+    //    ถ้า select u.role ตรงๆ จะได้ "no such column" → คืน null → เด้งไปหน้า login ทั้งที่มี session
+    //    จึงอ่านเฉพาะคอลัมน์เดิมก่อน แล้วค่อยเติม role/can_manage ถ้ามีแล้ว
     const session = await db.getFirstAsync(
       `SELECT s.*, u.username, u.first_name, u.last_name
        FROM sessions s
@@ -413,6 +503,16 @@ export const getActiveSession = async () => {
        ORDER BY s.created_at DESC
        LIMIT 1;`
     );
+    if (session) {
+      try {
+        const extra = await db.getFirstAsync('SELECT role, can_manage FROM users WHERE id = ?;', [session.user_id]);
+        session.role = extra?.role ?? null;
+        session.can_manage = extra?.can_manage ?? 0;
+      } catch {
+        session.role = null; // ยังไม่ถึง v12 — ไม่มีสิทธิ์จัดการ (ซ่อนเมนู) แต่ session ใช้ได้ตามปกติ
+        session.can_manage = 0;
+      }
+    }
     // getFirstAsync จะคืนค่า object ถ้าพบ หรือ undefined ถ้าไม่พบ
     return session || null;
   } catch (error) {
@@ -595,6 +695,102 @@ export const pruneErrorLogs = async ({ maxAgeDays = 14, maxRows = 5000 } = {}) =
   }
 };
 
+
+// ─── environment ของแถว (migration v13) ─────────────────────────────────────
+// ค่าเดียวกับ EnvironmentContext: 'test' เฉพาะเมื่อตั้งไว้ชัดเจน นอกนั้น 'prod'
+const envOf = (value) => (value === 'test' ? 'test' : 'prod');
+
+/** environment ที่เครื่องตั้งอยู่ตอนนี้ — ทุก query ของ check_ins / location_points กรองด้วยค่านี้ */
+export const getCurrentEnvironment = async () => {
+  const db = await getDb();
+  try {
+    const row = await db.getFirstAsync("SELECT value FROM settings WHERE key = 'environment';");
+    return envOf(row?.value);
+  } catch {
+    return 'prod';
+  }
+};
+
+// ─── เส้นทางเดิน (location_points, migration v11) ────────────────────────────
+
+/**
+ * บันทึกจุดพิกัดหนึ่งจุด — ค่าเครื่อง/ผู้ใช้/กิจกรรมต้องส่งมาด้วย ณ เวลาที่เก็บ ห้ามเติมทีหลังตอนส่ง
+ * @returns {Promise<number|null>} id ของแถว หรือ null ถ้าบันทึกไม่ได้
+ */
+export const insertLocationPoint = async (p) => {
+  const db = await getDb();
+  try {
+    const r = await db.runAsync(
+      `INSERT INTO location_points
+         (recorded_at, latitude, longitude, accuracy, speed, heading, comp_id, user_id, project_id, activity_id, environment)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      [
+        p.recorded_at, p.latitude, p.longitude,
+        p.accuracy ?? null, p.speed ?? null, p.heading ?? null,
+        p.comp_id != null && String(p.comp_id).trim() !== '' ? String(p.comp_id) : null,
+        p.user_id ?? null, p.project_id ?? null, p.activity_id ?? null,
+        await getCurrentEnvironment(),
+      ]
+    );
+    return r.lastInsertRowId;
+  } catch (error) {
+    console.error('Error inserting location point:', error);
+    return null;
+  }
+};
+
+/** จุดที่ยังไม่ได้ส่ง เก่าสุดก่อน */
+export const getUnsyncedLocationPoints = async (limit = 500) => {
+  const db = await getDb();
+  return db.getAllAsync(
+    `SELECT * FROM location_points WHERE sync_status = 0 AND environment = ? ORDER BY id ASC LIMIT ?;`,
+    [await getCurrentEnvironment(), limit]
+  );
+};
+
+/** ทำเครื่องหมายว่าส่งแล้ว (2) — แถวที่ส่งแล้วถูกลบทีหลังโดย pruneLocationPoints */
+export const markLocationPointsSynced = async (ids) => {
+  if (!ids || ids.length === 0) return 0;
+  const db = await getDb();
+  const placeholders = ids.map(() => '?').join(',');
+  const r = await db.runAsync(
+    `UPDATE location_points SET sync_status = 2 WHERE id IN (${placeholders});`,
+    ids
+  );
+  return r.changes || 0;
+};
+
+export const getUnsyncedLocationPointsCount = async () => {
+  const db = await getDb();
+  const row = await db.getFirstAsync(
+    `SELECT COUNT(*) AS c FROM location_points WHERE sync_status = 0 AND environment = ?;`,
+    [await getCurrentEnvironment()]
+  );
+  return row?.c || 0;
+};
+
+/**
+ * ลบจุดเก่า: ที่ส่งแล้วเก็บไว้ 2 วัน (เผื่อดูย้อนในเครื่อง), ที่ยังไม่ส่งเก็บ 14 วัน
+ * ไม่มีเพดาน 14 วันตารางจะโตไม่หยุดถ้า server ไม่รับ (ราว 3,000 จุด/วัน/เครื่อง)
+ * ข้อมูลตำแหน่งของคน — เก็บเท่าที่จำเป็น (PDPA)
+ */
+export const pruneLocationPoints = async ({ syncedDays = 2, unsyncedDays = 14 } = {}) => {
+  const db = await getDb();
+  try {
+    const a = await db.runAsync(
+      `DELETE FROM location_points WHERE sync_status = 2 AND created_at < datetime('now', 'localtime', ?);`,
+      [`-${syncedDays} days`]
+    );
+    const b = await db.runAsync(
+      `DELETE FROM location_points WHERE created_at < datetime('now', 'localtime', ?);`,
+      [`-${unsyncedDays} days`]
+    );
+    return (a.changes || 0) + (b.changes || 0);
+  } catch (error) {
+    console.error('Error pruning location_points:', error);
+    return 0; // งานบำรุงรักษา ห้ามทำให้ startup ล้ม
+  }
+};
 
 /**
  * 🚀 คอลัมน์ที่ใช้จำกัดขอบเขตข้อมูลตามโหมดที่ใช้งานอยู่
@@ -1009,12 +1205,17 @@ export const getScanHistory = async (id, searchQuery = '', limit = 30) => {
   try {
     // เลือก field ที่จะใช้ใน WHERE ตามโหมดที่ใช้งานอยู่
     const field = await getScopeField();
-    let sql = `SELECT * FROM check_ins WHERE ${field} = ?`;
-    const params = [id];
+    // vehicle_no = "คันที่" ที่เครื่องนี้สแกนในกิจกรรมนี้ (คันแรก = 1) แสดงท้ายเวลาบนการ์ดหน้าหลัก
+    // นับก่อนกรองคำค้น — ค้นทะเบียนแล้วเลขของแต่ละคันต้องไม่เปลี่ยน ; โหลดเพิ่มทีละหน้าก็ไม่เปลี่ยน
+    let sql = `SELECT * FROM (
+                 SELECT *, ROW_NUMBER() OVER (ORDER BY created_at, id) AS vehicle_no
+                 FROM check_ins WHERE ${field} = ? AND environment = ?
+               )`;
+    const params = [id, await getCurrentEnvironment()];
 
     const normalizedQuery = searchQuery.trim();
     if (normalizedQuery !== '') {
-      sql += ' AND plate_no LIKE ?';
+      sql += ' WHERE plate_no LIKE ?';
       params.push(`%${normalizedQuery}%`);
     }
     sql += ' ORDER BY created_at DESC, id DESC LIMIT ?';
@@ -1041,6 +1242,12 @@ export const getCheckInById = async (id) => {
   return row || null;
 };
 
+const toNumberOrNull = (v) => {
+  if (v === null || v === undefined || v === '' || v === 'null' || v === 'undefined') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
 export const insertCheckIn = async (checkInData) => {
   const db = await getDb();
   const newId = ulid();
@@ -1051,8 +1258,8 @@ export const insertCheckIn = async (checkInData) => {
          uid, project_id, register_id, activity_id, seq_no, detect_plate_no, detect_plate_province,
          plate_no, plate_province, is_plate_manual, photo_path, bus_type,
          passenger, mileage, sticker_no, note, comp_id, printed, error_msg, ocr_connected,
-         created_by 
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+         created_by, latitude, longitude, location_accuracy, environment
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         newId, // ลบขีดกลางออกจาก ULID
         checkInData.project_id,
@@ -1078,6 +1285,12 @@ export const insertCheckIn = async (checkInData) => {
         checkInData.error_msg || null,
         checkInData.ocr_connected !== undefined ? checkInData.ocr_connected : 1, // ✅ Default to 1 if undefined
         checkInData.created_by,
+        // พิกัดตอนถ่ายรูป — mode one มาทาง route params จึงเป็นสตริง ('' / 'null' = ไม่มี)
+        toNumberOrNull(checkInData.latitude),
+        toNumberOrNull(checkInData.longitude),
+        toNumberOrNull(checkInData.location_accuracy),
+        // ฝั่งที่บันทึก — ใช้กรองรายการ/ตัวนับ และกันไม่ให้คิวถูกส่งขึ้นอีก server หลังสลับ environment
+        await getCurrentEnvironment(),
       ]
     );
 
@@ -1138,10 +1351,11 @@ export const getUnsyncedCheckIns = async (limit = 50) => { // ต้องเป
     const rows = await db.getAllAsync( // ใช้ getAllAsync โดยตรง
       `SELECT * FROM check_ins
          WHERE sync_status IN (0, 3, 4)
+           AND environment = ?
            AND (next_retry_at IS NULL OR next_retry_at <= datetime('now', 'localtime'))
          ORDER BY (sync_status != 0), created_at ASC
          LIMIT ?;`,
-      [limit]
+      [await getCurrentEnvironment(), limit]
     );
     return rows;
   } catch (error) {
@@ -1260,10 +1474,9 @@ export const retryCheckInNow = async (checkInId) => {
   return result.changes || 0;
 };
 
-// ตารางถอยเวลา (นาที) สำหรับการส่งซ้ำครั้งที่ 1, 2, 3, ... ครั้งหลังๆ ใช้ค่าสุดท้ายซ้ำไปเรื่อยๆ
+// ตารางถอยเวลา (นาที) อยู่ที่ SYNC_RETRY_BACKOFF_MINUTES ใน utils/checkInUpload.js
 // ไม่มีเพดานจำนวนครั้งโดยตั้งใจ: แถวจะไม่ถูกทิ้งถาวร เผื่อปัญหาถูกแก้ที่ฝั่ง server ภายหลัง
 // แถวที่ค้างจึงเปลือง request จาก ~8,600 ครั้ง/วัน เหลือ ~5 ครั้ง/วัน
-const SYNC_RETRY_BACKOFF_MINUTES = [1, 5, 15, 60, 180, 360];
 
 export const markCheckInAsSyncedError = async (checkInId, errorMsg, status = 3) => {
   const db = await getDb(); // ✅ ใช้ getDb()
@@ -1283,9 +1496,7 @@ export const markCheckInAsSyncedError = async (checkInId, errorMsg, status = 3) 
       [checkInId]
     );
     const nextRetryCount = (row?.retry_count || 0) + 1;
-    const delayMinutes = SYNC_RETRY_BACKOFF_MINUTES[
-      Math.min(nextRetryCount - 1, SYNC_RETRY_BACKOFF_MINUTES.length - 1)
-    ];
+    const delayMinutes = retryDelayMinutes(nextRetryCount);
 
     const result = await db.runAsync(
       `UPDATE check_ins
@@ -1384,7 +1595,8 @@ export const getTotalUnsyncedCheckInsCount = async () => {
   const db = await getDb();
   try {
     const res = await db.getFirstAsync(
-      'SELECT COUNT(*) as count FROM check_ins WHERE sync_status IN (0, 3, 4);'
+      'SELECT COUNT(*) as count FROM check_ins WHERE sync_status IN (0, 3, 4) AND environment = ?;',
+      [await getCurrentEnvironment()]
     );
     return res?.count || 0;
   } catch (error) {
@@ -1432,8 +1644,8 @@ export const getCheckInsCountForId = async (id) => {
   try {
     const field = await getScopeField();
     // Build SQL safely by using selected field name and parameterized id
-    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ?`;
-    const res = await db.getFirstAsync(sql, [id]);
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND environment = ?`;
+    const res = await db.getFirstAsync(sql, [id, await getCurrentEnvironment()]);
     return res?.count || 0;
   } catch (error) {
     console.error('Error getting checkins count for id with appMode:', error);
@@ -1514,8 +1726,8 @@ export const getUnscannedRegisters = async (currentId, seqNo) => {
   const dateField = getScanDateField(seqNo);
   // ชื่อคอลัมน์มาจาก getScanDateField เท่านั้น ไม่ได้รับมาจากภายนอก จึงต่อสตริงได้ปลอดภัย
   const notScanned = `(${dateField} IS NULL OR ${dateField} = '')`;
-  // เมื่อ backend ส่งเบอร์โทรมาแล้ว (ดูแผน 1b) ให้เพิ่มคอลัมน์ใหม่ตรงนี้จุดเดียว
-  const columns = `register_id, short_code, plate_no, plate_province, bus_type,
+  // เบอร์โทรไม่อยู่ใน registers — หน้า Settings ดึงสดจาก /lpr/registers/contacts ด้วย register_id + project_id
+  const columns = `register_id, project_id, short_code, plate_no, plate_province, bus_type,
                    station_name, station_province, note, alert_message`;
   try {
     const field = await getScopeField();
@@ -1558,8 +1770,8 @@ export const getUnsyncedCheckInsCountForId = async (id) => {
   try {
     const field = await getScopeField();
     // Count where sync_status is 0 (pending) or 3 (error)
-    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 3`;
-    const res = await db.getFirstAsync(sql, [id]);
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND environment = ? AND sync_status = 3`;
+    const res = await db.getFirstAsync(sql, [id, await getCurrentEnvironment()]);
     return res?.count || 0;
   } catch (error) {
     console.error('Error getting unsynced checkins count for id:', error);
@@ -1577,8 +1789,8 @@ export const getPendingSyncCheckInsCountForId = async (id) => {
   try {
     const field = await getScopeField();
     // Count where sync_status is 0 (pending) or 3 (error)
-    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status IN (0, 3)`;
-    const res = await db.getFirstAsync(sql, [id]);
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND environment = ? AND sync_status IN (0, 3)`;
+    const res = await db.getFirstAsync(sql, [id, await getCurrentEnvironment()]);
     return res?.count || 0;
   } catch (error) {
     console.error('Error getting pending sync checkins count for id:', error);
@@ -1596,8 +1808,8 @@ export const getSyncErrorCheckInsCountForId = async (id) => {
   try {
     const field = await getScopeField();
     // Count where sync_status is 4 (error/problem)
-    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 4`;
-    const res = await db.getFirstAsync(sql, [id]);
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND environment = ? AND sync_status = 4`;
+    const res = await db.getFirstAsync(sql, [id, await getCurrentEnvironment()]);
     return res?.count || 0;
   } catch (error) {
     console.error('Error getting sync error checkins count for id:', error);
@@ -1615,8 +1827,8 @@ export const getSuccessCheckInsCountForId = async (id) => {
   try {
     const field = await getScopeField();
     // Count where sync_status is 2 (success)
-    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND sync_status = 2`;
-    const res = await db.getFirstAsync(sql, [id]);
+    const sql = `SELECT COUNT(*) as count FROM check_ins WHERE ${field} = ? AND environment = ? AND sync_status = 2`;
+    const res = await db.getFirstAsync(sql, [id, await getCurrentEnvironment()]);
     return res?.count || 0;
   } catch (error) {
     console.error('Error getting success checkins count for id:', error);

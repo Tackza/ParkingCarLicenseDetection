@@ -1,0 +1,31 @@
+# กรอกทะเบียน + เลือกจังหวัดในกล่อง "แก้ไขข้อมูลทะเบียน" แล้วกดบันทึก
+# ใช้ env PLATE และ PROVINCE (ชื่อเต็มตามรายการจังหวัด เช่น กรุงเทพมหานคร ไม่ใช่ กทม.)
+# ⚠️ ห้ามใช้ hideKeyboard ใน flow นี้ — บน Android มันกดปุ่ม Back ซึ่งปิดกล่องทิ้ง
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+---
+- extendedWaitUntil:
+    visible: "แก้ไขข้อมูลทะเบียน"
+    timeout: 30000
+- tapOn: "กรอกทะเบียนรถ"
+- eraseText
+- inputText: ${PLATE}
+- tapOn: "เลือกจังหวัด"
+# รายการจังหวัดเปิดเป็นหน้าต่างค้นหาได้ — พิมพ์ชื่อแล้วแตะแถวผลลัพธ์
+# index 1: ตัวแรกที่ตรงคือช่องค้นหาเอง (มีข้อความเดียวกัน) ตัวที่สองคือแถวในรายการ
+- tapOn: "Type something..."
+- inputText: ${PROVINCE}
+- tapOn:
+    text: ${PROVINCE}
+    index: 1
+- extendedWaitUntil:
+    notVisible: "Type something..."
+    timeout: 5000
+- assertVisible: ${PROVINCE}
+# หน้าหลังกล่องก็มีปุ่ม "บันทึก" อีกปุ่ม — เอาปุ่มที่อยู่ในกล่อง (ใต้หัวข้อจังหวัด เหนือช่องสติกเกอร์ของหน้าหลัง)
+- tapOn:
+    text: "บันทึก"
+    below: "ทะเบียนจังหวัด"
+    index: 0
+- extendedWaitUntil:
+    notVisible: "แก้ไขข้อมูลทะเบียน"
+    timeout: 10000

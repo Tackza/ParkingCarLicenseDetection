@@ -8,13 +8,13 @@ export default () => {
     "expo": {
       "name": "Mbus Scan", // <-- ชื่อสำหรับ Production
       "slug": "tackpongsatorn",
-      "version": "2.0.0",
+      "version": "2.2.0",
       "orientation": "portrait",
       "icon": "./assets/images/c7.png",
       "backgroundColor": "#ffffff",
 
       // --- ⬇️ นี่คือ 2 ส่วนที่ต้องเพิ่มเข้ามา ⬇️ ---
-      "runtimeVersion": "2.0.0",
+      "runtimeVersion": "2.2.0",
       "updates": {
         "enabled": true,
         "checkAutomatically": "ON_LOAD",

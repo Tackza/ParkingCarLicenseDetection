@@ -13,15 +13,16 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { BluetoothEscposPrinter } from 'react-native-bluetooth-escpos-printer';
 import DropDownPicker from 'react-native-dropdown-picker';
 import ViewShot, { captureRef } from 'react-native-view-shot';
-import { getActiveSession, insertErrorLog } from '../constants/Database';
+import { getActiveSession, getSetting, insertErrorLog } from '../constants/Database';
 import { THAI_PROVINCES } from '../constants/provinces';
+import { printReceiptImage, waitForPrinterReady } from '../utils/printer';
 import { useAuth } from '../contexts/AuthContext';
 import { useEnvironment } from '../contexts/EnvironmentContext';
 import { useProject } from '../contexts/ProjectContext';
 import { shortProvince } from '../utils/checkInFormat';
+import { REPRINT_REASONS, canManageVehicles, followupErrorMessage, grantReprint } from '../utils/registerContacts';
 import ImageViewerModal from './ImageViewerModal';
 import Receipt from './Receipt';
 
@@ -77,8 +78,57 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
   const [printLoading, setPrintLoading] = useState(false);
   const [viewerImage, setViewerImage] = useState(null);
   const receiptRef = useRef();
+  // admin / officer / officer2 อนุญาตพิมพ์ซ้ำได้จากเครื่อง (2026-11-27) — area เห็นแค่ข้อความ
+  const [canManage, setCanManage] = useState(false);
+  const [grantFor, setGrantFor] = useState(null);   // register_id ที่กางตัวเลือกเหตุผลอยู่
+  const [grantBusy, setGrantBusy] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    getActiveSession().then((s) => { if (!cancelled) setCanManage(canManageVehicles(s)); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [visible]);
+
+  // สร้างสิทธิ์พิมพ์ซ้ำ 1 ใบ แล้วค้นใหม่ — server จะตอบ printed: false, reprint: true ปุ่ม "ปริ้นใหม่" จึงขึ้นเอง
+  // ไม่พิมพ์ให้ทันที: เจ้าหน้าที่อาจอนุญาตให้อีกเครื่องที่อยู่กับรถเป็นคนพิมพ์
+  const handleGrantReprint = async (item, reason) => {
+    if (grantBusy || !item?.register_id || !activeProject) return;
+    setGrantBusy(true);
+    try {
+      const API_URL = environment === 'prod' ?
+        "https://mbus.dhammakaya.network/api" :
+        "https://mbus-test.dhammakaya.network/api";
+      const session = await getActiveSession();
+      await grantReprint({
+        http: axios,
+        baseUrl: API_URL,
+        token: session?.lpr_token,
+        registerId: item.register_id,
+        projectId: activeProject.project_id,
+        seqNo: activeProject.seq_no || null,
+        reason,
+      });
+      setGrantFor(null);
+      await handleOnlineSearchInternal(searchPlateNo || item.plate_no, searchProvince || item.plate_province);
+    } catch (e) {
+      await insertErrorLog({
+        comp_id: null,
+        error_type: 'API_ERROR',
+        error_message: e?.response?.data?.message || e.message || 'อนุญาตพิมพ์ซ้ำไม่สำเร็จ',
+        error_code: e?.response?.status || e.code || 'REPRINT_GRANT_ERROR',
+        page_name: 'OnlineSearchModal.js',
+        action_name: 'handleGrantReprint',
+        user_id: user?.id || null,
+      }).catch(() => {});
+      Alert.alert('อนุญาตพิมพ์ซ้ำไม่สำเร็จ', followupErrorMessage(e));
+    } finally {
+      setGrantBusy(false);
+    }
+  };
 
   const resetQuery = () => {
+    setGrantFor(null);
     setSearchPlateNo('');
     setSearchProvince('');
     setSearchResults([]);
@@ -183,6 +233,10 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
   const handlePrint = async (item) => {
     if (!item.register_id || item.printed !== false || printLoading) return;
 
+    // ✅ เช็กเครื่องพิมพ์ก่อนเรียก print-slip — API บันทึกฝั่งเซิร์ฟเวอร์ว่าพิมพ์แล้วทันที
+    //    ถ้ากระดาษหมดแล้วยังเรียก รายการนั้นจะถูกนับว่าพิมพ์ทั้งที่ไม่มีสลิป และพิมพ์ซ้ำไม่ได้อีก
+    if (!(await waitForPrinterReady())) return;
+
     setPrintLoading(true);
     setPrintData(item);
 
@@ -194,6 +248,10 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
 
       const session = await getActiveSession();
       const token = session?.lpr_token;
+      // เครื่องที่พิมพ์คือเครื่องนี้ ไม่ใช่เครื่องที่สแกนครั้งแรก — server บันทึก comp_id เป็นผู้พิมพ์
+      // (CompId ของ log การพิมพ์ และ used_comp_id ของสิทธิ์พิมพ์ซ้ำที่แอดมินอนุญาต)
+      // ยังไม่ตั้งรหัสเครื่อง → ใช้ของเดิม เพราะ server บังคับ comp_id เป็นตัวเลข
+      const thisMachineCode = String((await getSetting('machineCode')) || '').trim();
 
 
       const body = {
@@ -202,7 +260,7 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
         activity_id: activeProject?.activity_id || '',
         seq_no: activeProject?.seq_no || '',
         register_id: item.register_id,
-        comp_id: item.comp_id || ''
+        comp_id: thisMachineCode || item.comp_id || ''
       };
 
       console.log('Calling print-slip with body:', body);
@@ -232,9 +290,7 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
             quality: 1.0,
             result: 'base64',
           });
-          await BluetoothEscposPrinter.printPic(uri, { width: 520, left: 0 });
-          await BluetoothEscposPrinter.printerAlign(BluetoothEscposPrinter.ALIGN.CENTER);
-          await BluetoothEscposPrinter.printText('\r\n\r\n', {});
+          await printReceiptImage(uri);
 
           // ปิดหน้าค้นหาหลังพิมพ์เสร็จ แล้วให้หน้าที่เปิดไว้อ่านสถานะใหม่
           resetQuery();
@@ -248,13 +304,13 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
             comp_id: item?.comp_id || null,
             error_type: 'PRINT_ERROR',
             error_message: error.message || 'ไม่สามารถพิมพ์ได้',
-            error_code: error.code || 'BLUETOOTH_PRINT_ERROR',
+            error_code: error.code || 'PRINT_ERROR',
             page_name: 'OnlineSearchModal.js',
-            action_name: 'handlePrint - Bluetooth print',
+            action_name: 'handlePrint - print',
             user_id: user?.id || null
           });
 
-          Alert.alert('ข้อผิดพลาด', 'ไม่สามารถพิมพ์ได้');
+          Alert.alert('ข้อผิดพลาด', error?.code?.startsWith?.('PRINTER_') ? error.message : 'ไม่สามารถพิมพ์ได้');
         } finally {
           setPrintData(null);
           setPrintLoading(false);
@@ -292,6 +348,9 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
     //    (handlePrint ตีกลับทันทีเมื่อ printed !== false) — แอพไม่ยอมให้พิมพ์ซ้ำโดยตั้งใจ
     const canPrint = item.can_print === true && hasC7Data && !!item.register_id && item.printed === false;
     const isPrintingThis = printLoading && printData === item;
+    // server บอกว่าพิมพ์ได้เพราะแอดมินอนุญาตพิมพ์ซ้ำ (lpr_reprint_grants) — ปุ่มจึงเขียนว่า "ปริ้นใหม่"
+    // server เก่าที่ยังไม่ส่ง reprint → undefined → ปุ่มเดิม "พิมพ์สลิป"
+    const isReprint = item.reprint === true;
     const fields = [
       { k: 'จุดออกรถ', v: reg.station || '--' },
       { k: 'จังหวัดต้นทาง', v: reg.province || '--' },
@@ -355,9 +414,46 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
             <View className="flex-row items-start gap-[7px] rounded-[9px] border border-warning-bg bg-warning-bg px-[11px] py-[9px]">
               <Ionicons name="checkmark-circle-outline" size={15} color={WARNING_INK} style={{ marginTop: 1 }} />
               <Text className="flex-1 text-[12px] leading-[17px] text-warning-ink">
-                สลิปใบนี้พิมพ์ไปแล้ว — พิมพ์ซ้ำจากหน้านี้ไม่ได้
+                {canManage
+                  ? 'สลิปใบนี้พิมพ์ไปแล้ว — อนุญาตให้ปริ้นใหม่ได้ 1 ใบ เครื่องไหนค้นทะเบียนนี้ก็ปริ้นได้'
+                  : 'สลิปใบนี้พิมพ์ไปแล้ว — ถ้าต้องการปริ้นใหม่ ให้ admin หรือเจ้าหน้าที่อนุญาตก่อน'}
               </Text>
             </View>
+          )}
+
+          {item.printed === true && canManage && hasC7Data && !!item.register_id && (
+            grantFor === item.register_id ? (
+              <View className="gap-[7px] rounded-[9px] border border-border bg-background px-[11px] py-[10px]">
+                <Text className="text-[13px] font-semibold text-text">เหตุผลที่ให้ปริ้นใหม่</Text>
+                <View className="flex-row flex-wrap gap-[6px]">
+                  {REPRINT_REASONS.map((r) => (
+                    <TouchableOpacity
+                      key={r}
+                      onPress={() => handleGrantReprint(item, r)}
+                      disabled={grantBusy}
+                      activeOpacity={0.8}
+                      className={`h-10 justify-center rounded-[9px] px-[14px] ${grantBusy ? 'bg-primary-muted' : 'bg-primary'}`}
+                    >
+                      <Text className="text-[14px] font-semibold text-white">{r}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TouchableOpacity onPress={() => setGrantFor(null)} disabled={grantBusy} className="h-9 items-center justify-center">
+                  {grantBusy
+                    ? <ActivityIndicator color={TINT_PRIMARY} />
+                    : <Text className="text-[13px] font-medium text-text-muted">ยกเลิก</Text>}
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity
+                onPress={() => setGrantFor(item.register_id)}
+                activeOpacity={0.8}
+                className="h-12 flex-row items-center justify-center gap-[7px] rounded-[9px] border border-primary bg-surface"
+              >
+                <Ionicons name="key-outline" size={18} color={TINT_PRIMARY} />
+                <Text className="text-[16px] font-semibold text-primary">อนุญาตปริ้นซ้ำ</Text>
+              </TouchableOpacity>
+            )
           )}
 
           {!hasC7Data && (
@@ -371,6 +467,11 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
 
           {canPrint && (
             <View className="gap-[6px]">
+              {isReprint && (
+                <Text className="text-center text-[12px] text-text-subtle">
+                  ได้รับอนุญาตให้ปริ้นใหม่ 1 ใบ
+                </Text>
+              )}
               <TouchableOpacity
                 onPress={() => handlePrint(item)}
                 disabled={printLoading}
@@ -380,10 +481,10 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
                 {isPrintingThis ? (
                   <ActivityIndicator color={ICON_ON_FILL} />
                 ) : (
-                  <Ionicons name="print-outline" size={18} color={ICON_ON_FILL} />
+                  <Ionicons name={isReprint ? 'refresh' : 'print-outline'} size={18} color={ICON_ON_FILL} />
                 )}
                 <Text className="text-[16px] font-semibold text-white">
-                  {isPrintingThis ? 'กำลังพิมพ์…' : 'พิมพ์สลิป'}
+                  {isPrintingThis ? 'กำลังพิมพ์…' : isReprint ? 'ปริ้นใหม่' : 'พิมพ์สลิป'}
                 </Text>
               </TouchableOpacity>
               {isPrintingThis && (
@@ -490,6 +591,8 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
               searchable={true}
               placeholder="เลือกจังหวัด"
               listMode="MODAL"
+              // แตะจังหวัดครั้งเดียวเลือกได้เลย — ค่าเริ่มต้นทำให้แตะแรกแค่ปิดคีย์บอร์ดของช่องค้นหา
+              flatListProps={{ keyboardShouldPersistTaps: 'handled' }}
               style={DROPDOWN_BOX}
               textStyle={{ fontSize: 20 }}
               labelStyle={DROPDOWN_LABEL}

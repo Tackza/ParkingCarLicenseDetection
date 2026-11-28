@@ -17,6 +17,7 @@ import { PrinterProvider } from "../contexts/PrinterContext";
 import { ProjectProvider } from "../contexts/ProjectContext";
 
 import CheckInSyncManager from "../components/CheckInSyncManager";
+import LocationTracker from "../components/LocationTracker";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -55,6 +56,8 @@ export default function RootLayout() {
               <PrinterProvider>
               <ThemeProvider value={DefaultTheme}>
                 <CheckInSyncManager />
+                {/* เส้นทางเดินของเครื่อง — เก็บเฉพาะตอนจอเปิดและมีกิจกรรม ดู CLAUDE.md § Route tracking */}
+                <LocationTracker />
                 <Stack screenOptions={{ headerShown: false }}>
                   <Stack.Screen name="login" />
                   <Stack.Screen name="bluetooth-setup" />

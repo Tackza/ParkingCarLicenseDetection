@@ -29,22 +29,27 @@ IOU_THRES = 0.7       # ultralytics predict default
 MAX_DET = 300         # ultralytics predict default
 MAX_WH = 7680         # class-offset trick used by ultralytics for per-class NMS
 PAD_VALUE = 114
+STRIDE = 32           # rect inference pads only up to a multiple of this
 
 
 # --------------------------------------------------------------------------
 # preprocessing
 # --------------------------------------------------------------------------
 def letterbox(img: np.ndarray, new_shape: int = IMGSZ):
-    """Resize keeping aspect ratio, pad to a square with 114-grey.
+    """Resize the long side to 640, then pad with 114-grey only up to a multiple of 32.
 
-    Arithmetic copied from ultralytics LetterBox(auto=False, center=True,
-    scaleup=True) so box coordinates come out identical.
+    This is ultralytics' *rect* inference — LetterBox(auto=True, center=True,
+    scaleup=True) — which is what server.py actually runs when it calls a .pt
+    model. Padding to a full 640x640 square instead (the original port) fed the
+    OCR stage a mostly-grey canvas for wide plate crops and misread some of
+    them: an extra digit with data_plate.pt, a stray "ฮ" with data_plate_ft1.pt.
+    Needs models exported with dynamic=True; see export_models.py.
     """
     h, w = img.shape[:2]
     r = min(new_shape / h, new_shape / w)
     new_unpad = (int(round(w * r)), int(round(h * r)))
-    dw = (new_shape - new_unpad[0]) / 2
-    dh = (new_shape - new_unpad[1]) / 2
+    dw = ((new_shape - new_unpad[0]) % STRIDE) / 2
+    dh = ((new_shape - new_unpad[1]) % STRIDE) / 2
 
     if (w, h) != new_unpad:
         img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)

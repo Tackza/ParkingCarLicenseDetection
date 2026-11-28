@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 // import * as ImagePicker from 'expo-image-picker';
 import { useMode } from "@/contexts/ModeContext";
+import { getCheckInLocation } from '@/utils/location';
 import { detectPlate } from '@/utils/lprOcr';
-import { createSpokenPlate } from '@/utils/speechUtils';
+import { printReceiptImage, waitForPrinterReady } from '@/utils/printer';
+import { buildScanAnnouncement, speakAndWaitForStart } from '@/utils/speechUtils';
 import axios from 'axios';
 import {
   useLocalSearchParams,
@@ -10,7 +12,7 @@ import {
   useRouter
 } from 'expo-router';
 import * as Speech from 'expo-speech';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -24,7 +26,6 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import { BluetoothEscposPrinter } from 'react-native-bluetooth-escpos-printer';
 import DropDownPicker from 'react-native-dropdown-picker';
 import ImageZoom from 'react-native-image-pan-zoom';
 import ViewShot, { captureRef } from 'react-native-view-shot';
@@ -35,6 +36,10 @@ import { THAI_PROVINCES } from '../../constants/provinces';
 import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useProject } from '../../contexts/ProjectContext';
+
+
+// FlatList ของ DropDownPicker (โหมด MODAL + ช่องค้นหา): ค่าเริ่มต้น 'never' ทำให้แตะแรกแค่ปิดคีย์บอร์ด
+const KEEP_TAPS = { keyboardShouldPersistTaps: 'handled' };
 
 // การอ่านทะเบียนย้ายไป utils/lprOcr.js แล้ว (บนเครื่องก่อน แล้ว fallback ไป Cloud Run)
 // timeout ของฝั่ง server อยู่ที่ OCR_SERVER_TIMEOUT ในไฟล์นั้น
@@ -89,6 +94,8 @@ export default function ScanScreen() {
   const { isModeOne } = useMode();
   const { environment } = useEnvironment();
   const [ocrConnected, setOcrConnected] = useState(1); // ✅ เพิ่ม state สำหรับเก็บสถานะ OCR
+  // พิกัดตอนถ่ายรูป — หาไปพร้อมกับการอ่านป้าย ไม่ทำให้สแกนช้าลง (utils/location.js)
+  const locationRef = useRef(null);
   const { user } = useAuth();
 
   const API_URL = environment === 'prod' ?
@@ -156,6 +163,9 @@ export default function ScanScreen() {
     setIsManualEdit(false); // รีเซ็ตสถานะการแก้ไข
     setOcrConnected(1); // ✅ รีเซ็ตสถานะ OCR เป็น 1 (Connected) ก่อนเริ่ม
 
+    // เริ่มหาพิกัดคู่ขนานกับ OCR — ไม่ await ตรงนี้ ผลจะมาเก็บใน ref ก่อนผู้ใช้กดบันทึก
+    locationRef.current = getCheckInLocation();
+
     try {
       // อ่านทะเบียนบนเครื่องก่อน (~0.9 วิ ไม่ต้องใช้เน็ต) แล้วค่อย fallback ไป Cloud Run
       // เฉพาะกรณีที่โมดูลบนเครื่องใช้งานไม่ได้ — รายละเอียดใน utils/lprOcr.js
@@ -183,15 +193,13 @@ export default function ScanScreen() {
 
       const checkResult = await checkWithRegisterList(detectedPlate, provinceExists);
 
-      // พูดเลขทะเบียนพร้อมสถานะ duplicate
-      speakPlateNo(detectedPlate, provinceExists, checkResult.hasDuplicate);
+      // พูดทะเบียน + สถานะ แล้วรอจนเสียงเริ่มออกก่อน (วงหมุนยังค้างอยู่) ค่อยปล่อยให้รูปขึ้นใน finally
+      // เจ้าหน้าที่จะได้ยินผลทันทีที่ถ่ายเสร็จ ไม่ต้องรอดูจอ — รอไม่เกิน 1.5 วิ ถ้าเสียงไม่ออก
+      await speakPlate(detectedPlate, provinceExists, checkResult);
 
       if (!detectedPlate || !provinceExists) {
         openEditModal(detectedPlate, provinceExists);
       }
-
-      // พูดผลลัพธ์การตรวจสอบ
-      speakVerificationResult(checkResult.found);
 
 
     } catch (error) {
@@ -292,34 +300,14 @@ export default function ScanScreen() {
     }
   };
 
-  const speakPlateNo = (detectedPlate, provinceExists, hasDuplicate = false) => {
-    const spokenPlate = createSpokenPlate(detectedPlate);
-    let text = `ทะเบียน, ${spokenPlate || 'ไม่พบทะเบียน'}, ${provinceExists || 'ไม่พบจังหวัด'}`;
-
-    if (hasDuplicate) {
-      text += ', ลงทะเบียนแล้ว';
-    }
-
-    Speech.stop();
-    Speech.speak(text, {
+  // อ่านทะเบียน + จังหวัด + (ลงทะเบียนแล้ว) + (ไม่พบซีเจ็ด) เป็นประโยคเดียว
+  // คืน promise ที่ resolve เมื่อเสียงเริ่มออก — processImage รอตัวนี้ก่อนแสดงรูป
+  const speakPlate = (plate, prov, checkResult = {}) =>
+    speakAndWaitForStart(Speech, buildScanAnnouncement(plate, prov, checkResult), {
       language: 'th-TH',
       rate: 1.1,
       pitch: 1.1,
     });
-  };
-
-  const speakVerificationResult = (isFound) => {
-    const text = isFound ? "" : "ไม่พบซีเจ็ด";
-
-    // ไม่ต้อง Speech.stop() เพื่อให้พูดต่อจากเลขทะเบียนได้เลย (ถ้าเลขทะเบียนยังพูดไม่จบ มันจะต่อคิว)
-    // แต่ถ้าต้องการให้พูดแทรก ก็ใส่ Speech.stop()
-    // ในที่นี้เราอยากให้พูดต่อกัน
-    Speech.speak(text, {
-      language: 'th-TH',
-      rate: 1.1,
-      pitch: 1.1,
-    });
-  };
 
 
   // ✅ ฟังก์ชันสำหรับดำเนินการบันทึก (แยกออกมาเพื่อให้เรียกใช้ได้จากหลายจุด)
@@ -349,6 +337,9 @@ export default function ScanScreen() {
 
       console.log('activeProject :>> ', activeProject);
       console.log('foundRegisterData :>> ', foundRegisterData);
+
+      // ปกติได้ผลไปนานแล้วระหว่างที่ผู้ใช้ตรวจข้อมูล — ถ้ายังไม่เสร็จ getCheckInLocation รอไม่เกิน 4 วิ
+      const location = await (locationRef.current ?? Promise.resolve(null));
 
       // ✅ คำนวณว่าควรเก็บค่า mileage หรือไม่
       const shouldShowMileage = !isModeOne && (
@@ -380,6 +371,10 @@ export default function ScanScreen() {
         printed: shouldPrint ? 1 : 0, // ✅ ใช้ shouldPrint แทน isVerified
         error_msg: '',
         ocr_connected: ocrConnected, // ✅ ส่งค่า ocrConnected ไปบันทึก
+        // พิกัดตอนถ่ายรูป ไม่มี = null (ห้ามใส่ 0) — โหมด 1 ส่งผ่าน params ต่อไปยัง passenger_count
+        latitude: location?.latitude ?? null,
+        longitude: location?.longitude ?? null,
+        location_accuracy: location?.accuracy ?? null,
         created_by: currentSession.user_id,
         // synced และ sync_at ไม่ต้องใส่ตรงนี้ เพราะมี DEFAULT values และจะถูก update ตอน sync
       };
@@ -400,6 +395,13 @@ export default function ScanScreen() {
         });
         setIsSubmitting(false);
         return
+      }
+
+      // ✅ เครื่องพิมพ์ไม่พร้อม (กระดาษหมด ฝาเปิด) → ค้างไว้ที่นี่ ยังไม่บันทึก
+      //    ให้เจ้าหน้าที่เติมกระดาษแล้วกดพิมพ์อีกครั้ง จะได้ไม่มีเช็กอินที่ไม่มีสลิป
+      if (shouldPrint && !(await waitForPrinterReady())) {
+        setIsSubmitting(false);
+        return;
       }
 
       // ✅ เรียกใช้ฟังก์ชัน insertCheckIn เพื่อบันทึกลง SQLite
@@ -498,14 +500,8 @@ export default function ScanScreen() {
         result: 'base64',
       });
 
-      // Print via Bluetooth
-      await BluetoothEscposPrinter.printPic(uri, {
-        width: 520,
-        left: 0,
-      });
-      await BluetoothEscposPrinter.printerAlign(BluetoothEscposPrinter.ALIGN.CENTER);
-
-      await BluetoothEscposPrinter.printText('\r\n\r\n', {});
+      // SUNMI built-in printer when present, Bluetooth otherwise
+      await printReceiptImage(uri);
 
       // ✅ ยืนยันว่าพิมพ์สำเร็จจริง (สำคัญกรณีกด "ลองพิมพ์อีกครั้ง" หลังเคยถูก mark เป็น 0)
       await updateCheckInPrintedStatus(checkInId, 1);
@@ -530,7 +526,9 @@ export default function ScanScreen() {
       //    ให้ลองพิมพ์ใหม่จากแถวเดิม หรือจบงานแล้วกลับหน้าหลัก
       Alert.alert(
         'พิมพ์ไม่สำเร็จ',
-        'บันทึกข้อมูลลงเครื่องเรียบร้อยแล้ว แต่พิมพ์ใบลงทะเบียนไม่สำเร็จ\nตรวจสอบเครื่องพิมพ์แล้วลองอีกครั้งได้',
+        // PRINTER_* (กระดาษหมด ฝาเปิด…) จากเครื่องพิมพ์ในตัวบอกสาเหตุได้ตรงๆ — ดู utils/printer.js
+        'บันทึกข้อมูลลงเครื่องเรียบร้อยแล้ว แต่พิมพ์ใบลงทะเบียนไม่สำเร็จ\n'
+          + (error?.code?.startsWith?.('PRINTER_') ? error.message : 'ตรวจสอบเครื่องพิมพ์แล้วลองอีกครั้งได้'),
         [
           { text: 'ไม่พิมพ์', style: 'cancel', onPress: () => resetForm() },
           { text: 'ลองพิมพ์อีกครั้ง', onPress: () => generateAndPrint(checkInId) },
@@ -610,8 +608,7 @@ export default function ScanScreen() {
     const checkResult = await checkWithRegisterList(tempLicensePlate, tempProvince);
 
     // Speak again
-    speakPlateNo(tempLicensePlate, tempProvince, checkResult.hasDuplicate);
-    speakVerificationResult(checkResult.found);
+    speakPlate(tempLicensePlate, tempProvince, checkResult);
 
     // 4. ปิด Modal แก้ไข
     setIsEditModalVisible(false);
@@ -780,9 +777,9 @@ export default function ScanScreen() {
                   listItemLabelStyle={{ fontSize: 26 }}
                   searchTextInputStyle={{ fontSize: 26 }}
                   listMode="MODAL" // แนะนำให้ใช้โหมดนี้สำหรับรายการยาวๆ
-                  listProps={{
-                    keyboardShouldPersistTaps: "always"
-                  }}
+                  // แตะรายการครั้งเดียวต้องเลือกได้เลย แม้คีย์บอร์ดค้นหายังเปิดอยู่
+                  // (เดิมเขียน listProps ซึ่งไลบรารีไม่มี ถูกเมินเงียบ — แตะแรกแค่ปิดคีย์บอร์ด)
+                  flatListProps={KEEP_TAPS}
                 />
               </View>
 
@@ -990,6 +987,7 @@ export default function ScanScreen() {
                 placeholderStyle={{ fontSize: 20, color: '#999' }}
                 listItemLabelStyle={{ fontSize: 26 }}
                 searchTextInputStyle={{ fontSize: 26 }} // เพิ่มขนาดตัวหนังสือตอนค้นหา
+                flatListProps={KEEP_TAPS} // แตะจังหวัดครั้งเดียวเลือกได้เลย ไม่ต้องแตะเพื่อปิดคีย์บอร์ดก่อน
               />
             </View>
 

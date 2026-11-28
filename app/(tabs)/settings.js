@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Modal, ScrollView, SectionList, Text, TextInput, TouchableOpacity, View } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons'; // Import ไอคอน
@@ -6,33 +6,17 @@ import axios from 'axios';
 import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Updates from 'expo-updates';
-import { backfillCheckInCompId, clearProjectsTable, clearRegistersTable, clearSession, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnscannedRegisters, getUnsyncedCheckInsCountForId, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
+import { backfillCheckInCompId, clearProjectsTable, clearRegistersTable, clearSession, getActiveSession, getCheckInsCountForId, getCurrentProject, getNextUpcomingProject, getPendingSyncCheckInsCountForId, getRegistersCountForId, getScopeId, getSetting, getSuccessCheckInsCountForId, getSyncErrorCheckInsCountForId, getTotalUnsyncedCheckInsCount, getUnscannedRegisters, getUnsyncedCheckInsCountForId, getUnsyncedLocationPointsCount, insertErrorLog, saveProjects, saveSetting } from '../../constants/Database'; // <-- ปรับ path ให้ถูกต้อง
 import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useMode } from '../../contexts/ModeContext';
 import { exportDatabaseFile } from '../../utils/exportUtils';
+import { getDeviceSerial, getInnerPrinterStatus, printReceiptImage } from '../../utils/printer';
+import { fullResyncRegisters } from '../../utils/registerSync';
+import { captureRef } from 'react-native-view-shot';
 
 
-// ✅ registers ยังไม่มีคอลัมน์เบอร์โทร (ต้องให้ backend ส่งมาก่อน — ดูแผน 1b)
-//    ระหว่างนี้ดึงเบอร์จาก note / alert_message ที่ admin กรอกไว้ ซึ่ง sync ลงเครื่อง
-//    อยู่แล้วทุกรอบแต่ไม่เคยถูกแสดงที่ไหนเลยในแอพ
-//    พอ backend ส่งฟิลด์จริงมา ให้ใส่ reg.driver_phone เป็นตัวแรกของ candidates
-const extractPhone = (text) => {
-  if (!text) return null;
-  // เบอร์ไทย: ขึ้นต้น 0 หรือ +66 คั่นด้วย - เว้นวรรค หรือ . ได้
-  const match = String(text).match(/(?:\+66|0)[\d\-\s.]{7,12}\d/);
-  if (!match) return null;
-  const cleaned = match[0].replace(/[^\d+]/g, '');
-  return cleaned.length >= 9 ? cleaned : null;
-};
-
-const getContactInfo = (reg) => {
-  const candidates = [reg?.driver_phone, reg?.note, reg?.alert_message];
-  const phone = candidates.map(extractPhone).find(Boolean) || null;
-  // เก็บข้อความเต็มไว้ด้วย เพราะ note อาจมีข้อมูลอื่นที่เจ้าหน้าที่ต้องเห็น
-  const raw = candidates.find(v => v && String(v).trim());
-  return { phone, raw: raw ? String(raw).trim() : null };
-};
+import { CALL_OK, CALL_OTHER, CALL_RESULTS, canManageVehicles, canSaveFollowup, contactLines, fetchRegisterContacts, followupErrorMessage, hhmm, saveFollowup, startCalling, stopCalling } from '../../utils/registerContacts';
 
 // Ionicons และ ActivityIndicator รับสีเป็นค่า ไม่ใช่ className — ค่าต้องตรงกับ token ใน tailwind.config.js
 const ICON_TEXT = '#16181d';     // text
@@ -149,6 +133,37 @@ const MenuRow = ({ icon, label, value, valueClass = 'text-text-muted', onPress, 
   </TouchableOpacity>
 );
 
+// กลุ่มเมนูที่ใช้ไม่บ่อย — พับไว้เป็นแถวเดียว แตะแล้วค่อยขยาย
+// summary แสดงค่าสำคัญตอนพับ (เช่น Environment) เพื่อให้เห็นสถานะผิดปกติได้โดยไม่ต้องขยาย
+// state อยู่ในคอมโพเนนต์นี้เอง ไม่เพิ่ม hook ใน SettingsScreen (มี early return ตอน loading — ดู CLAUDE.md)
+const CollapsibleMenuGroup = ({ title, icon, summary, children }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <View className="gap-[6px]">
+      <Text className="text-[11px] font-bold tracking-[1px] text-text-subtle">{title}</Text>
+      <View className="overflow-hidden rounded-[10px] border border-border">
+        <TouchableOpacity
+          onPress={() => setOpen((v) => !v)}
+          activeOpacity={0.6}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
+          className={`min-h-[52px] flex-row items-center gap-[10px] bg-surface px-3 py-[11px] ${open ? 'border-b border-fill' : ''}`}
+        >
+          <View className="w-[22px] items-center">
+            <Ionicons name={icon} size={19} color={ICON_MUTED} />
+          </View>
+          <View className="flex-1">
+            <Text numberOfLines={1} className="text-[15px] text-text">{open ? 'ซ่อนเมนู' : 'แสดงเมนูทั้งหมด'}</Text>
+            {!open && !!summary && <View className="mt-[2px]">{summary}</View>}
+          </View>
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={ICON_FAINT} />
+        </TouchableOpacity>
+        {open && children}
+      </View>
+    </View>
+  );
+};
+
 const InfoLine = ({ label, value }) => (
   <View className="flex-row items-baseline gap-2">
     <Text className="w-[76px] text-[13px] text-text-subtle">{label}</Text>
@@ -162,6 +177,9 @@ export default function SettingsScreen() {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(true);
   const [machineCode, setMachineCode] = useState(null);
+  const testSlipRef = useRef(null);
+  const [testSlipTime, setTestSlipTime] = useState('');
+  const [testSlipSerial, setTestSlipSerial] = useState('');
   const router = useRouter();
   const [isModalVisible, setModalVisible] = useState(false);
   const [masterCodeInput, setMasterCodeInput] = useState('');
@@ -179,13 +197,14 @@ export default function SettingsScreen() {
   const [unsyncedCount, setUnsyncedCount] = useState(0);
   const [pendingSyncCount, setPendingSyncCount] = useState(0); // ยังไม่ได้ส่ง (sync_status 0,3)
   const [syncErrorCount, setSyncErrorCount] = useState(0); // พบปัญหา (sync_status 4)
+  const [routePendingCount, setRoutePendingCount] = useState(0); // จุดเส้นทางที่ยังไม่ส่ง (location_points)
   const [successCount, setSuccessCount] = useState(0); // สำเร็จ (sync_status 2)
   const [currentId, setCurrentId] = useState(null); // project_id or activity_id depending on mode
   const [currentProject, setCurrentProject] = useState(null); // Store current project info
 
-  // Clear Registers Modal States
-  const [isClearRegistersModalVisible, setClearRegistersModalVisible] = useState(false);
-  const [clearRegistersCodeInput, setClearRegistersCodeInput] = useState('');
+  // ความคืบหน้าของ "ดึงใบ C7 ใหม่ทั้งหมด" — null = ไม่ได้ดึงอยู่
+  const [resyncProgress, setResyncProgress] = useState(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const { environment, updateEnvironment, isLoading: isEnvLoading } = useEnvironment();
 
   // Export Modal States
@@ -198,10 +217,22 @@ export default function SettingsScreen() {
   const [isVersionModalVisible, setVersionModalVisible] = useState(false);
 
   // Remaining Vehicles ("รถที่เหลือ") States
+  // เมนูนี้เฉพาะ admin / officer / officer2 (can_manage จาก server ตอน login) — area ไม่เห็น (2026-11-27)
+  const [canManage, setCanManage] = useState(false);
   const [isRemainingModalVisible, setRemainingModalVisible] = useState(false);
   const [remainingList, setRemainingList] = useState([]);
   const [remainingCount, setRemainingCount] = useState(0);
   const [remainingLoading, setRemainingLoading] = useState(false);
+  // ผู้ติดต่อของรถที่เหลือ ดึงสดจาก server ทุกครั้งที่เปิด/รีเฟรช — { [register_id]: {driver, leader, coord, note} }
+  const [remainingContacts, setRemainingContacts] = useState({});
+  const [contactsStatus, setContactsStatus] = useState('idle'); // idle | loading | ok | error
+  const contactsRequestRef = useRef(0); // กดรีเฟรชซ้อน — คำตอบของรอบเก่าห้ามทับรอบใหม่
+  // การ์ดที่กางผู้ติดต่ออื่น (ผู้นำรถ / ผู้ประสานงาน) — ปกติแสดงแค่คนขับ
+  const [expandedContacts, setExpandedContacts] = useState({});
+  // ใครกำลังโทร + ผลการโทร (เหมือนหน้าธรรมยาตรา) — ฟอร์มบันทึกผลมีได้ทีละคัน
+  const [followBusy, setFollowBusy] = useState(null); // register_id ที่กำลังส่งคำขอ
+  const [noteReason, setNoteReason] = useState('');
+  const [noteText, setNoteText] = useState('');
   const appVersion = Constants.expoConfig?.version || '1.0.0';
   const runtimeVersion = Constants.expoConfig?.runtimeVersion || '-';
   const updateId = Updates.updateId || null;
@@ -313,6 +344,7 @@ export default function SettingsScreen() {
       setSyncErrorCount(errors);
       const success = await getSuccessCheckInsCountForId(idForFilter);
       setSuccessCount(success);
+      setRoutePendingCount(await getUnsyncedLocationPointsCount());
     } catch (e) {
       console.error("Failed to refresh counts", e);
 
@@ -341,6 +373,9 @@ export default function SettingsScreen() {
       let cancelled = false;
       (async () => {
         try {
+          const session = await getActiveSession();
+          if (cancelled) return;
+          setCanManage(canManageVehicles(session));
           const projectData = await getCurrentProject();
           if (cancelled) return;
           setCurrentProject(projectData);
@@ -375,6 +410,36 @@ export default function SettingsScreen() {
   const API_BASE_URL = environment === 'prod'
     ? 'https://mbus.dhammakaya.network/api' // <-- ❗️ URL ของ Prod
     : 'https://mbus-test.dhammakaya.network/api'; // <-- URL ของ Test
+
+  // ทดสอบเครื่องพิมพ์โดยไม่ต้องมีข้อมูลเช็กอิน: ใช้เส้นทางเดียวกับใบเสร็จจริง (utils/printer.js)
+  const handlePrinterTest = async () => {
+    try {
+      const status = await getInnerPrinterStatus();
+      if (status && !status.ok) {
+        Alert.alert('เครื่องพิมพ์ไม่พร้อม', status.message);
+        return;
+      }
+      setTestSlipTime(new Date().toLocaleString('th-TH'));
+      // เลขเครื่อง (SN บนสติกเกอร์ใต้เครื่อง) — APK ที่ยังไม่มีเมธอดนี้ได้ค่าว่าง
+      setTestSlipSerial(await getDeviceSerial());
+      // รอให้ค่าใหม่ render ลงสลิปก่อนจับภาพ
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const uri = await captureRef(testSlipRef, { format: 'png', quality: 1.0, result: 'base64' });
+      const via = await printReceiptImage(uri);
+      Alert.alert('พิมพ์สำเร็จ', via === 'sunmi' ? 'พิมพ์ผ่านเครื่องพิมพ์ในตัว (SUNMI)' : 'พิมพ์ผ่าน Bluetooth');
+    } catch (error) {
+      Alert.alert('พิมพ์ไม่สำเร็จ', error?.message || 'ไม่สามารถพิมพ์ได้');
+      insertErrorLog({
+        comp_id: machineCode || null,
+        error_type: 'PRINT_ERROR',
+        error_message: error?.message || 'Printer test failed',
+        error_code: error?.code || null,
+        page_name: 'settings',
+        action_name: 'handlePrinterTest',
+        user_id: null,
+      }).catch(() => {});
+    }
+  };
 
   const handleLogout = async () => {
     Alert.alert(
@@ -594,27 +659,77 @@ export default function SettingsScreen() {
 
 
 
-  const handleClearRegisters = async () => {
-    if (clearRegistersCodeInput !== '8989') {
-      Alert.alert("ผิดพลาด", "รหัสอนุมัติไม่ถูกต้อง.");
+  // ✅ ตรวจหาอัปเดต (OTA) แล้วใช้ทันที
+  //    ปกติ expo-updates โหลดอัปเดตเบื้องหลังตอนเปิดแอป แต่จะใช้ก็ต่อเมื่อเปิดแอป "ครั้งถัดไป"
+  //    หน้างานจึงต้องปิด-เปิดสองรอบ และไม่รู้ว่าได้แล้วหรือยัง ปุ่มนี้โหลดแล้วรีสตาร์ทให้เลย
+  //    ข้อมูลไม่หาย — check-in อยู่ใน SQLite ส่วนที่ยังไม่ได้ส่งจะส่งต่อหลังรีสตาร์ท
+  const handleCheckUpdate = async () => {
+    if (isCheckingUpdate) return;
+    if (!Updates.isEnabled) {
+      Alert.alert('ตรวจหาอัปเดตไม่ได้', 'แอปตัวนี้ไม่ได้เปิดระบบอัปเดต (เช่น build สำหรับพัฒนา)');
       return;
     }
-
+    setIsCheckingUpdate(true);
     try {
-      await clearRegistersTable();
-      Alert.alert("สำเร็จ", "ลบข้อมูล Registers ทั้งหมดเรียบร้อยแล้ว!");
-      setClearRegistersModalVisible(false);
-      setClearRegistersCodeInput('');
+      const check = await Updates.checkForUpdateAsync();
+      if (!check.isAvailable) {
+        Alert.alert('เป็นเวอร์ชันล่าสุดแล้ว', `เวอร์ชัน ${otaVersion || appVersion}`);
+        return;
+      }
+      await Updates.fetchUpdateAsync();
+      Alert.alert(
+        'ดาวน์โหลดอัปเดตเสร็จแล้ว',
+        'แอปจะเริ่มใหม่เพื่อใช้เวอร์ชันใหม่ ข้อมูลในเครื่องไม่หาย',
+        [{ text: 'เริ่มใหม่เลย', onPress: () => Updates.reloadAsync() }],
+        { cancelable: false }
+      );
     } catch (e) {
-      console.error("Failed to clear registers:", e);
+      insertErrorLog({
+        comp_id: machineCode || null,
+        error_type: 'OTA_UPDATE_ERROR',
+        error_message: e?.message || 'Failed to check for update',
+        error_code: e?.code || null,
+        page_name: 'settings.js',
+        action_name: 'handleCheckUpdate',
+        user_id: user?.id || null,
+      }).catch(() => { });
+      Alert.alert('ตรวจหาอัปเดตไม่สำเร็จ', `${e?.message || 'เชื่อมต่อไม่ได้'}\nตรวจสอบอินเทอร์เน็ตแล้วลองใหม่`);
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  // ✅ ดึงใบ C7 ใหม่ทั้งหมด (แทนการ "ลบแล้วรอลูปดึง" แบบเดิม)
+  //    ดึงครบทุกหน้าก่อนแล้วค่อยแทนที่ — ถ้าล้มกลางทาง ข้อมูลเดิมยังอยู่ ดู utils/registerSync.js
+  const handleClearRegisters = async () => {
+    setResyncProgress(0);
+    try {
+      const projectData = await getCurrentProject();
+      const result = await fullResyncRegisters({
+        apiBaseUrl: API_BASE_URL,
+        projectId: projectData?.project_id,
+        onProgress: setResyncProgress,
+      });
+      setResyncProgress(null);
+      await refreshCounts();
+      const time = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+      Alert.alert(
+        "ดึงใบ C7 เสร็จแล้ว",
+        `ได้รับ ${result.received.toLocaleString()} ใบ · บันทึก ${result.saved.toLocaleString()} ใบ · ${time} น.`
+          + (result.skipped > 0 ? `\nข้าม ${result.skipped} ใบที่ข้อมูลไม่ครบ (ดู error log)` : '')
+          + `\n\nเทียบตัวเลขนี้กับจำนวนในระบบหลังบ้านได้`
+      );
+    } catch (e) {
+      setResyncProgress(null);
+      console.error("Failed to resync registers:", e);
 
       // Log error to database
       try {
         await insertErrorLog({
           comp_id: null,
-          error_type: 'DATABASE_ERROR',
-          error_message: e.message || 'Failed to clear registers',
-          error_code: e.code || 'CLEAR_REGISTERS_ERROR',
+          error_type: 'REGISTER_RESYNC_ERROR',
+          error_message: e.message || 'Failed to resync registers',
+          error_code: e.response?.status?.toString() || e.code || 'RESYNC_REGISTERS_ERROR',
           page_name: 'settings.js',
           action_name: 'handleClearRegisters',
           user_id: user?.id || null
@@ -623,32 +738,22 @@ export default function SettingsScreen() {
         console.error('Failed to log error:', logError);
       }
 
-      Alert.alert("ผิดพลาด", "ไม่สามารถลบข้อมูลได้.");
+      Alert.alert("ดึงใบ C7 ไม่สำเร็จ", `${e.message || 'ไม่สามารถดึงข้อมูลได้'}\n\nข้อมูลเดิมในเครื่องยังอยู่ครบ`);
     }
   };
 
-  const renderClearRegistersModal = () => (
+  // กล่องค้างระหว่างดึง — ปิดไม่ได้ (onClose ว่าง) กันไม่ให้ไปสแกนระหว่างที่ข้อมูลกำลังถูกแทนที่
+  const renderResyncProgress = () => (
     <Dialog
-      visible={isClearRegistersModalVisible}
-      onClose={() => setClearRegistersModalVisible(false)}
-      title="ลบข้อมูล Registers"
-      subtitle="การกระทำนี้จะลบข้อมูลทะเบียนรถทั้งหมดในเครื่อง กรุณากรอกรหัสเพื่อยืนยัน"
-      tone="danger"
+      visible={resyncProgress !== null}
+      onClose={() => { }}
+      title="กำลังดึงใบ C7…"
+      subtitle="ห้ามปิดแอปหรือสแกนระหว่างนี้"
     >
-      <Field
-        label="รหัสอนุมัติ"
-        placeholder="กรอกรหัสอนุมัติ"
-        value={clearRegistersCodeInput}
-        onChangeText={setClearRegistersCodeInput}
-        secureTextEntry={true}
-        keyboardType="number-pad"
-      />
-      <DialogActions
-        onCancel={() => setClearRegistersModalVisible(false)}
-        onConfirm={handleClearRegisters}
-        confirmLabel="ลบข้อมูล"
-        tone="danger"
-      />
+      <View className="flex-row items-center gap-3">
+        <ActivityIndicator size="small" color={ICON_MUTED} />
+        <Text className="text-[15px] text-text">ได้รับแล้ว {(resyncProgress || 0).toLocaleString()} ใบ</Text>
+      </View>
     </Dialog>
   );
 
@@ -663,6 +768,8 @@ export default function SettingsScreen() {
       const rows = await getUnscannedRegisters(idForFilter, projectData?.seq_no);
       setRemainingList(rows);
       setRemainingCount(rows.length);
+      // เบอร์โทรไม่ได้ sync ลงเครื่อง — ดึงตามหลัง ไม่ให้รายการรถรอเน็ต
+      loadRemainingContacts(rows);
     } catch (e) {
       console.error('Failed to load remaining vehicles', e);
       setRemainingList([]);
@@ -682,6 +789,91 @@ export default function SettingsScreen() {
     } finally {
       setRemainingLoading(false);
     }
+  };
+
+  // ชื่อ-เบอร์ผู้ติดต่อ (คนขับ / ผู้นำรถ / ผู้ประสานงาน) จาก GET /lpr/registers/contacts
+  // ออฟไลน์หรือ server เก่าที่ยังไม่มี endpoint นี้ → รายการรถยังแสดงครบ แค่บอกว่าดึงเบอร์ไม่ได้
+  const loadRemainingContacts = async (rows) => {
+    const requestId = ++contactsRequestRef.current;
+    if (!rows || rows.length === 0) {
+      setRemainingContacts({});
+      setContactsStatus('ok');
+      return;
+    }
+    setContactsStatus('loading');
+    try {
+      const session = await getActiveSession();
+      const contacts = await fetchRegisterContacts({
+        http: axios,
+        baseUrl: API_BASE_URL,
+        token: session?.lpr_token,
+        rows,
+        seqNo: projectSeqNo(),
+      });
+      if (requestId !== contactsRequestRef.current) return;
+      setRemainingContacts(contacts);
+      setContactsStatus('ok');
+    } catch (e) {
+      if (requestId !== contactsRequestRef.current) return;
+      console.error('Failed to load register contacts', e?.message);
+      setContactsStatus('error');
+      insertErrorLog({
+        comp_id: machineCode || null,
+        error_type: 'API_ERROR',
+        error_message: e?.message || 'Failed to load register contacts',
+        error_code: e?.response?.status ? String(e.response.status) : (e?.code || 'CONTACTS_ERROR'),
+        page_name: 'settings.js',
+        action_name: 'loadRemainingContacts',
+        user_id: user?.id || null,
+      }).catch(() => {});
+    }
+  };
+
+  // รอบสแกนของกิจกรรม (0/null เช็กอิน, 1/2 กิจกรรม) — ผลการโทรแยกตามรอบ เหมือนหน้าธรรมยาตรา
+  const projectSeqNo = () => {
+    const n = Number(currentProject?.seq_no);
+    return n === 1 || n === 2 ? n : null;
+  };
+
+  // จอง / เลิกโทร / บันทึกผล แล้วโหลดสถานะใหม่ ให้เห็นของคนอื่นด้วย
+  const followAction = async (item, request) => {
+    setFollowBusy(item.register_id);
+    try {
+      const session = await getActiveSession();
+      await request({
+        http: axios,
+        baseUrl: API_BASE_URL,
+        token: session?.lpr_token,
+        registerId: item.register_id,
+        projectId: item.project_id,
+        seqNo: projectSeqNo(),
+      });
+      return true;
+    } catch (e) {
+      Alert.alert('ทำรายการไม่สำเร็จ', followupErrorMessage(e));
+      return false;
+    } finally {
+      setFollowBusy(null);
+      await loadRemainingContacts(remainingList);
+    }
+  };
+
+  const handleStartCalling = (item) => {
+    setNoteReason('');
+    setNoteText('');
+    return followAction(item, startCalling);
+  };
+  const handleStopCalling = (item) => followAction(item, stopCalling);
+  const handleSaveFollowup = (item) => {
+    if (!canSaveFollowup(noteReason, noteText)) return;
+    return followAction(item, (args) => saveFollowup({ ...args, reason: noteReason, note: noteText }));
+  };
+
+  // กดเบอร์ = เริ่มโทร — ถ้ายังไม่มีใครจองคันนี้ จองให้เลย (เหมือนหน้าธรรมยาตรา)
+  const handleDial = (item, tel) => {
+    const f = remainingContacts[item.register_id]?.followup;
+    if (!f?.calling) handleStartCalling(item);
+    handleCallDriver(tel);
   };
 
   // ✅ เครื่องอาจไม่มีซิม โทรออกไม่ได้ — ต้องโชว์เบอร์ให้อ่านได้เสมอ
@@ -718,10 +910,17 @@ export default function SettingsScreen() {
     setEnvMasterCodeInput('');
     setEnvModalVisible(true);
   };
-  // ซ่อนไว้หลังการกดค้างที่แถวเวอร์ชันโดยตั้งใจ — ลบใบ C7 ทั้งหมดในเครื่อง (ดู CLAUDE.md)
+  // "ดึงใบ C7 ใหม่ทั้งหมด" — เปิดได้จากเมนูงานประจำวัน และยังเปิดได้จากการกดค้างที่แถวเวอร์ชันแบบเดิม
+  //    ไม่ต้องใส่รหัส — ไม่มีอะไรเสียหายถ้ากด (ข้อมูลเดิมอยู่จนกว่าจะดึงครบ) แค่ยืนยันกันกดพลาด
   const openClearRegisters = () => {
-    setClearRegistersCodeInput('');
-    setClearRegistersModalVisible(true);
+    Alert.alert(
+      'ดึงใบ C7 ใหม่ทั้งหมด',
+      'ดึงใบ C7 ของกิจกรรมนี้จาก server ใหม่ทั้งชุด แล้วแทนที่ข้อมูลในเครื่อง\nใช้เวลาครึ่งนาทีถึงไม่กี่นาที ระหว่างนั้นห้ามสแกน\nถ้าดึงไม่สำเร็จ ข้อมูลเดิมยังอยู่ครบ',
+      [
+        { text: 'ยกเลิก', style: 'cancel' },
+        { text: 'ดึงใหม่', onPress: handleClearRegisters },
+      ]
+    );
   };
 
   // ✅ สลับ environment ต้องล้างข้อมูลที่ผูกกับ server เดิมออกให้หมด
@@ -741,7 +940,15 @@ export default function SettingsScreen() {
       await clearRegistersTable();
       await clearProjectsTable();
 
-      router.replace('/login');
+      // โหลด JS ใหม่ทั้งหมดแทนแค่พาไปหน้า login — ลูปดึงใบ C7 / state ของกิจกรรมเดิมใน process นี้
+      // ค้างอยู่ได้ แล้วยิง token ใหม่ไปพร้อมกิจกรรมของอีกฝั่งจนโดน 401 และ logout คนที่เพิ่ง login (เจอจริง 2026-11-28)
+      // reloadAsync ใช้ไม่ได้ใน dev client/Expo Go → ถอยไปพาไปหน้า login แบบเดิม
+      try {
+        await Updates.reloadAsync();
+      } catch (reloadError) {
+        console.log('reloadAsync unavailable, navigating to login instead:', reloadError?.message);
+        router.replace('/login');
+      }
     } catch (e) {
       console.error("Failed to switch environment:", e);
       try {
@@ -776,14 +983,16 @@ export default function SettingsScreen() {
     setEnvModalVisible(false);
     setEnvMasterCodeInput('');
 
-    // ยอดค้างทั้งเครื่อง ไม่ใช่เฉพาะโปรเจกต์ที่ active
+    // ยอดค้างของ environment นี้ทั้งเครื่อง (ไม่ใช่เฉพาะโปรเจกต์ที่ active)
     const pendingTotal = await getTotalUnsyncedCheckInsCount();
 
     const warning =
       `จะออกจากระบบ และล้างข้อมูลกิจกรรม/ใบ C7 ในเครื่องทั้งหมด\n` +
       `ต้องเข้าสู่ระบบใหม่เพื่อดึงข้อมูลของ ${newEnv.toUpperCase()}` +
       (pendingTotal > 0
-        ? `\n\n⚠️ มีรายการลงทะเบียนค้างส่งอยู่ ${pendingTotal} รายการ\nรายการเหล่านี้จะถูกส่งขึ้น ${newEnv.toUpperCase()} แทนที่จะเป็น ${environment.toUpperCase()}`
+        // เช็กอินติดป้าย environment แล้ว (migration v13) — ไม่ถูกส่งข้ามฝั่ง แต่ token ใช้ได้ server เดียว
+        // จึงรอจนกว่าจะสลับกลับมาแล้ว login ฝั่งเดิม
+        ? `\n\n⚠️ มีรายการลงทะเบียนของ ${environment.toUpperCase()} ค้างส่งอยู่ ${pendingTotal} รายการ\nรายการเหล่านี้จะรอส่งขึ้น ${environment.toUpperCase()} เมื่อสลับกลับมาและเข้าสู่ระบบอีกครั้ง`
         : '');
 
     Alert.alert(
@@ -947,21 +1156,54 @@ export default function SettingsScreen() {
   );
 
   // การ์ดรถหนึ่งคันในรายการ "รถที่เหลือ"
+  const renderContactLine = (item, l) => (
+    <View key={l.key} className="flex-row items-center gap-2">
+      <Text className="w-[76px] text-[13px] text-text-subtle">{l.label}</Text>
+      <View className="flex-1 flex-row flex-wrap items-center gap-x-2 gap-y-1">
+        {!!l.name && <Text className="text-[14px] text-text" numberOfLines={1}>{l.name}</Text>}
+        {l.tel ? (
+          <TouchableOpacity
+            onPress={() => handleDial(item, l.tel)}
+            accessibilityLabel={`โทรหา${l.label} ${l.phone}`}
+            className="flex-row items-center gap-[6px] rounded-lg bg-success px-[10px] py-[6px]"
+          >
+            <Ionicons name="call" size={14} color={ICON_ON_FILL} />
+            {/* selectable เผื่อเครื่องโทรออกไม่ได้ จะได้กดค้างคัดลอกไปโทรจากมือถือ */}
+            <Text className="text-[14px] font-semibold text-white" selectable>{l.phone}</Text>
+          </TouchableOpacity>
+        ) : (
+          !!l.phone && <Text className="text-[14px] text-text" selectable>{l.phone}</Text>
+        )}
+      </View>
+    </View>
+  );
+
   const renderRemainingVehicleCard = ({ item }) => {
-    const { phone, raw } = getContactInfo(item);
+    const contact = remainingContacts[item.register_id];
+    const lines = contactLines(contact);
+    // แสดงคนขับก่อน (ไม่มีคนขับ = คนแรกที่มี) ที่เหลือซ่อนไว้ กดขยายเมื่อต้องการ
+    const [first, ...others] = lines;
+    const expanded = !!expandedContacts[item.register_id];
+    const note = contact?.note || null;
+    const f = contact?.followup || null;
+    const busy = followBusy === item.register_id;
+    const mineCalling = !!f?.calling?.mine;
     return (
-      <View className="mx-[14px] mb-2 gap-[6px] rounded-[11px] border border-border bg-surface px-3 py-[10px]">
-        <View className="flex-row items-center gap-2">
-          <Text numberOfLines={1} className="flex-1 text-[18px] font-bold text-text">
-            {item.plate_no}{' '}
-            <Text className="text-[14px] font-medium text-text-muted">{item.plate_province || ''}</Text>
-          </Text>
-          {!!item.short_code && (
-            <View className="rounded-[7px] bg-chip px-[7px] py-[3px]">
-              <Text className="text-[12px] font-semibold text-chip-ink">{item.short_code}</Text>
-            </View>
-          )}
-        </View>
+      <View className={`mx-[14px] mb-2 gap-[6px] rounded-[11px] border px-3 py-[10px] ${f?.calling ? 'border-warning bg-warning-bg' : 'border-border bg-surface'}`}>
+        <Text numberOfLines={1} className="text-[18px] font-bold text-text">
+          {item.plate_no}{' '}
+          <Text className="text-[14px] font-medium text-text-muted">{item.plate_province || ''}</Text>
+        </Text>
+
+        {/* ใครกำลังโทรคันนี้ — เห็นทั้งจากเครื่องสแกนและหน้าธรรมยาตรา */}
+        {!!f?.calling && (
+          <View className="flex-row items-center gap-[6px] self-start rounded-[7px] bg-surface px-2 py-1">
+            <Ionicons name="call" size={13} color={EDGE_WARNING} />
+            <Text className="text-[13px] font-semibold text-warning-ink">
+              {f.calling.mine ? 'คุณกำลังโทร' : `${f.calling.by} กำลังโทร`} {hhmm(f.calling.at)} น.
+            </Text>
+          </View>
+        )}
 
         <InfoLine label="ประเภทรถ" value={item.bus_type || '--'} />
         <InfoLine
@@ -969,27 +1211,108 @@ export default function SettingsScreen() {
           value={`${item.station_name || '--'}${item.station_province ? ` (${item.station_province})` : ''}`}
         />
 
-        <View className="flex-row items-center gap-2">
-          <Text className="w-[76px] text-[13px] text-text-subtle">เบอร์คนขับ</Text>
-          {phone ? (
-            <TouchableOpacity
-              onPress={() => handleCallDriver(phone)}
-              className="flex-row items-center gap-[6px] rounded-lg bg-success px-[10px] py-[6px]"
-            >
-              <Ionicons name="call" size={14} color={ICON_ON_FILL} />
-              {/* selectable เผื่อเครื่องโทรออกไม่ได้ จะได้กดค้างคัดลอกไปโทรจากมือถือ */}
-              <Text className="text-[14px] font-semibold text-white" selectable>{phone}</Text>
-            </TouchableOpacity>
-          ) : (
-            <Text className="flex-1 text-[13px] text-text-subtle">{raw || 'ไม่มีข้อมูลติดต่อ'}</Text>
-          )}
-        </View>
+        {!!first && renderContactLine(item, first)}
+        {expanded && others.map((l) => renderContactLine(item, l))}
+        {others.length > 0 && (
+          <TouchableOpacity
+            onPress={() => setExpandedContacts((prev) => ({ ...prev, [item.register_id]: !expanded }))}
+            className="flex-row items-center gap-1 self-start py-1"
+          >
+            <Text className="text-[13px] font-semibold text-primary-ink">
+              {expanded ? 'ซ่อนผู้ติดต่ออื่น' : `ผู้ติดต่ออื่น (${others.length})`}
+            </Text>
+            <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={TINT_PRIMARY} />
+          </TouchableOpacity>
+        )}
 
-        {/* ถ้าข้อความต้นทางมีตัวอักษรนอกเหนือจากตัวเบอร์ (เช่นชื่อคนติดต่อ) ให้เห็นด้วย
-            เทียบเฉพาะตัวเลขไม่ได้ เพราะ "โทร 081-xxx หัวหน้าสมชาย" จะได้ตัวเลขชุดเดียวกัน
-            แล้วชื่อจะหายไปทั้งที่เป็นข้อมูลที่ต้องใช้ */}
-        {!!phone && !!raw && /[^\d\s\-+.()]/.test(raw) && (
-          <Text className="text-[12px] leading-[17px] text-text-muted" numberOfLines={2}>{raw}</Text>
+        {lines.length === 0 && (
+          <View className="flex-row items-center gap-2">
+            <Text className="w-[76px] text-[13px] text-text-subtle">ติดต่อ</Text>
+            <Text className="flex-1 text-[13px] text-text-subtle">
+              {contactsStatus === 'loading'
+                ? 'กำลังโหลดเบอร์...'
+                : contactsStatus === 'error'
+                  ? 'ดึงเบอร์ไม่ได้ (ออฟไลน์?) กดรีเฟรชด้านบน'
+                  : 'ไม่มีเบอร์ติดต่อในใบ C7'}
+            </Text>
+          </View>
+        )}
+
+        {!!note && (
+          <Text className="text-[12px] leading-[17px] text-text-muted" numberOfLines={3}>หมายเหตุ: {note}</Text>
+        )}
+
+        {/* ผลการโทรล่าสุด */}
+        {!!f?.reason && (
+          <View className={`rounded-[9px] px-[10px] py-[6px] ${f.reason === CALL_OK ? 'bg-success-bg' : 'bg-warning-bg'}`}>
+            <Text className={`text-[13px] ${f.reason === CALL_OK ? 'text-success-ink' : 'text-warning-ink'}`}>
+              <Text className="font-bold">{f.reason}</Text>{f.note ? ` — ${f.note}` : ''}
+            </Text>
+            <Text className="mt-[2px] text-[12px] text-text-muted">
+              {f.noted_by || '-'} {hhmm(f.noted_at)} น. · โทรแล้ว {f.attempts} ครั้ง
+            </Text>
+          </View>
+        )}
+
+        {/* คุณกำลังโทร: บันทึกผล */}
+        {contactsStatus !== 'error' && mineCalling && (
+          <View className="gap-2 rounded-[9px] border border-border bg-surface p-[10px]">
+            <Text className="text-[13px] font-semibold text-text">ผลการโทร</Text>
+            <View className="flex-row flex-wrap gap-[6px]">
+              {CALL_RESULTS.map((res) => (
+                <TouchableOpacity
+                  key={res}
+                  onPress={() => setNoteReason(res)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: noteReason === res }}
+                  className={`rounded-full border px-3 py-[7px] ${noteReason === res ? 'border-primary bg-primary' : 'border-border-strong bg-surface'}`}
+                >
+                  <Text className={`text-[13px] font-semibold ${noteReason === res ? 'text-white' : 'text-text'}`}>{res}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {!!noteReason && (
+              <TextInput
+                value={noteText}
+                onChangeText={setNoteText}
+                maxLength={200}
+                placeholder={noteReason === CALL_OTHER ? 'หมายเหตุ *' : 'หมายเหตุ (ถ้ามี)'}
+                placeholderTextColor={ICON_SUBTLE}
+                className="h-11 rounded-[9px] border border-border-strong bg-surface px-3 py-0 text-[15px] text-text"
+              />
+            )}
+            <View className="flex-row gap-2">
+              <TouchableOpacity
+                onPress={() => handleStopCalling(item)}
+                disabled={busy}
+                className="h-11 flex-1 items-center justify-center rounded-[9px] border border-border-strong bg-surface"
+              >
+                <Text className="text-[14px] font-semibold text-text">เลิกโทร</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => handleSaveFollowup(item)}
+                disabled={busy || !canSaveFollowup(noteReason, noteText)}
+                className={`h-11 flex-[2] items-center justify-center rounded-[9px] ${busy || !canSaveFollowup(noteReason, noteText) ? 'bg-primary-muted' : 'bg-primary'}`}
+              >
+                {busy ? <ActivityIndicator color={ICON_ON_FILL} /> : <Text className="text-[14px] font-semibold text-white">บันทึกผลการโทร</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* ยังไม่มีใครจอง: ปุ่มจองการโทร — หน้าตาต่างจากปุ่มเบอร์ (ขอบส้มประ) เหมือนหน้าธรรมยาตรา */}
+        {contactsStatus === 'ok' && !f?.calling && (
+          <View className="flex-row items-center justify-between gap-2 rounded-[9px] border border-dashed border-warning px-[10px] py-[6px]">
+            <Text className="flex-1 text-[12px] text-text-subtle">ยังไม่มีใครโทรคันนี้</Text>
+            <TouchableOpacity
+              onPress={() => handleStartCalling(item)}
+              disabled={!!followBusy}
+              className="flex-row items-center gap-[6px] rounded-lg bg-warning-bg px-[10px] py-[7px]"
+            >
+              <Ionicons name="hand-left-outline" size={15} color={EDGE_WARNING} />
+              <Text className="text-[13px] font-semibold text-warning-ink">{busy ? 'กำลังจอง…' : 'ฉันจะโทรคันนี้'}</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </View>
     );
@@ -1029,12 +1352,6 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* ✅ ข้อมูลมาจาก registers ที่ sync มา ไม่ใช่ check_ins ของเครื่องนี้
-            จึงเห็นการสแกนของเครื่องอื่นด้วย แต่ก็ค้างได้ถ้าเครื่องออฟไลน์ */}
-        <Text className="px-[14px] pb-1 pt-[10px] text-[12px] text-text-subtle">
-          อัปเดตตามรอบ sync ใบ C7 (ทุก 10 วินาที) · รวมการสแกนจากทุกเครื่อง
-        </Text>
-
         {remainingLoading ? (
           <View className="flex-1 items-center justify-center">
             <ActivityIndicator size="large" color={TINT_PRIMARY} />
@@ -1044,15 +1361,12 @@ export default function SettingsScreen() {
             sections={remainingSections}
             keyExtractor={(item) => String(item.register_id)}
             renderItem={renderRemainingVehicleCard}
-            renderSectionHeader={({ section: { title, data } }) => (
-              <Text className="bg-surface px-[14px] pb-[6px] pt-3 text-[12px] font-bold text-text-muted">
-                {title} ({data.length})
-              </Text>
-            )}
+            // ไม่มีหัวข้อจุดออกรถ (การ์ดบอกอยู่แล้ว) — ยังเรียงตามจุดออกรถ รถจุดเดียวกันจึงอยู่ติดกัน
             stickySectionHeadersEnabled={false}
+            keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={true}
             className="flex-1"
-            contentContainerStyle={remainingSections.length === 0 ? { flexGrow: 1 } : { paddingBottom: 16 }}
+            contentContainerStyle={remainingSections.length === 0 ? { flexGrow: 1 } : { paddingTop: 10, paddingBottom: 16 }}
             ListEmptyComponent={
               <View className="flex-1 items-center justify-center gap-[10px] px-6">
                 <Ionicons name="checkmark-circle" size={44} color={SUCCESS} />
@@ -1128,7 +1442,7 @@ export default function SettingsScreen() {
       {renderEnvironmentModal()}
       {renderExportModal()}
       {renderVersionModal()}
-      {renderClearRegistersModal()}
+      {renderResyncProgress()}
       {renderRemainingModal()}
 
       {/* ── ผู้ใช้ · กิจกรรม · ออกจากระบบ ── */}
@@ -1191,18 +1505,43 @@ export default function SettingsScreen() {
 
         <View className="gap-[14px] px-[14px] pt-[14px]">
           <MenuGroup title="งานประจำวัน">
-            <MenuRow
-              icon="bus-outline"
-              label="รถที่เหลือ"
-              value={`${remainingCount} คัน`}
-              valueClass={remainingCount > 0 ? 'text-warning-ink' : 'text-text-muted'}
-              onPress={openRemaining}
-            />
+            {canManage && (
+              <MenuRow
+                icon="bus-outline"
+                label="รถที่เหลือ"
+                value={`${remainingCount} คัน`}
+                valueClass={remainingCount > 0 ? 'text-warning-ink' : 'text-text-muted'}
+                onPress={openRemaining}
+              />
+            )}
             <MenuRow icon="refresh-outline" label="อัพเดทข้อมูลกิจกรรม" onPress={getProject} />
-            <MenuRow icon="download-outline" label="Export ฐานข้อมูล" onPress={() => setExportModalVisible(true)} last />
+            <MenuRow icon="print-outline" label="ทดสอบเครื่องพิมพ์" onPress={handlePrinterTest} />
+            <MenuRow
+              icon="cloud-download-outline"
+              label="ตรวจหาอัปเดต"
+              value={isCheckingUpdate ? 'กำลังตรวจ…' : ''}
+              onPress={handleCheckUpdate}
+              last
+            />
           </MenuGroup>
 
-          <MenuGroup title="ตั้งค่าเครื่อง">
+          {/* ใช้ไม่บ่อย — ตั้งครั้งเดียวหรือใช้ตอนแก้ปัญหา จึงพับไว้ */}
+          <CollapsibleMenuGroup
+            title="ตั้งค่าเครื่อง"
+            icon="settings-outline"
+            summary={
+              <Text numberOfLines={1} className="text-[12px] text-text-subtle">
+                <Text className={hasMachineCode ? '' : 'font-semibold text-danger-ink'}>
+                  {hasMachineCode ? `เครื่อง ${machineCode}` : 'ยังไม่ตั้งรหัสเครื่อง'}
+                </Text>
+                {` · ${modeLabel(isModeOne)} · `}
+                {/* Test ต้องเห็นได้แม้เมนูพับอยู่ — ลงทะเบียนหน้างานบน test คือข้อมูลไม่เข้าระบบจริง */}
+                <Text className={environment === 'prod' ? '' : 'font-semibold text-warning-ink'}>
+                  {environment === 'prod' ? 'Prod' : 'Test'}
+                </Text>
+              </Text>
+            }
+          >
             <MenuRow
               icon="barcode-outline"
               label="รหัสเครื่อง"
@@ -1219,6 +1558,10 @@ export default function SettingsScreen() {
               valueClass={environment === 'prod' ? 'text-text-muted' : 'text-warning-ink'}
               onPress={openEnvChange}
             />
+            <MenuRow icon="sync-outline" label="ดึงใบ C7 ใหม่ทั้งหมด" onPress={openClearRegisters} />
+            <MenuRow icon="download-outline" label="Export ฐานข้อมูล" onPress={() => setExportModalVisible(true)} />
+            {/* เส้นทางเดิน (components/LocationTracker.js) — ยังไม่มี endpoint จุดจึงสะสมในเครื่อง แตะเพื่ออ่านใหม่ */}
+            <MenuRow icon="navigate-outline" label="จุดเส้นทางรอส่ง" value={`${routePendingCount.toLocaleString()} จุด`} onPress={refresh} />
             <MenuRow
               icon="information-circle-outline"
               label="เวอร์ชัน"
@@ -1227,9 +1570,35 @@ export default function SettingsScreen() {
               onLongPress={openClearRegisters}
               last
             />
-          </MenuGroup>
+          </CollapsibleMenuGroup>
         </View>
       </ScrollView>
+
+      {/* สลิปทดสอบ วางไว้นอกจอ ใช้จับภาพสำหรับ "ทดสอบเครื่องพิมพ์" เท่านั้น */}
+      <View
+        ref={testSlipRef}
+        collapsable={false}
+        style={{ position: 'absolute', left: -2000, top: 0, width: 384, padding: 16, backgroundColor: '#fff', alignItems: 'center' }}
+      >
+        <Text style={{ fontSize: 28, fontWeight: 'bold', color: '#000' }}>ทดสอบเครื่องพิมพ์</Text>
+        <Text style={{ fontSize: 20, color: '#000', marginTop: 4 }}>{testSlipTime}</Text>
+        {/* ข้อมูลเครื่องไว้แจ้งทีมเวลาเครื่องมีปัญหา — เวอร์ชันใช้ค่าเดียวกับแถว "เวอร์ชัน" ในเมนูตั้งค่า */}
+        <View style={{ width: '100%', borderTopWidth: 1, borderColor: '#000', marginTop: 10, paddingTop: 8, gap: 4 }}>
+          {[
+            ['รหัสเครื่อง', hasMachineCode ? String(machineCode) : 'ยังไม่ตั้ง'],
+            ['เลขเครื่อง', testSlipSerial || '-'],
+            ['เวอร์ชัน', otaVersion || appVersion],
+            ['ผู้ใช้', username && displayName !== username ? `${displayName} (${username})` : displayName],
+          ].map(([k, v]) => (
+            <View key={k} style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+              <Text style={{ fontSize: 20, color: '#000' }}>{k}</Text>
+              <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#000', flexShrink: 1, textAlign: 'right' }}>{v}</Text>
+            </View>
+          ))}
+        </View>
+        <Text style={{ fontSize: 20, color: '#000', marginTop: 10 }}>กขคง 0123456789</Text>
+        <View style={{ width: '100%', borderTopWidth: 2, borderColor: '#000', marginTop: 12 }} />
+      </View>
     </View>
   );
 }

@@ -1,0 +1,23 @@
+# ตั้งโหมดเป็น ${MODE} (งานบุญ | ธรรมยาตรา) ถ้ายังไม่ใช่ — ต้องอยู่หน้าตั้งค่าก่อนเรียก
+# รหัสอนุมัติ: env MASTER_CODE (ค่าเดียวกับที่ hardcode ไว้ใน app/(tabs)/settings.js)
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+---
+- runFlow:
+    when:
+      notVisible: ${MODE}
+    commands:
+      - tapOn: "โหมด"
+      - extendedWaitUntil:
+          visible: "ยืนยันการเปลี่ยนโหมด"
+          timeout: 5000
+      - assertVisible: ".*เป็น ${MODE}"
+      - tapOn: "กรอกรหัสอนุมัติ"
+      - inputText: ${MASTER_CODE || "8989"}
+      - tapOn: "ยืนยัน"
+      - extendedWaitUntil:
+          visible: "เปลี่ยนโหมดเรียบร้อยแล้ว!"
+          timeout: 5000
+      - tapOn: "OK"
+# เปลี่ยนโหมดแล้วแท็บทั้งชุด remount — กลับมาที่หน้าตั้งค่าให้แน่ใจ แล้วยืนยันค่า
+- runFlow: open_device_settings.yaml
+- assertVisible: ${MODE}

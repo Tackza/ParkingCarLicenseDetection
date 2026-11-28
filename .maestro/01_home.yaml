@@ -1,0 +1,11 @@
+# หน้าหลัก: บน SUNMI เครื่องพิมพ์ในตัวถือว่าเชื่อมแล้ว — ต้องไม่มีแถบเตือนเครื่องพิมพ์
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+name: หน้าหลักไม่มีแถบเตือนเครื่องพิมพ์
+---
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible: "ค้นหาทะเบียน"
+    timeout: 20000
+- assertNotVisible: "ยังไม่ได้เชื่อมเครื่องพิมพ์.*"
+- assertNotVisible: "ยังไม่ได้ตั้งเครื่องพิมพ์.*"

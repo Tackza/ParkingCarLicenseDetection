@@ -19,6 +19,7 @@ import { PERMISSIONS, RESULTS, requestMultiple } from 'react-native-permissions'
 // import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSetting, saveSetting } from '../constants/Database';
 import { usePrinter } from '../contexts/PrinterContext';
+import { INNER_PRINTER_DEVICE, isInnerPrinterAvailable } from '../utils/printer';
 
 const SAVED_PRINTER_KEY = 'saved_printer'; // Key สำหรับเก็บข้อมูลใน AsyncStorage
 
@@ -169,6 +170,14 @@ export default function BluetoothSetupScreen() {
     const initializeBluetooth = async () => {
       const startedAt = Date.now();
       try {
+        // เครื่อง SUNMI มีเครื่องพิมพ์ในตัว พิมพ์ผ่าน service ของ SUNMI ได้เลย
+        // ไม่ต้องเปิด Bluetooth ค้นหา หรือเชื่อมต่อ (ดู utils/printer.js)
+        if (await isInnerPrinterAvailable()) {
+          markConnected(INNER_PRINTER_DEVICE);
+          router.replace('/main');
+          return;
+        }
+
         // เปิด Bluetooth ถ้ายังไม่เปิด
         const enabled = await BluetoothManager.isBluetoothEnabled();
         if (!enabled) {

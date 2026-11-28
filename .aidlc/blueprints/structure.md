@@ -85,10 +85,10 @@ app/passenger_count.js ──→ Database.js (receipt เขียน inline ไ
 | render-then-capture | `scan.js`, `main.js`, `passenger_count.js` | พิมพ์สลิปด้วยการแคปภาพ ไม่ใช่คำสั่ง text | ทุกจุดพิมพ์ |
 
 ## Test Organization
-- **Location**: `components/__tests__/`
-- **Types**: snapshot เพียงอย่างเดียว
-- **Coverage**: มีไฟล์เดียว (`ThemedText-test.tsx`) ซึ่งทดสอบ component ที่เป็น dead code — **ครอบคลุมโค้ดจริง 0%**
-- **Run command**: `npm test` (`jest --watchAll`)
+- **Location**: `__tests__/` ข้างโค้ดที่ทดสอบ — `utils/__tests__/`, `components/__tests__/`, `constants/__tests__/`
+- **Types**: unit (ตรรกะล้วน), component (render `CheckInSyncManager` จริงด้วย mock), integration บน SQLite จริง (`node:sqlite`)
+- **Coverage**: data path เท่านั้น — migration, คิวส่งเช็กอิน, ดึงใบ C7 ใหม่ **หน้าจอ 0%** รายละเอียดใน CLAUDE.md § Tests
+- **Run command**: `npm run test:ci` (รันครั้งเดียวจบ) / `npm test` (`jest --watchAll` ค้างดูไฟล์)
 
 ## Build & Deploy
 - **Build output**: APK ผ่าน EAS Build profile `production`

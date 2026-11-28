@@ -1,0 +1,29 @@
+# ตั้งค่า → ดึงใบ C7 ใหม่ทั้งหมด: ยืนยันอย่างเดียว ไม่ถามรหัส แล้วต้องจบด้วยผลที่ชัดเจน
+# จำนวนใบ C7 บนการ์ดหลังดึงต้องเท่ากับที่กล่อง "ดึงใบ C7 เสร็จแล้ว" บอกว่าบันทึก
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+name: ดึงใบ C7 ใหม่ทั้งหมด
+---
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible: "ค้นหาทะเบียน"
+    timeout: 20000
+- runFlow: subflows/open_device_settings.yaml
+- tapOn: "ดึงใบ C7 ใหม่ทั้งหมด"
+# กล่องยืนยัน — ต้องไม่มีช่องกรอกรหัส
+- assertVisible: "ดึงใหม่"
+- assertNotVisible: "รหัสอนุมัติ"
+- tapOn: "ดึงใหม่"
+- extendedWaitUntil:
+    visible: "ดึงใบ C7 เสร็จแล้ว|ดึงใบ C7 ไม่สำเร็จ"
+    timeout: 180000
+- takeScreenshot: resync_c7_result
+- assertVisible: "ดึงใบ C7 เสร็จแล้ว"
+- copyTextFrom: "ได้รับ .* ใบ · บันทึก .*"
+- evalScript: ${output.saved = maestro.copiedText.match(/บันทึก ([\d,]+) ใบ/)[1].replace(/,/g, '')}
+- tapOn: "OK"
+# เมนูขยายแล้วหน้าจอเลื่อนลงไป — เลื่อนกลับขึ้นไปหาการ์ดตัวเลข
+- scrollUntilVisible:
+    element: "ใบ C7"
+    direction: UP
+- assertVisible: "${output.saved}, ใบ C7"

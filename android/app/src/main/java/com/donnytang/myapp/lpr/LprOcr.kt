@@ -39,6 +39,7 @@ class LprOcr(private val context: Context) {
         private const val IOU_THRES = 0.7f    // ultralytics predict default
         private const val MAX_DET = 300       // ultralytics predict default
         private const val PAD = 114           // letterbox fill
+        private const val STRIDE = 32         // rect letterbox pads only up to a multiple of this
 
         /**
          * Measured best on the SUNMI V3 (2 big cores): 4 threads is the knee, 6 buys ~20 ms
@@ -184,10 +185,13 @@ class LprOcr(private val context: Context) {
     private data class Pad(val r: Float, val left: Int, val top: Int)
 
     /**
-     * Resize preserving aspect ratio and pad to a square with 114-grey.
+     * Resize the long side to 640, then pad with 114-grey only up to a multiple of 32.
      *
-     * Arithmetic follows ultralytics `LetterBox(auto=false, center=true, scaleup=true)` so the
-     * boxes come out in the same coordinate frame the Python port produces.
+     * This is ultralytics' *rect* inference — `LetterBox(auto=true, center=true, scaleup=true)` —
+     * which is what server.py runs when it calls a .pt model, and what lpr_onnx.py does. Padding
+     * to a full 640x640 square instead (the first port) misread some wide plate crops: an extra
+     * digit with data_plate.pt, a stray "ฮ" with data_plate_ft1.pt. Needs models exported with
+     * dynamic H/W (tools/ondevice-ocr/export_models.py).
      */
     private fun letterbox(src: Bitmap): Pair<Bitmap, Pad> {
         val w = src.width
@@ -195,12 +199,14 @@ class LprOcr(private val context: Context) {
         val r = min(IMGSZ.toFloat() / h, IMGSZ.toFloat() / w)
         val newW = (w * r).roundToInt()
         val newH = (h * r).roundToInt()
-        val dw = (IMGSZ - newW) / 2f
-        val dh = (IMGSZ - newH) / 2f
+        val dw = ((IMGSZ - newW) % STRIDE) / 2f
+        val dh = ((IMGSZ - newH) % STRIDE) / 2f
         val left = (dw - 0.1f).roundToInt()
         val top = (dh - 0.1f).roundToInt()
+        val right = (dw + 0.1f).roundToInt()
+        val bottom = (dh + 0.1f).roundToInt()
 
-        val out = Bitmap.createBitmap(IMGSZ, IMGSZ, Bitmap.Config.ARGB_8888)
+        val out = Bitmap.createBitmap(newW + left + right, newH + top + bottom, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
         canvas.drawColor(android.graphics.Color.rgb(PAD, PAD, PAD))
         val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
@@ -215,9 +221,9 @@ class LprOcr(private val context: Context) {
 
     /** ARGB bitmap -> RGB CHW float32 in [0,1], the layout the exported graphs expect. */
     private fun toTensor(bmp: Bitmap): FloatBuffer {
-        val n = IMGSZ * IMGSZ
+        val n = bmp.width * bmp.height
         val pixels = IntArray(n)
-        bmp.getPixels(pixels, 0, IMGSZ, 0, 0, IMGSZ, IMGSZ)
+        bmp.getPixels(pixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
         val buf = FloatBuffer.allocate(3 * n)
         val out = buf.array()
         for (i in 0 until n) {
@@ -329,7 +335,7 @@ class LprOcr(private val context: Context) {
         val environment = env!!
         val inputName = session.inputNames.iterator().next()
         val tensor = OnnxTensor.createTensor(
-            environment, toTensor(bmp), longArrayOf(1, 3, IMGSZ.toLong(), IMGSZ.toLong())
+            environment, toTensor(bmp), longArrayOf(1, 3, bmp.height.toLong(), bmp.width.toLong())
         )
         tensor.use {
             session.run(mapOf(inputName to it)).use { results ->

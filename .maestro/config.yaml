@@ -1,0 +1,14 @@
+# Maestro — เทสต์ UI อัตโนมัติบนเครื่อง SUNMI V3 จริง (ดู .maestro/README.md)
+flows:
+  - "*.yaml"
+executionOrder:
+  continueOnFailure: true
+  flowsOrder:
+    - 01_home
+    - 02_printer_test
+    - 03_check_update
+    - 04_resync_c7
+    - 05_scan_no_c7
+    - 06_scan_c7_print
+    - 07_offline_queue
+    - 08_mode_one_passengers

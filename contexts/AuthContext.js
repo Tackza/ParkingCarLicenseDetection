@@ -64,6 +64,9 @@ export const AuthProvider = ({ children }) => {
           first_name: result.user.first_name,
           last_name: result.user.last_name,
           note: result.user.note,
+          // admin/officer/officer2 → can_manage (เห็น "รถที่เหลือ", อนุญาตพิมพ์ซ้ำ) ; area = false
+          role: result.user.role ?? null,
+          can_manage: result.user.can_manage === true,
           lpr_token: result.lpr_token,
         };
         console.log('userData :>> ', userData);

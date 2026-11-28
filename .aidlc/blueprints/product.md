@@ -17,7 +17,7 @@
 ## Key Features
 - **สแกนและลงทะเบียน**: กล้อง → OCR → เทียบใบ C7 → บันทึก → พิมพ์สลิป
 - **ทำงานแบบ local-first**: บันทึกลง SQLite ก่อนเสมอ แล้ว sync ขึ้น server ทีหลัง
-- **พิมพ์สลิป Bluetooth ESC/POS**: render เป็น view แล้วแคปเป็นภาพส่งเข้าเครื่องพิมพ์
+- **พิมพ์สลิป**: render เป็น view แล้วแคปเป็นภาพส่งเข้าเครื่องพิมพ์ในตัวของ SUNMI (ผ่าน print service) หรือ Bluetooth ESC/POS บนเครื่องอื่น
 - **หน้าตั้งค่า**: สลับโหมด/environment, รหัสเครื่อง, export ฐานข้อมูล, ตัวนับ sync, รายการ "รถที่เหลือ"
 
 ## Domain Language

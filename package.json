@@ -9,11 +9,15 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "test": "jest --watchAll",
+    "test:ci": "jest --ci",
     "lint": "expo lint",
     "postinstall": "patch-package"
   },
   "jest": {
-    "preset": "jest-expo"
+    "preset": "jest-expo",
+    "modulePathIgnorePatterns": [
+      "<rootDir>/.claude/"
+    ]
   },
   "dependencies": {
     "@expo/vector-icons": "^14.0.0",
@@ -56,7 +60,8 @@
     "expo-file-system": "~17.0.1",
     "expo-sharing": "~12.0.1",
     "nativewind": "4.2.7",
-    "tailwindcss": "3.4.19"
+    "tailwindcss": "3.4.19",
+    "expo-location": "~17.0.1"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",

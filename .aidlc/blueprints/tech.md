@@ -10,7 +10,7 @@
 - **Frameworks**: Expo 51.0.5, React Native 0.74.1, React 18.2.0, Expo Router 3.5, expo-sqlite 14
 - **Build system**: npm; EAS Build (`production` → release APK)
 - **Package manager**: npm (`package-lock.json`); `postinstall` เรียก `patch-package` แต่ยังไม่มีโฟลเดอร์ `patches/`
-- **Testing**: `jest-expo` — มีเทสต์เดียวที่เหลือจาก template **ถือว่าไม่มี test suite**
+- **Testing**: `jest-expo` — `npm run test:ci` 93 เทสต์ ครอบคลุม data path (migration บน SQLite จริง, ลูปส่งเช็กอิน, ดึงใบ C7 ใหม่) **ไม่ครอบคลุมหน้าจอ** ดู CLAUDE.md § Tests
 
 ## Architecture
 - **Pattern**: Layered แบบบาง — screen (Expo Router) → context → `constants/Database.js` → SQLite; ไม่มี service/repository layer
@@ -48,7 +48,7 @@
 ## CI/CD Pipeline
 - **Tool**: EAS (ไม่มี CI ในรีโป ไม่มี GitHub Actions)
 - **Stages**: build ด้วยมือ → OTA ด้วยมือ
-- **Deploy target**: APK ติดตั้งบน SUNMI V3 + OTA ผ่าน channel `production` (`checkAutomatically: ON_LOAD`, `runtimeVersion` 2.0.0 — ระหว่างเปลี่ยน APK มี OTA สองสาย 1.0.0 / 2.0.0 ดู CLAUDE.md § Versioning)
+- **Deploy target**: APK ติดตั้งบน SUNMI V3 + OTA ผ่าน channel `production` (`checkAutomatically: ON_LOAD`, `runtimeVersion` 2.1.0 — ระหว่างเปลี่ยน APK มี OTA หลายสายตาม runtime ที่ติดตั้งอยู่ ดู CLAUDE.md § Versioning)
 - **ผลต่องานนี้**: NativeWind อยู่ที่ชั้น babel/metro ผลลัพธ์ยังเป็น JS bundle — **ยืนยันแล้วว่าไปกับ OTA ได้** (2026-09-24 update group `70ce04e7`) การเพิ่ม/แก้ style จึงไม่ต้อง build APK ใหม่ แต่ bundle android โตขึ้น **+810 KB (3.07 → 3.88 MB)** ซึ่งทุกเครื่องต้องโหลด
 
 ## Dependency Management
@@ -57,7 +57,7 @@
 - **Monorepo tooling**: ไม่มี
 
 ## Known Technical Debt
-- **ไม่มี test suite** — ความเสี่ยงสูงสุดของงาน refactor นี้
+- **หน้าจอไม่มีเทสต์** — เทสต์มีแค่ data path (CLAUDE.md § Tests) การ refactor style ยังต้องยืนยันด้วยตา
 - `android/` และ `ios/` ถูก commit ไว้ → **config plugin ของ Expo จะไม่ apply เอง** ต้องแก้ manifest ด้วยมือ
 - `settings.js` มี `if (loading) return` กลางไฟล์ โดยมี hook ทั้งหมดอยู่เหนือมัน — เติม hook ใต้บรรทัดนั้นจอพังทันที
 - `ProjectProvider` ประกาศ hook ใต้ early return รอดอยู่ได้เพราะ `AuthProvider` กันไว้ชั้นบน

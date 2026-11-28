@@ -1,0 +1,101 @@
+# สแกนรถที่มีใบ C7 (โหมดธรรมยาตรา) → บันทึกและพิมพ์ → ส่งขึ้น server → ค้นหาบน server
+# → รอบ sync ใบ C7 ดึงสถานะกลับมา → สแกนคันเดิมซ้ำต้องขึ้น "ลงทะเบียนแล้ว"
+#
+# ⚠️ ใช้ใบ C7 ที่ยังไม่สแกน 1 ใบต่อการรัน (หยิบจาก "รถที่เหลือ") และพิมพ์สลิปจริง 1 ใบ
+#    รันกับแอปตัวทดสอบ (Test) เท่านั้น — ถ้า "รถที่เหลือ" เหลือ 0 คัน flow จะหยุดตั้งแต่ต้น
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+name: สแกนรถมี C7 พิมพ์สลิป และกันสแกนซ้ำ
+---
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible: "ค้นหาทะเบียน"
+    timeout: 20000
+- runFlow: subflows/require_test_env.yaml
+- runFlow: subflows/pick_unscanned_c7.yaml
+- tapOn:
+    point: "17%,91%"   # แท็บหน้าหลัก
+- runFlow: subflows/capture_photo.yaml
+- runFlow:
+    file: subflows/enter_plate.yaml
+    env:
+      PLATE: ${output.c7Plate}
+      PROVINCE: ${output.c7Province}
+# เจอ C7 → ไม่มีแถบแดง และประเภทรถถูกเติมจากใบ C7 แล้ว
+- assertNotVisible: "ไม่พบC7"
+- assertNotVisible: "เลือกประเภทรถ"
+- tapOn: "เลขสติกเกอร์"
+- inputText: "9002"
+- hideKeyboard
+- runFlow:
+    when:
+      visible: "เลขไมล์"
+    commands:
+      - tapOn: "เลขไมล์"
+      - inputText: "12345"
+      - hideKeyboard
+- tapOn:
+    text: "บันทึก"
+    below: "เลขสติกเกอร์"
+- extendedWaitUntil:
+    visible: "พบข้อมูลในระบบ \\(C7\\)"
+    timeout: 10000
+- tapOn: "บันทึกและพิมพ์"
+# พิมพ์เสร็จแล้วกลับหน้าหลักเอง — ถ้าเครื่องพิมพ์ไม่พร้อมจะค้างที่กล่องเตือนแทน
+- extendedWaitUntil:
+    visible: "ค้นหาทะเบียน"
+    timeout: 30000
+- assertNotVisible: "เครื่องพิมพ์ไม่พร้อม"
+- assertNotVisible: "พิมพ์ไม่สำเร็จ"
+- extendedWaitUntil:
+    visible:
+      text: "ส่งแล้ว"
+      below: ${output.c7Plate}
+      index: 0
+    timeout: 90000
+- takeScreenshot: c7_saved_and_synced
+
+# ค้นหาบน server จากแว่นขยายบนการ์ด — ต้องเจอรายการที่เพิ่งส่ง
+- tapOn:
+    text: "ค้นหาทะเบียนนี้บนเซิร์ฟเวอร์"
+    index: 0
+- extendedWaitUntil:
+    visible: "เวลาลงทะเบียน|ไม่พบทะเบียนนี้ในกิจกรรม"
+    timeout: 20000
+- takeScreenshot: online_search
+- assertVisible: "เวลาลงทะเบียน"
+- assertVisible: ${output.c7Plate}
+# สลิปพิมพ์ไปแล้ว ต้องไม่มีปุ่มพิมพ์ซ้ำ
+- assertNotVisible: "พิมพ์สลิป"
+- tapOn: "ปิด"
+
+# รอให้ลูปดึงใบ C7 (ทุก 10 วิ) เอาสถานะ "สแกนแล้ว" จาก server กลับมา — ดูจากรายการรถที่เหลือ
+- runFlow: subflows/open_settings.yaml
+- tapOn: "รถที่เหลือ.*"
+# รีเฟรชแล้วรอ 10 วิ สูงสุด 7 รอบ (~1 นาที)
+- retry:
+    maxRetries: 6
+    commands:
+      - tapOn: "รีเฟรช"
+      - extendedWaitUntil:
+          notVisible: ${output.c7Label}
+          timeout: 10000
+- tapOn: "ปิด"
+
+# สแกนคันเดิมซ้ำ → ต้องถูกกัน
+- tapOn:
+    point: "17%,91%"
+- runFlow: subflows/capture_photo.yaml
+- runFlow:
+    file: subflows/enter_plate.yaml
+    env:
+      PLATE: ${output.c7Plate}
+      PROVINCE: ${output.c7Province}
+- extendedWaitUntil:
+    visible: "ลงทะเบียนแล้ว"
+    timeout: 10000
+- takeScreenshot: duplicate_blocked
+- tapOn: "ตกลง"
+- extendedWaitUntil:
+    visible: "ค้นหาทะเบียน"
+    timeout: 10000

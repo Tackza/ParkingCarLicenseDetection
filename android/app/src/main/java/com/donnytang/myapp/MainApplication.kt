@@ -16,6 +16,7 @@ import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ReactNativeHostWrapper
 
 import com.donnytang.myapp.lpr.LprOcrPackage
+import com.donnytang.myapp.sunmi.SunmiPrinterPackage
 
 class MainApplication : Application(), ReactApplication {
 
@@ -25,10 +26,11 @@ class MainApplication : Application(), ReactApplication {
           override fun getPackages(): List<ReactPackage> {
             // Packages that cannot be autolinked yet can be added manually here, for example:
             // packages.add(new MyReactNativePackage());
-            // LprOcr lives inside this app rather than in node_modules, so autolinking never
-            // sees it — it has to be added by hand.
+            // LprOcr and SunmiPrinter live inside this app rather than in node_modules, so
+            // autolinking never sees them — they have to be added by hand.
             return PackageList(this).packages.toMutableList().apply {
               add(LprOcrPackage())
+              add(SunmiPrinterPackage())
             }
           }
 

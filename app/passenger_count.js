@@ -13,10 +13,10 @@ import {
   View
 } from 'react-native';
 // import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BluetoothEscposPrinter } from 'react-native-bluetooth-escpos-printer';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import { insertCheckIn, insertErrorLog, updateCheckInPrintedStatus } from '../constants/Database';
 import { useProject } from '../contexts/ProjectContext';
+import { printReceiptImage, waitForPrinterReady } from '../utils/printer';
 
 // route params ของ expo-router เป็น string เสมอ และค่า null จะกลายเป็นข้อความ "null"
 // ถ้าปล่อยผ่านไปตรงๆ จะได้ register_id = "null" (truthy) ส่งขึ้น server
@@ -111,6 +111,13 @@ export default function PassengerCountScreen() {
     setIsSubmitting(true);
     Keyboard.dismiss();
 
+    // ✅ เครื่องพิมพ์ไม่พร้อม (กระดาษหมด ฝาเปิด) → ค้างไว้ที่หน้านี้ ยังไม่บันทึก
+    //    ให้เจ้าหน้าที่เติมกระดาษแล้วกดพิมพ์อีกครั้ง จะได้ไม่มีเช็กอินที่ไม่มีสลิป
+    if (!(await waitForPrinterReady())) {
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
       const plateProvinceBKK = params.plate_province == 'กรุงเทพมหานคร' ? 'กทม.' : params.plate_province;
       // ✅ 4. สร้าง Object ที่สมบูรณ์เพื่อบันทึกลง check_ins
@@ -135,6 +142,10 @@ export default function PassengerCountScreen() {
         // ✅ เคยตกหล่นเช่นกัน ทำให้ insertCheckIn ใส่ default 1 เสมอ สถิติ OCR ล่มของโหมด 1 จึงผิดทั้งหมด
         ocr_connected: paramToIntOrNull(params.ocr_connected) ?? 1,
         created_by: params.created_by,
+        // พิกัดตอนถ่ายรูป มาจาก scan.js ผ่าน params (เป็นสตริง insertCheckIn แปลงเอง)
+        latitude: params.latitude,
+        longitude: params.longitude,
+        location_accuracy: params.location_accuracy,
       };
 
 
@@ -167,8 +178,7 @@ export default function PassengerCountScreen() {
       const uri = await captureRef(receiptRef, {
         format: 'png', quality: 1.0, result: 'base64',
       });
-      await BluetoothEscposPrinter.printPic(uri, { width: 520, left: 0 });
-      await BluetoothEscposPrinter.printText('\r\n\r\n', {});
+      await printReceiptImage(uri);
 
       // ✅ ยืนยันว่าพิมพ์สำเร็จจริง (สำคัญกรณีกด "ลองพิมพ์อีกครั้ง" หลังเคยถูก mark เป็น 0)
       await updateCheckInPrintedStatus(checkInId, 1);
@@ -190,7 +200,9 @@ export default function PassengerCountScreen() {
 
       Alert.alert(
         'พิมพ์ไม่สำเร็จ',
-        'บันทึกข้อมูลลงเครื่องเรียบร้อยแล้ว แต่พิมพ์ใบลงทะเบียนไม่สำเร็จ\nตรวจสอบเครื่องพิมพ์แล้วลองอีกครั้งได้',
+        // PRINTER_* (กระดาษหมด ฝาเปิด…) จากเครื่องพิมพ์ในตัวบอกสาเหตุได้ตรงๆ — ดู utils/printer.js
+        'บันทึกข้อมูลลงเครื่องเรียบร้อยแล้ว แต่พิมพ์ใบลงทะเบียนไม่สำเร็จ\n'
+          + (printError?.code?.startsWith?.('PRINTER_') ? printError.message : 'ตรวจสอบเครื่องพิมพ์แล้วลองอีกครั้งได้'),
         [
           { text: 'ไม่พิมพ์', style: 'cancel', onPress: () => resetForm() },
           { text: 'ลองพิมพ์อีกครั้ง', onPress: () => printSavedCheckIn(checkInId) },

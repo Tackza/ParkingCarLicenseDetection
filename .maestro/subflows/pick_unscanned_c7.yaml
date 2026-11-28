@@ -1,0 +1,23 @@
+# เปิด ตั้งค่า → รถที่เหลือ แล้วหยิบใบ C7 คันแรกที่ยังไม่มีใครสแกน
+# ผลลัพธ์: output.c7Plate, output.c7Province (ชื่อเต็มตามรายการจังหวัด), output.c7Label (ข้อความบนการ์ด)
+appId: ${APP_ID || "com.donnytang.myapp.dev"}
+---
+- runFlow: open_settings.yaml
+- tapOn: "รถที่เหลือ.*"
+- extendedWaitUntil:
+    visible: ".*ยังไม่สแกน [0-9,]+ คัน"
+    timeout: 10000
+- assertNotVisible: ".*ยังไม่สแกน 0 คัน"
+# การ์ดเขียนว่า "ทส1001 กทม." — ทะเบียน เว้นวรรค จังหวัดตามที่ backend เก็บ
+- copyTextFrom: "[ก-ฮ]{0,3}[0-9-]+ .+"
+- evalScript: |
+    ${
+      const t = maestro.copiedText.trim();
+      const i = t.indexOf(' ');
+      output.c7Label = t;
+      output.c7Plate = t.slice(0, i);
+      // backend เก็บกรุงเทพเป็น กทม. แต่รายการจังหวัดในแอปใช้ชื่อเต็ม
+      const p = t.slice(i + 1).trim();
+      output.c7Province = p === 'กทม.' ? 'กรุงเทพมหานคร' : p;
+    }
+- tapOn: "ปิด"
