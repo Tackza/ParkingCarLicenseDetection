@@ -107,7 +107,10 @@ const HistoryItem = ({ item, openImageModal, onQuickSearch, onOpenDetail }) => {
           </View>
 
           <View className="flex-row items-center">
-            <Text className="text-[12px] text-text-subtle">{displayTime}</Text>
+            {/* "คันที่" ต่อท้ายเวลา ตัวเล็กสีจางเท่าเวลา — ไม่แย่งสายตาจากทะเบียน (vehicle_no จาก getScanHistory) */}
+            <Text className="text-[12px] text-text-subtle">
+              {displayTime}{item.vehicle_no ? ` · คันที่ ${item.vehicle_no}` : ''}
+            </Text>
             <View className="flex-1" />
             {/* ✅ เดิมเป็นไอคอนเปล่า (ติ๊กคู่ / เมฆ / สามเหลี่ยม) ซึ่งเดาความหมายไม่ออก
                 ถ้าไม่มีคนบอก — เปลี่ยนเป็นจุดสีคู่กับคำ */}

@@ -320,6 +320,32 @@ describe('คิวส่งขึ้น server (getUnsyncedCheckIns / markCheck
   });
 });
 
+describe('getScanHistory — คันที่ (vehicle_no) บนการ์ดหน้าหลัก', () => {
+  const seed = async (db) => {
+    for (const plate of ['กข1', 'กข2', 'ขค3', 'กข4']) await db.insertCheckIn(checkIn({ plate_no: plate }));
+    await db.insertCheckIn(checkIn({ plate_no: 'อื่น1', project_id: 99 })); // กิจกรรมอื่น — ไม่นับ
+  };
+
+  test('ใหม่สุดอยู่บน คันแรกของกิจกรรม = 1 และไม่นับกิจกรรมอื่น', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+    await seed(db);
+
+    const rows = await db.getScanHistory(12);
+    expect(rows.map((r) => [r.plate_no, r.vehicle_no])).toEqual([['กข4', 4], ['ขค3', 3], ['กข2', 2], ['กข1', 1]]);
+    expect((await db.getScanHistory(99)).map((r) => r.vehicle_no)).toEqual([1]);
+  });
+
+  test('ค้นทะเบียนหรือโหลดทีละหน้า เลขของแต่ละคันไม่เปลี่ยน', async () => {
+    const db = freshDatabase();
+    await db.setupDatabase();
+    await seed(db);
+
+    expect((await db.getScanHistory(12, 'กข')).map((r) => [r.plate_no, r.vehicle_no])).toEqual([['กข4', 4], ['กข2', 2], ['กข1', 1]]);
+    expect((await db.getScanHistory(12, '', 2)).map((r) => r.vehicle_no)).toEqual([4, 3]);
+  });
+});
+
 describe('role ของผู้ใช้ (users.role / can_manage, v12)', () => {
   const login = (over = {}) => ({
     id: 77, username: 'u77', first_name: 'ก', last_name: 'ข', note: '', lpr_token: 'T', ...over,

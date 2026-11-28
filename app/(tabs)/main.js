@@ -47,7 +47,7 @@ const HISTORY_PAGE_SIZE = 30;
 // ฟิลด์ที่การ์ดแสดง หรือที่เปลี่ยนได้หลังบันทึก (sync_status, printed, error_msg)
 const rowSignature = (r) =>
   `${r.id}|${r.sync_status}|${r.printed}|${r.error_msg || ''}|${r.plate_no}|${r.plate_province}|` +
-  `${r.bus_type}|${r.sticker_no || ''}|${r.passenger}|${r.photo_path || ''}|${r.register_id || ''}`;
+  `${r.bus_type}|${r.sticker_no || ''}|${r.passenger}|${r.photo_path || ''}|${r.register_id || ''}|${r.vehicle_no || ''}`;
 
 // ✅ รวมผลรอบใหม่เข้ากับของเดิม — แถวที่ไม่เปลี่ยนคืน object ตัวเดิม
 //    เดิมถ้ามีแถวไหนเปลี่ยนแม้แถวเดียว (sync เปลี่ยนสถานะทุก 10 วินาที) จะได้ array ใหม่ที่ทุกแถว

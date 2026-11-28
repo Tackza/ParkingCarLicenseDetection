@@ -1166,12 +1166,17 @@ export const getScanHistory = async (id, searchQuery = '', limit = 30) => {
   try {
     // เลือก field ที่จะใช้ใน WHERE ตามโหมดที่ใช้งานอยู่
     const field = await getScopeField();
-    let sql = `SELECT * FROM check_ins WHERE ${field} = ?`;
+    // vehicle_no = "คันที่" ที่เครื่องนี้สแกนในกิจกรรมนี้ (คันแรก = 1) แสดงท้ายเวลาบนการ์ดหน้าหลัก
+    // นับก่อนกรองคำค้น — ค้นทะเบียนแล้วเลขของแต่ละคันต้องไม่เปลี่ยน ; โหลดเพิ่มทีละหน้าก็ไม่เปลี่ยน
+    let sql = `SELECT * FROM (
+                 SELECT *, ROW_NUMBER() OVER (ORDER BY created_at, id) AS vehicle_no
+                 FROM check_ins WHERE ${field} = ?
+               )`;
     const params = [id];
 
     const normalizedQuery = searchQuery.trim();
     if (normalizedQuery !== '') {
-      sql += ' AND plate_no LIKE ?';
+      sql += ' WHERE plate_no LIKE ?';
       params.push(`%${normalizedQuery}%`);
     }
     sql += ' ORDER BY created_at DESC, id DESC LIMIT ?';
