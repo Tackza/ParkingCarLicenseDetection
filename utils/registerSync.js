@@ -28,6 +28,15 @@ export const releaseRegisterLock = (owner) => {
 
 export const registerLockOwner = () => lockOwner;
 
+/**
+ * ได้ 401 แล้วควรล้าง session ไหม — เฉพาะเมื่อ token ที่ถูกปฏิเสธยังเป็น token ปัจจุบันในเครื่อง
+ * ลูปที่ค้างมาจากก่อนสลับ environment (หรือ (tabs) ที่ซ้อนกัน) อาจยิง token เก่า/คนละ server แล้วได้ 401
+ * ถ้าล้างตามนั้นจะ logout คนที่เพิ่ง login ใหม่ (เจอจริงบน SUNMI 2026-11-28)
+ * ไม่มี session แล้ว (logout ไปก่อน) = ไม่ต้องล้างซ้ำ
+ */
+export const shouldClearSessionOn401 = (rejectedToken, currentToken) =>
+  !!rejectedToken && !!currentToken && rejectedToken === currentToken;
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**

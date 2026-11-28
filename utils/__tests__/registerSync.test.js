@@ -246,3 +246,20 @@ describe('รอลูปที่กำลังดึงอยู่ให้�
     expect(registerLockOwner()).toBe('loop'); // ล็อกของลูปไม่ถูกแตะ
   });
 });
+
+describe('shouldClearSessionOn401 — 401 จากลูปค้างต้องไม่ logout คนที่เพิ่ง login', () => {
+  const { shouldClearSessionOn401 } = require('../registerSync');
+
+  test('token ที่โดนปฏิเสธคือ token ปัจจุบัน → ล้าง session (หมดอายุจริง)', () => {
+    expect(shouldClearSessionOn401('A', 'A')).toBe(true);
+  });
+
+  test('ลูปค้างยิง token เก่า แต่เครื่อง login ใหม่แล้ว → ไม่ล้าง', () => {
+    expect(shouldClearSessionOn401('OLD-TEST', 'NEW-PROD')).toBe(false);
+  });
+
+  test('ไม่มี session แล้ว หรือไม่รู้ว่าส่ง token อะไรไป → ไม่ล้างซ้ำ', () => {
+    expect(shouldClearSessionOn401('A', null)).toBe(false);
+    expect(shouldClearSessionOn401(null, 'A')).toBe(false);
+  });
+});

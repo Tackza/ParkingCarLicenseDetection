@@ -19,7 +19,7 @@ import { ActivityIndicator, Alert, LogBox } from "react-native";
 import BackgroundTimer from 'react-native-background-timer';
 import SyncStatus from "../../components/SyncStatus";
 import { useAuth } from "@/contexts/AuthContext";
-import { registerLockOwner, releaseRegisterLock, tryAcquireRegisterLock } from "@/utils/registerSync";
+import { registerLockOwner, releaseRegisterLock, shouldClearSessionOn401, tryAcquireRegisterLock } from "@/utils/registerSync";
 
 
 LogBox.ignoreLogs([
@@ -87,8 +87,10 @@ function TabLogic() {
     setIsSyncing(true);
 
     console.log("Starting sync for project:", activeProject?.project_id);
+    let usedToken = null; // token ที่ส่งไปจริงในรอบนี้ — ใช้ตัดสินตอนได้ 401
     try {
       const session = await getActiveSession();
+      usedToken = session?.lpr_token || null;
       // ✅ ถ้าไม่มี token (เช่นตอน logout) ให้หยุดอย่างสงบ ไม่ throw error
       if (!session?.lpr_token) {
         console.log("Register Sync skipped: No LprToken (user logged out).");
@@ -140,6 +142,12 @@ function TabLogic() {
       }).catch(e => console.error('Failed to log error:', e));
 
       if (error.response && error.response.status === 401) {
+        // ล้างเฉพาะเมื่อ token ที่โดนปฏิเสธยังเป็นของ session ปัจจุบัน — ลูปค้างที่ยิง token เก่าต้องไม่ logout คนที่เพิ่ง login
+        const current = await getActiveSession();
+        if (!shouldClearSessionOn401(usedToken, current?.lpr_token)) {
+          console.log('401 from a stale token — session kept.');
+          return false;
+        }
         await clearSession();
         // ไม่ลบ saved_printer — เครื่องพิมพ์ผูกกับ "เครื่อง" ไม่ใช่ผู้ใช้
         // ลบทิ้งแล้วรอบหน้าจะ auto-connect ไม่ได้ ต้องให้คนมาเลือกใหม่ทุกครั้ง

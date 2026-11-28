@@ -940,7 +940,15 @@ export default function SettingsScreen() {
       await clearRegistersTable();
       await clearProjectsTable();
 
-      router.replace('/login');
+      // โหลด JS ใหม่ทั้งหมดแทนแค่พาไปหน้า login — ลูปดึงใบ C7 / state ของกิจกรรมเดิมใน process นี้
+      // ค้างอยู่ได้ แล้วยิง token ใหม่ไปพร้อมกิจกรรมของอีกฝั่งจนโดน 401 และ logout คนที่เพิ่ง login (เจอจริง 2026-11-28)
+      // reloadAsync ใช้ไม่ได้ใน dev client/Expo Go → ถอยไปพาไปหน้า login แบบเดิม
+      try {
+        await Updates.reloadAsync();
+      } catch (reloadError) {
+        console.log('reloadAsync unavailable, navigating to login instead:', reloadError?.message);
+        router.replace('/login');
+      }
     } catch (e) {
       console.error("Failed to switch environment:", e);
       try {
