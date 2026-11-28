@@ -37,6 +37,10 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useEnvironment } from '../../contexts/EnvironmentContext';
 import { useProject } from '../../contexts/ProjectContext';
 
+
+// FlatList ของ DropDownPicker (โหมด MODAL + ช่องค้นหา): ค่าเริ่มต้น 'never' ทำให้แตะแรกแค่ปิดคีย์บอร์ด
+const KEEP_TAPS = { keyboardShouldPersistTaps: 'handled' };
+
 // การอ่านทะเบียนย้ายไป utils/lprOcr.js แล้ว (บนเครื่องก่อน แล้ว fallback ไป Cloud Run)
 // timeout ของฝั่ง server อยู่ที่ OCR_SERVER_TIMEOUT ในไฟล์นั้น
 
@@ -773,9 +777,9 @@ export default function ScanScreen() {
                   listItemLabelStyle={{ fontSize: 26 }}
                   searchTextInputStyle={{ fontSize: 26 }}
                   listMode="MODAL" // แนะนำให้ใช้โหมดนี้สำหรับรายการยาวๆ
-                  listProps={{
-                    keyboardShouldPersistTaps: "always"
-                  }}
+                  // แตะรายการครั้งเดียวต้องเลือกได้เลย แม้คีย์บอร์ดค้นหายังเปิดอยู่
+                  // (เดิมเขียน listProps ซึ่งไลบรารีไม่มี ถูกเมินเงียบ — แตะแรกแค่ปิดคีย์บอร์ด)
+                  flatListProps={KEEP_TAPS}
                 />
               </View>
 
@@ -983,6 +987,7 @@ export default function ScanScreen() {
                 placeholderStyle={{ fontSize: 20, color: '#999' }}
                 listItemLabelStyle={{ fontSize: 26 }}
                 searchTextInputStyle={{ fontSize: 26 }} // เพิ่มขนาดตัวหนังสือตอนค้นหา
+                flatListProps={KEEP_TAPS} // แตะจังหวัดครั้งเดียวเลือกได้เลย ไม่ต้องแตะเพื่อปิดคีย์บอร์ดก่อน
               />
             </View>
 

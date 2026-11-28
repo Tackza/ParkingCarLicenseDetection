@@ -591,6 +591,8 @@ const OnlineSearchModal = ({ visible, prefill, onClose, onPrinted }) => {
               searchable={true}
               placeholder="เลือกจังหวัด"
               listMode="MODAL"
+              // แตะจังหวัดครั้งเดียวเลือกได้เลย — ค่าเริ่มต้นทำให้แตะแรกแค่ปิดคีย์บอร์ดของช่องค้นหา
+              flatListProps={{ keyboardShouldPersistTaps: 'handled' }}
               style={DROPDOWN_BOX}
               textStyle={{ fontSize: 20 }}
               labelStyle={DROPDOWN_LABEL}
